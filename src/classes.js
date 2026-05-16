@@ -61,7 +61,7 @@ export const CLASSES = {
     maxSpeed: 80,
     accel: 130,
     drag: 0.992,
-    turnRate: 1.0,
+    turnRate: 0.4,
     radius: 90,
     color: "#aaf",
     firingMode: "forward",
