@@ -29,18 +29,18 @@ export function createStarfield() {
   return layers;
 }
 
-export function drawArena(ctx, starfield, camera, viewW, viewH) {
+export function drawArena(ctx, starfield, camera, viewW, viewH, zoom = 1) {
   // Background fill.
   ctx.fillStyle = "#02030a";
   ctx.fillRect(0, 0, viewW, viewH);
 
-  // Stars with parallax. Each star drawn at world pos scaled by parallax.
+  // Stars with parallax. Each star drawn at world pos scaled by parallax,
+  // then by zoom so the starfield matches the zoomed-out world view.
   for (const layer of starfield) {
     ctx.fillStyle = "#cdf";
     for (const s of layer.stars) {
-      // Parallax: shift world relative to camera.
-      const sx = s.x - camera.x * layer.parallax + viewW / 2;
-      const sy = s.y - camera.y * layer.parallax + viewH / 2;
+      const sx = (s.x - camera.x * layer.parallax) * zoom + viewW / 2;
+      const sy = (s.y - camera.y * layer.parallax) * zoom + viewH / 2;
       if (sx < -2 || sx > viewW + 2 || sy < -2 || sy > viewH + 2) continue;
       ctx.globalAlpha = s.b;
       ctx.beginPath();
