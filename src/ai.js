@@ -182,6 +182,22 @@ function flybyAI(ship, target, dt, world) {
       ship.approachTimer = 0;
     }
   }
+
+  // Blend in pack cohesion + big-ship danger over the primary aim.
+  // Cohesion is a soft pull toward packmates; danger is a strong push out
+  // of broadside arcs. Magnitudes set the relative pull on heading angle.
+  const pack = world && world.packs ? world.packs.get(ship.packId) : null;
+  const cohesion = packCohesion(ship, pack);
+  const danger = bigShipDanger(ship, world ? world.ships : []);
+  if (cohesion || danger) {
+    const aimN = V.norm(c.aim);
+    let ax = aimN.x, ay = aimN.y;
+    if (cohesion) { ax += cohesion.x * 0.35; ay += cohesion.y * 0.35; }
+    if (danger)   { ax += danger.x   * 1.30; ay += danger.y   * 1.30; }
+    c.aim = { x: ax, y: ay };
+    // While dodging a broadside arc, stop firing — the nose isn't on target.
+    if (danger) c.firing = false;
+  }
 }
 
 // Frigate / cruiser / battleship: orbit at preferred range. Heavy hulls hold
