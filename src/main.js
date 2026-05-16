@@ -25,6 +25,9 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+// Player POV zoom. 0.5 = zoomed out 2x (see twice as much of the arena).
+const ZOOM = 0.5;
+
 const FIXED_DT = 1 / 60;
 const MAX_ACCUM = 0.25;
 let last = performance.now() / 1000;
