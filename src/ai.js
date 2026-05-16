@@ -83,25 +83,21 @@ function flybyAI(ship, target, dt) {
   if (ship.attackState === "approach") {
     ship.approachTimer += dt;
 
-    // Aim point is offset to one side of the target — fighter curves in to
-    // strafe past rather than dead-colliding.
-    const offX = perp.x * PASS_OFFSET * ship.breakSide;
-    const offY = perp.y * PASS_OFFSET * ship.breakSide;
-    const apX = target.pos.x + offX - ship.pos.x;
-    const apY = target.pos.y + offY - ship.pos.y;
-    const apLen = Math.hypot(apX, apY);
-    c.thrust = apLen > 1e-6 ? { x: apX / apLen, y: apY / apLen } : { x: 0, y: 0 };
-
-    // Guns track the actual target (with lead) so the strafe pass scores hits.
+    // Aim at the lead target. Heading rotates toward it at turnRate, and
+    // the fighter's velocity is locked to its nose direction — so the
+    // curving pursuit emerges from the turn-rate limit. At close range
+    // bearing rotates faster than the fighter can bank, producing a
+    // natural overshoot (the strafe pass).
     const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
+    c.thrust = { x: 0, y: 0 }; // unused for fighters; kept tidy
     c.aim = leadVec;
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     const aimNorm = V.norm(leadVec);
     const aligned = V.dot(fwd, aimNorm);
-    c.firing = dist <= s.weapon.range && aligned > 0.9;
+    c.firing = dist <= s.weapon.range && aligned > 0.92;
 
-    // Trigger break when the fighter has actually got close AND is now moving
-    // away from the target (i.e., has passed it).
+    // Break when the fighter has gotten close AND is now moving away
+    // from the target (i.e., it has passed).
     const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
     const inPassZone = dist < PASS_ZONE_DIST;
     const settled = ship.approachTimer > 0.5;
@@ -111,9 +107,9 @@ function flybyAI(ship, target, dt) {
       ship.approachTimer = 0;
     }
   } else {
-    // Break: thrust tangent to target on chosen side + a touch outward.
-    // The momentum from the approach combined with this curve produces the
-    // wide arcing breakaway.
+    // Break: aim tangent to the target on the chosen side, biased outward,
+    // so the fighter banks into a wide curving exit. Velocity follows nose
+    // direction (turn-rate-limited), producing a smooth arc.
     const tangX = perp.x * ship.breakSide;
     const tangY = perp.y * ship.breakSide;
     const outX = -dir.x;
@@ -121,9 +117,8 @@ function flybyAI(ship, target, dt) {
     const bx = tangX * 1.0 + outX * 0.5;
     const by = tangY * 1.0 + outY * 0.5;
     const bLen = Math.hypot(bx, by);
-    c.thrust = { x: bx / bLen, y: by / bLen };
-    // Face where we're going so the turn looks smooth and we don't keep firing.
-    c.aim = c.thrust;
+    c.thrust = { x: 0, y: 0 };
+    c.aim = { x: bx / bLen, y: by / bLen };
     c.firing = false;
 
     ship.breakTimer -= dt;
