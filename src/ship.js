@@ -117,7 +117,7 @@ function fireForward(ship, world) {
       damage: w.damage,
       ttl: w.range / w.projectileSpeed,
       radius: w.projectileRadius,
-      color: w.projectileColor,
+      color: w.projectileColors[ship.side],
       side: ship.side,
       ownerId: ship.id,
     }));
@@ -187,7 +187,7 @@ function emitBroadside(ship, world, sideVec, fwd) {
       damage: w.damage,
       ttl: w.range / w.projectileSpeed,
       radius: w.projectileRadius,
-      color: w.projectileColor,
+      color: w.projectileColors[ship.side],
       side: ship.side,
       ownerId: ship.id,
     }));
