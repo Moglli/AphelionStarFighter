@@ -43,6 +43,9 @@ function frame(now) {
   game.playerController.aim = ctrl.aim;
   game.playerController.firing = ctrl.firing;
 
+  // Edge-triggered Enter restarts the match when it's over.
+  if (game.matchOver && input.consumeEnterPress()) restart(game);
+
   while (accum >= FIXED_DT) {
     update(game, FIXED_DT);
     accum -= FIXED_DT;

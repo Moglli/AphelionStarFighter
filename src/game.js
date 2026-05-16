@@ -5,6 +5,10 @@ import { updateProjectile } from "./projectile.js";
 
 const ROSTER = { fighter: 30, frigate: 5, cruiser: 2, battleship: 1 };
 const RESPAWN_SECONDS = 2.0;
+const FIGHTER_PACK_SIZE = 5;
+const PACK_CLUSTER_RADIUS = 130; // jitter around pack center at spawn
+
+let nextPackId = 1;
 
 export function createGame() {
   const game = {
@@ -26,21 +30,52 @@ function spawnRoster(game) {
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
     for (const [klass, count] of Object.entries(ROSTER)) {
-      for (let i = 0; i < count; i++) {
-        const pos = randomSpawnPos(zone);
-        const heading = facing + (Math.random() - 0.5) * 0.3;
-        const ship = createShip({
-          klass,
-          side,
-          pos,
-          heading,
-          controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
-        });
-        game.ships.push(ship);
+      if (klass === "fighter") {
+        spawnFighterPacks(game, side, zone, count, facing);
+      } else {
+        for (let i = 0; i < count; i++) {
+          const pos = randomSpawnPos(zone);
+          const heading = facing + (Math.random() - 0.5) * 0.3;
+          const ship = createShip({
+            klass, side, pos, heading,
+            controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
+          });
+          game.ships.push(ship);
+        }
       }
     }
   }
   promotePlayer(game);
+}
+
+// Spawn fighters in tight clusters of FIGHTER_PACK_SIZE. Each pack gets a
+// unique packId so the AI can target as a wing (see update() below).
+function spawnFighterPacks(game, side, zone, count, facing) {
+  let remaining = count;
+  while (remaining > 0) {
+    const packSize = Math.min(FIGHTER_PACK_SIZE, remaining);
+    const packCenter = randomSpawnPos(zone);
+    const packId = nextPackId++;
+    for (let i = 0; i < packSize; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = Math.random() * PACK_CLUSTER_RADIUS;
+      const pos = {
+        x: packCenter.x + Math.cos(ang) * dist,
+        y: packCenter.y + Math.sin(ang) * dist,
+      };
+      const heading = facing + (Math.random() - 0.5) * 0.3;
+      const ship = createShip({
+        klass: "fighter",
+        side,
+        pos,
+        heading,
+        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
+      });
+      ship.packId = packId;
+      game.ships.push(ship);
+    }
+    remaining -= packSize;
+  }
 }
 
 // Pick a friendly fighter and bind it to the player controller.
@@ -72,10 +107,13 @@ function promotePlayer(game) {
 }
 
 export function update(game, dt) {
+  // Pack centroids + shared targets — fighter packs engage as a wing.
+  game.packs = computePacks(game.ships);
+
   // AI controllers update first (skip the player ship).
   for (const ship of game.ships) {
     if (ship.dead || ship.isPlayer) continue;
-    updateAI(ship, game.ships, dt);
+    updateAI(ship, game, dt);
   }
   // Player controller is already populated externally (input -> game.playerController).
 
@@ -84,6 +122,9 @@ export function update(game, dt) {
     if (ship.dead) continue;
     updateShip(ship, dt, game);
   }
+
+  // Heavies (frigate / cruiser / battleship) can't overlap each other.
+  resolveHeavyOverlap(game.ships, game.arena.bounds);
 
   // Projectiles + collisions.
   for (const p of game.projectiles) {
@@ -94,7 +135,7 @@ export function update(game, dt) {
       if (ship.dead || ship.side === p.side) continue;
       const dx = ship.pos.x - p.pos.x;
       const dy = ship.pos.y - p.pos.y;
-      const r = ship.spec.radius;
+      const r = ship.spec.radius + p.radius;
       if (dx * dx + dy * dy <= r * r) {
         ship.hp -= p.damage;
         p.dead = true;
@@ -142,4 +183,80 @@ export function restart(game) {
   game.matchOver = false;
   game.winner = null;
   spawnRoster(game);
+}
+
+// Separate any overlapping heavy hulls (frigate / cruiser / battleship) by
+// pushing each pair apart along the axis between them. Fighters pass through
+// freely — only the big hulls have ship-vs-ship collision. Run a few
+// iterations so chained overlaps untangle in one tick (e.g., at spawn).
+function resolveHeavyOverlap(ships, bounds) {
+  const heavies = [];
+  for (const s of ships) {
+    if (s.dead) continue;
+    if (s.klass === "frigate" || s.klass === "cruiser" || s.klass === "battleship") {
+      heavies.push(s);
+    }
+  }
+  for (let iter = 0; iter < 4; iter++) {
+    let pushed = false;
+    for (let i = 0; i < heavies.length; i++) {
+      for (let j = i + 1; j < heavies.length; j++) {
+        const a = heavies[i], b = heavies[j];
+        const dx = b.pos.x - a.pos.x;
+        const dy = b.pos.y - a.pos.y;
+        const minDist = a.spec.radius + b.spec.radius;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < minDist * minDist) {
+          const d = d2 > 1e-6 ? Math.sqrt(d2) : 0;
+          // Coincident-center fallback: nudge along x.
+          const nx = d > 1e-6 ? dx / d : 1;
+          const ny = d > 1e-6 ? dy / d : 0;
+          const overlap = (minDist - d) * 0.5;
+          a.pos.x -= nx * overlap;
+          a.pos.y -= ny * overlap;
+          b.pos.x += nx * overlap;
+          b.pos.y += ny * overlap;
+          pushed = true;
+        }
+      }
+    }
+    if (!pushed) break;
+  }
+  // Re-clamp to arena bounds in case a push shoved someone outside.
+  for (const s of heavies) {
+    const r = s.spec.radius;
+    if (s.pos.x < bounds.minX + r) s.pos.x = bounds.minX + r;
+    if (s.pos.x > bounds.maxX - r) s.pos.x = bounds.maxX - r;
+    if (s.pos.y < bounds.minY + r) s.pos.y = bounds.minY + r;
+    if (s.pos.y > bounds.maxY - r) s.pos.y = bounds.maxY - r;
+  }
+}
+
+// Build a Map<packId, {center, target}> from current ships. Pack target is
+// the enemy nearest to the pack centroid — packmates converge on the same
+// foe instead of scattering after individually-closest enemies.
+function computePacks(ships) {
+  const packs = new Map();
+  for (const s of ships) {
+    if (s.dead || s.packId == null) continue;
+    let e = packs.get(s.packId);
+    if (!e) {
+      e = { side: s.side, posSum: { x: 0, y: 0 }, count: 0 };
+      packs.set(s.packId, e);
+    }
+    e.posSum.x += s.pos.x; e.posSum.y += s.pos.y; e.count++;
+  }
+  for (const e of packs.values()) {
+    e.center = { x: e.posSum.x / e.count, y: e.posSum.y / e.count };
+    let best = null, bestD2 = Infinity;
+    for (const o of ships) {
+      if (o.dead || o.side === e.side) continue;
+      const dx = o.pos.x - e.center.x;
+      const dy = o.pos.y - e.center.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { bestD2 = d2; best = o; }
+    }
+    e.target = best;
+  }
+  return packs;
 }

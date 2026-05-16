@@ -1,11 +1,12 @@
 export const ARENA = {
-  width: 4000,
-  height: 3000,
-  bounds: { minX: 0, maxX: 4000, minY: 0, maxY: 3000 },
+  width: 7000,
+  height: 5000,
+  bounds: { minX: 0, maxX: 7000, minY: 0, maxY: 5000 },
   // Spawn zones at left (blue/Allied) and right (red/Hostile) ends.
+  // Wide + tall so packs/cruisers/battleships spread out at the start.
   spawn: {
-    blue: { x: 400, y: 1500, w: 700, h: 2200 },
-    red:  { x: 3600, y: 1500, w: 700, h: 2200 },
+    blue: { x: 700,  y: 2500, w: 900, h: 4200 },
+    red:  { x: 6300, y: 2500, w: 900, h: 4200 },
   },
 };
 
@@ -13,7 +14,7 @@ export const ARENA = {
 export function createStarfield() {
   const layers = [];
   for (let l = 0; l < 3; l++) {
-    const count = 200 + l * 100;
+    const count = 450 + l * 200;
     const stars = [];
     for (let i = 0; i < count; i++) {
       stars.push({

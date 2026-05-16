@@ -1,6 +1,6 @@
-// Two on-screen virtual joysticks. Each tracks a single pointerId.
-// Sticks are anchored to fixed screen positions but the knob springs
-// to wherever the finger first touched within a generous capture zone.
+// Input sources: virtual joysticks for touch, plus WASD + mouse + Enter
+// for desktop play. The aim direction is computed relative to canvas
+// center because the camera follows the player ship, so center == player.
 
 const DEADZONE = 0.15;
 
@@ -70,14 +70,32 @@ export class InputManager {
     this.left = new VirtualStick({ side: "left", color: "#5cf" });
     this.right = new VirtualStick({ side: "right", color: "#f76" });
 
+    // Desktop input state.
+    this.keys = new Set();
+    this.mouse = { x: 0, y: 0 };
+    this.mouseInside = false;
+    this.mouseDown = false;
+
     const opts = { passive: false };
     canvas.addEventListener("pointerdown", (e) => this.onDown(e), opts);
     canvas.addEventListener("pointermove", (e) => this.onMove(e), opts);
     canvas.addEventListener("pointerup", (e) => this.onUp(e), opts);
     canvas.addEventListener("pointercancel", (e) => this.onUp(e), opts);
+    canvas.addEventListener("pointerenter", () => { this.mouseInside = true; });
+    canvas.addEventListener("pointerleave", () => { this.mouseInside = false; });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     // Prevent gestures / scroll on touch.
     canvas.style.touchAction = "none";
+
+    // Keyboard — listen on window so focus on the canvas isn't required.
+    const TRAPPED = new Set(["Space", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+    window.addEventListener("keydown", (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      if (TRAPPED.has(e.code)) e.preventDefault();
+    });
+    window.addEventListener("keyup", (e) => { this.keys.delete(e.code); });
+    window.addEventListener("blur", () => { this.keys.clear(); });
   }
 
   pos(e) {
@@ -87,35 +105,86 @@ export class InputManager {
 
   onDown(e) {
     e.preventDefault();
-    this.canvas.setPointerCapture(e.pointerId);
     const { x, y } = this.pos(e);
-    const w = this.canvas.clientWidth;
-    if (this.left.claims(x, w) && this.left.pointerId === null) {
-      this.left.start(e.pointerId, x, y);
-    } else if (this.right.claims(x, w) && this.right.pointerId === null) {
-      this.right.start(e.pointerId, x, y);
+    this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+    if (e.pointerType === "touch") {
+      this.canvas.setPointerCapture(e.pointerId);
+      const w = this.canvas.clientWidth;
+      if (this.left.claims(x, w) && this.left.pointerId === null) {
+        this.left.start(e.pointerId, x, y);
+      } else if (this.right.claims(x, w) && this.right.pointerId === null) {
+        this.right.start(e.pointerId, x, y);
+      }
+    } else {
+      this.mouseDown = true;
     }
   }
   onMove(e) {
     const { x, y } = this.pos(e);
+    this.mouse.x = x; this.mouse.y = y;
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
   }
   onUp(e) {
     if (this.left.pointerId === e.pointerId) this.left.end();
     else if (this.right.pointerId === e.pointerId) this.right.end();
+    if (e.pointerType !== "touch") this.mouseDown = false;
   }
 
-  // Build a controller snapshot for the player ship.
+  // True if Enter was pressed *since* the last poll (edge-triggered).
+  // Used by main.js to handle match-restart on Enter.
+  consumeEnterPress() {
+    if (this.keys.has("Enter") && !this._enterLatched) {
+      this._enterLatched = true;
+      return true;
+    }
+    if (!this.keys.has("Enter")) this._enterLatched = false;
+    return false;
+  }
+
+  // Build a controller snapshot for the player ship. Combines touch sticks,
+  // keyboard (WASD / arrows), and mouse-aim into a single {thrust, aim, firing}.
   controller() {
-    const thrust = this.left.value;
-    const aim = this.right.value;
-    const aimLen = Math.hypot(aim.x, aim.y);
-    return {
-      thrust,
-      aim: aimLen > 0 ? aim : null,
-      firing: aimLen > 0,
-    };
+    // Touch sticks
+    const touchThrust = this.left.value;
+    const touchAim = this.right.value;
+    const touchAimLen = Math.hypot(touchAim.x, touchAim.y);
+    const touchHasThrust = Math.hypot(touchThrust.x, touchThrust.y) > 0;
+
+    // Keyboard thrust (WASD primary; arrows also accepted)
+    let kx = 0, ky = 0;
+    if (this.keys.has("KeyW") || this.keys.has("ArrowUp"))    ky -= 1;
+    if (this.keys.has("KeyS") || this.keys.has("ArrowDown"))  ky += 1;
+    if (this.keys.has("KeyA") || this.keys.has("ArrowLeft"))  kx -= 1;
+    if (this.keys.has("KeyD") || this.keys.has("ArrowRight")) kx += 1;
+    const kLen = Math.hypot(kx, ky);
+    const kbThrust = kLen > 0 ? { x: kx / kLen, y: ky / kLen } : { x: 0, y: 0 };
+
+    // Mouse aim: vector from canvas center (player ship) to cursor.
+    let mouseAim = null;
+    if (this.mouseInside) {
+      const cx = this.canvas.clientWidth / 2;
+      const cy = this.canvas.clientHeight / 2;
+      const dx = this.mouse.x - cx;
+      const dy = this.mouse.y - cy;
+      if (Math.hypot(dx, dy) > 4) mouseAim = { x: dx, y: dy };
+    }
+
+    // Thrust: keyboard wins if pressed, else touch.
+    const thrust = kLen > 0 ? kbThrust : (touchHasThrust ? touchThrust : { x: 0, y: 0 });
+
+    // Aim priority: touch right stick > mouse > thrust direction (auto-aim).
+    let aim;
+    if (touchAimLen > 0) aim = touchAim;
+    else if (mouseAim) aim = mouseAim;
+    else if (kLen > 0) aim = kbThrust;
+    else aim = null;
+
+    // Firing: explicit only — Enter, Space, mouse button, or touch right stick.
+    const firing = this.keys.has("Enter") || this.keys.has("Space")
+                || this.mouseDown || touchAimLen > 0;
+
+    return { thrust, aim, firing };
   }
 
   drawSticks(ctx) {
