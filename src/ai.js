@@ -63,15 +63,20 @@ function packCohesion(ship, pack) {
   return { x: dx / d, y: dy / d };
 }
 
-// Avoidance vector when the ship is inside any enemy battleship's broadside
-// arc. Pushes toward the battleship's bow/stern axis (whichever side of the
-// arc the ship is currently moving toward) — that direction exits the arc
-// fastest. Returns null when not in danger.
+// Avoidance vector when the ship is inside any enemy capital's firing arc.
+// Broadside hulls (battleship): pushes toward the bow/stern axis the ship is
+// already aimed at — fastest exit from the side arc.
+// Forward-firing capitals (frigate, cruiser): pushes perpendicular to the
+// enemy's bow, toward whichever beam the ship is already drifting onto — so
+// fighters break out laterally instead of charging down the guns.
+// Returns null when not in danger.
+const FORWARD_ARC_HALF = Math.PI / 4;
+const FORWARD_ARC_COS = Math.cos(FORWARD_ARC_HALF);
 function bigShipDanger(ship, ships) {
   let ax = 0, ay = 0;
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
-    if (other.spec.firingMode !== "broadside") continue;
+    if (other.klass === "fighter") continue;
     const range = other.spec.weapon.range;
     const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
@@ -80,21 +85,66 @@ function bigShipDanger(ship, ships) {
     const d = Math.sqrt(d2);
     if (d < 1e-6) continue;
     const fwdX = Math.cos(other.heading), fwdY = Math.sin(other.heading);
-    const arcCos = Math.cos(other.spec.broadsideArc || Math.PI / 4);
-    const portX = -fwdY, portY = fwdX;
-    const stbdX = fwdY, stbdY = -fwdX;
     const toUsX = dx / d, toUsY = dy / d;
-    const portDot = toUsX * portX + toUsY * portY;
-    const stbdDot = toUsX * stbdX + toUsY * stbdY;
-    if (portDot < arcCos && stbdDot < arcCos) continue;
-    // In an arc — pick whichever bow/stern direction we're already aimed
-    // toward; that exit is fastest with the limited turn rate.
-    const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
-    const dotF = myFwdX * fwdX + myFwdY * fwdY;
-    const sign = dotF >= 0 ? 1 : -1;
+    const portX = -fwdY, portY = fwdX;
     const urgency = 1 - d / range; // 0 at fringe, 1 at center
-    ax += sign * fwdX * urgency;
-    ay += sign * fwdY * urgency;
+
+    if (other.spec.firingMode === "broadside") {
+      const arcCos = Math.cos(other.spec.broadsideArc || Math.PI / 4);
+      const stbdX = fwdY, stbdY = -fwdX;
+      const portDot = toUsX * portX + toUsY * portY;
+      const stbdDot = toUsX * stbdX + toUsY * stbdY;
+      if (portDot < arcCos && stbdDot < arcCos) continue;
+      // In an arc — pick whichever bow/stern direction we're already aimed
+      // toward; that exit is fastest with the limited turn rate.
+      const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
+      const dotF = myFwdX * fwdX + myFwdY * fwdY;
+      const sign = dotF >= 0 ? 1 : -1;
+      ax += sign * fwdX * urgency;
+      ay += sign * fwdY * urgency;
+    } else {
+      // Forward-firing capital: only dangerous inside the bow cone.
+      if (toUsX * fwdX + toUsY * fwdY < FORWARD_ARC_COS) continue;
+      const portDot = toUsX * portX + toUsY * portY;
+      const sign = portDot >= 0 ? 1 : -1; // push further onto the beam we're already on
+      ax += sign * portX * urgency;
+      ay += sign * portY * urgency;
+    }
+  }
+  const aLen = Math.hypot(ax, ay);
+  if (aLen < 1e-6) return null;
+  return { x: ax / aLen, y: ay / aLen };
+}
+
+// Tail evasion: an enemy fighter close behind with its nose lined up on us is
+// about to land hits. Push perpendicular to their line of fire, biased to
+// whichever side our velocity is already drifting — that's the cheapest jink.
+// Returns null when nothing is tailing us.
+function tailDanger(ship, ships) {
+  let ax = 0, ay = 0;
+  const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
+  const TAIL_RANGE = 450;
+  for (const other of ships) {
+    if (other.dead || other.side === ship.side) continue;
+    if (other.klass !== "fighter") continue;
+    const dx = ship.pos.x - other.pos.x; // them -> us
+    const dy = ship.pos.y - other.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > TAIL_RANGE * TAIL_RANGE) continue;
+    const d = Math.sqrt(d2);
+    if (d < 1e-6) continue;
+    const toUsX = dx / d, toUsY = dy / d;
+    const otherFwdX = Math.cos(other.heading), otherFwdY = Math.sin(other.heading);
+    // Their nose is pointed at us.
+    if (toUsX * otherFwdX + toUsY * otherFwdY < 0.85) continue;
+    // And they're behind us (us->them runs opposite our nose).
+    if (toUsX * myFwdX + toUsY * myFwdY > -0.2) continue;
+    const px = -toUsY, py = toUsX;
+    const velDot = px * ship.vel.x + py * ship.vel.y;
+    const sign = velDot >= 0 ? 1 : -1;
+    const urgency = 1 - d / TAIL_RANGE;
+    ax += sign * px * urgency;
+    ay += sign * py * urgency;
   }
   const aLen = Math.hypot(ax, ay);
   if (aLen < 1e-6) return null;
