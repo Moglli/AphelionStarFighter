@@ -93,7 +93,6 @@ export const CLASSES = {
     // ±arc (radians) around each side perpendicular within which broadside
     // guns will fire. Small enough that you have to position the ship.
     broadsideArc: Math.PI / 4,
-    // turnRate set below — overrides the above accel/drag block-style cluster.
     weapon: {
       damage: 70,
       cooldown: 2.6, // per side; sides fire independently
