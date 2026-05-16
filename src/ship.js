@@ -30,11 +30,23 @@ export function updateShip(ship, dt, world) {
   const c = ship.controller;
 
   // Constant-velocity movement: thrust direction maps directly to velocity at
-  // maxSpeed, no acceleration / drag / momentum. Zero thrust = full stop.
+  // maxSpeed, no acceleration / drag / momentum.
   if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
     const t = V.clampLen(c.thrust, 1);
     ship.vel.x = t.x * s.maxSpeed;
     ship.vel.y = t.y * s.maxSpeed;
+  } else if (ship.isPlayer) {
+    // Player never decelerates — keep flying at maxSpeed in current
+    // direction; fall back to heading when there's no prior velocity
+    // (game start / respawn).
+    const curLen = Math.hypot(ship.vel.x, ship.vel.y);
+    if (curLen > 1e-6) {
+      ship.vel.x = (ship.vel.x / curLen) * s.maxSpeed;
+      ship.vel.y = (ship.vel.y / curLen) * s.maxSpeed;
+    } else {
+      ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
+      ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+    }
   } else {
     ship.vel.x = 0;
     ship.vel.y = 0;
