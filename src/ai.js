@@ -50,12 +50,64 @@ export function updateAI(ship, world, dt) {
   }
 }
 
+// Vector toward pack centroid when the ship has strayed from its packmates.
+// Returns null when close enough — cohesion only kicks in past a threshold
+// so it doesn't fight the dogfight.
+function packCohesion(ship, pack) {
+  if (!pack || !pack.center) return null;
+  const dx = pack.center.x - ship.pos.x;
+  const dy = pack.center.y - ship.pos.y;
+  const d = Math.hypot(dx, dy);
+  const THRESHOLD = 300;
+  if (d <= THRESHOLD || d < 1e-6) return null;
+  return { x: dx / d, y: dy / d };
+}
+
+// Avoidance vector when the ship is inside any enemy battleship's broadside
+// arc. Pushes toward the battleship's bow/stern axis (whichever side of the
+// arc the ship is currently moving toward) — that direction exits the arc
+// fastest. Returns null when not in danger.
+function bigShipDanger(ship, ships) {
+  let ax = 0, ay = 0;
+  for (const other of ships) {
+    if (other.dead || other.side === ship.side) continue;
+    if (other.spec.firingMode !== "broadside") continue;
+    const range = other.spec.weapon.range;
+    const dx = ship.pos.x - other.pos.x;
+    const dy = ship.pos.y - other.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > range * range) continue;
+    const d = Math.sqrt(d2);
+    if (d < 1e-6) continue;
+    const fwdX = Math.cos(other.heading), fwdY = Math.sin(other.heading);
+    const arcCos = Math.cos(other.spec.broadsideArc || Math.PI / 4);
+    const portX = -fwdY, portY = fwdX;
+    const stbdX = fwdY, stbdY = -fwdX;
+    const toUsX = dx / d, toUsY = dy / d;
+    const portDot = toUsX * portX + toUsY * portY;
+    const stbdDot = toUsX * stbdX + toUsY * stbdY;
+    if (portDot < arcCos && stbdDot < arcCos) continue;
+    // In an arc — pick whichever bow/stern direction we're already aimed
+    // toward; that exit is fastest with the limited turn rate.
+    const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
+    const dotF = myFwdX * fwdX + myFwdY * fwdY;
+    const sign = dotF >= 0 ? 1 : -1;
+    const urgency = 1 - d / range; // 0 at fringe, 1 at center
+    ax += sign * fwdX * urgency;
+    ay += sign * fwdY * urgency;
+  }
+  const aLen = Math.hypot(ax, ay);
+  if (aLen < 1e-6) return null;
+  return { x: ax / aLen, y: ay / aLen };
+}
+
 // Fighter behaviour: fly-by attack runs with curving breaks. The fighter
 // approaches a target along an offset path (sweeping past the target's side),
 // fires through the run, then when it begins to depart commits to a curving
 // arc tangent to the target. Alternating `breakSide` between passes traces
-// out a figure-8 pattern around the target.
-function flybyAI(ship, target, dt) {
+// out a figure-8 pattern around the target. Pack cohesion and big-ship
+// danger avoidance modify the final aim direction.
+function flybyAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
 
