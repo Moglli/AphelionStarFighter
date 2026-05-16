@@ -1,0 +1,33 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #02030a;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #cdf;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+#game {
+  display: block;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+}
+
+#hint {
+  position: fixed;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  opacity: 0.5;
+  pointer-events: none;
+  letter-spacing: 0.04em;
+}
