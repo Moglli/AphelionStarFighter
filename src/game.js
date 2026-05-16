@@ -247,31 +247,49 @@ function resolveHeavyOverlap(ships, bounds) {
   }
 }
 
-// Build a Map<packId, {center, target}> from current ships. Pack target is
-// the enemy nearest to the pack centroid — packmates converge on the same
-// foe instead of scattering after individually-closest enemies.
+// Build a Map<packId, {center, role, target}> from current ships. Each pack
+// has a role assigned at spawn that biases its target selection — packs with
+// different roles diverge instead of all flocking to the same central foe.
+// Falls back to nearest enemy if no role-matching target exists.
 function computePacks(ships) {
   const packs = new Map();
   for (const s of ships) {
     if (s.dead || s.packId == null) continue;
     let e = packs.get(s.packId);
     if (!e) {
-      e = { side: s.side, posSum: { x: 0, y: 0 }, count: 0 };
+      e = { side: s.side, role: s.packRole, posSum: { x: 0, y: 0 }, count: 0 };
       packs.set(s.packId, e);
     }
     e.posSum.x += s.pos.x; e.posSum.y += s.pos.y; e.count++;
   }
   for (const e of packs.values()) {
     e.center = { x: e.posSum.x / e.count, y: e.posSum.y / e.count };
-    let best = null, bestD2 = Infinity;
-    for (const o of ships) {
-      if (o.dead || o.side === e.side) continue;
-      const dx = o.pos.x - e.center.x;
-      const dy = o.pos.y - e.center.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < bestD2) { bestD2 = d2; best = o; }
-    }
-    e.target = best;
+    e.target = pickPackTarget(ships, e.side, e.center, e.role);
   }
   return packs;
+}
+
+function pickPackTarget(ships, side, center, role) {
+  let bestPreferred = null, bestPreferredD2 = Infinity;
+  let bestAny = null, bestAnyD2 = Infinity;
+  for (const o of ships) {
+    if (o.dead || o.side === side) continue;
+    const dx = o.pos.x - center.x;
+    const dy = o.pos.y - center.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestAnyD2) { bestAnyD2 = d2; bestAny = o; }
+    if (matchPackRole(o.klass, role) && d2 < bestPreferredD2) {
+      bestPreferredD2 = d2; bestPreferred = o;
+    }
+  }
+  return bestPreferred || bestAny;
+}
+
+function matchPackRole(klass, role) {
+  switch (role) {
+    case "hunt-fighter":     return klass === "fighter";
+    case "strike-capital":   return klass === "cruiser" || klass === "battleship";
+    case "skirmish-frigate": return klass === "frigate";
+    default:                 return false;
+  }
 }
