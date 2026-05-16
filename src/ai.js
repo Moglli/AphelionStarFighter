@@ -239,13 +239,15 @@ function flybyAI(ship, target, dt, world) {
   const pack = world && world.packs ? world.packs.get(ship.packId) : null;
   const cohesion = packCohesion(ship, pack);
   const danger = bigShipDanger(ship, world ? world.ships : []);
-  if (cohesion || danger) {
+  const tail = tailDanger(ship, world ? world.ships : []);
+  if (cohesion || danger || tail) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.35; ay += cohesion.y * 0.35; }
     if (danger)   { ax += danger.x   * 1.30; ay += danger.y   * 1.30; }
+    if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
     c.aim = { x: ax, y: ay };
-    // While dodging a broadside arc, stop firing — the nose isn't on target.
+    // While dodging a capital firing arc, stop firing — the nose isn't on target.
     if (danger) c.firing = false;
   }
 }
