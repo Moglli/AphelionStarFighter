@@ -8,7 +8,20 @@ const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
 const PACK_CLUSTER_RADIUS = 130; // jitter around pack center at spawn
 
+// Roles cycle through packs at spawn so squadrons diverge instead of all
+// converging on the same central target. Each role biases the pack's
+// target selection toward a class.
+const PACK_ROLES = [
+  "hunt-fighter",
+  "strike-capital",
+  "skirmish-frigate",
+  "hunt-fighter",
+  "strike-capital",
+  "skirmish-frigate",
+];
+
 let nextPackId = 1;
+let nextPackRoleIdx = 0;
 
 export function createGame() {
   const game = {
