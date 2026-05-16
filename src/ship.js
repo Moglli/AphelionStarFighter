@@ -29,9 +29,14 @@ export function updateShip(ship, dt, world) {
   const s = ship.spec;
   const c = ship.controller;
 
-  // Constant-velocity movement: thrust direction maps directly to velocity at
-  // maxSpeed, no acceleration / drag / momentum.
-  if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
+  // Fighters use an aircraft flight model: velocity is locked to nose
+  // direction at constant maxSpeed. They cannot strafe or snap-turn — the
+  // only way to change direction is to bank (rotate heading), which is
+  // turn-rate-limited.
+  if (ship.klass === "fighter") {
+    ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
+    ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+  } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
     const t = V.clampLen(c.thrust, 1);
     ship.vel.x = t.x * s.maxSpeed;
     ship.vel.y = t.y * s.maxSpeed;
