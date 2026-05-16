@@ -73,8 +73,6 @@ function flybyAI(ship, target, dt) {
   // Perpendicular (CCW); multiplied by breakSide for left/right.
   const perp = { x: -dir.y, y: dir.x };
 
-  // Scale by target size so passes feel tight on fighters and grand on capitals.
-  const PASS_OFFSET = target.spec.radius + 80;
   const REGROUP_DIST = 600;
   const PASS_ZONE_DIST = 500;   // must be at least this close to count as a pass
   const MIN_BREAK_TIME = 1.2;
