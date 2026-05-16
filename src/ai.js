@@ -44,7 +44,7 @@ export function updateAI(ship, world, dt) {
   }
 
   if (ship.klass === "fighter") {
-    flybyAI(ship, target, dt);
+    flybyAI(ship, target, dt, world);
   } else {
     orbitAI(ship, target, dt);
   }
