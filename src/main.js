@@ -65,11 +65,14 @@ function draw() {
     ? { x: player.pos.x, y: player.pos.y }
     : { x: ARENA.width / 2, y: ARENA.height / 2 };
 
-  drawArena(ctx, game.starfield, camera, viewW, viewH);
+  drawArena(ctx, game.starfield, camera, viewW, viewH, ZOOM);
 
-  // World transform.
+  // World transform with zoom-out. Order: translate to viewport center,
+  // scale, then translate world so the camera lands at the origin.
   ctx.save();
-  ctx.translate(viewW / 2 - camera.x, viewH / 2 - camera.y);
+  ctx.translate(viewW / 2, viewH / 2);
+  ctx.scale(ZOOM, ZOOM);
+  ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship);
