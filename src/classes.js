@@ -101,8 +101,8 @@ export const CLASSES = {
       spread: 0.04,
       muzzles: 3, // gun ports per side
       muzzleSpread: 70, // spaced along the much longer hull
-      projectileRadius: 5,
-      projectileColor: "#acf",
+      projectileRadius: 10,
+      projectileColors: { blue: "#a3f", red: "#f25" },
     },
     aiRange: 1000,
     aiOrbit: 800,
