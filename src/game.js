@@ -69,6 +69,7 @@ function spawnFighterPacks(game, side, zone, count, facing) {
     const packSize = Math.min(FIGHTER_PACK_SIZE, remaining);
     const packCenter = randomSpawnPos(zone);
     const packId = nextPackId++;
+    const packRole = PACK_ROLES[nextPackRoleIdx++ % PACK_ROLES.length];
     for (let i = 0; i < packSize; i++) {
       const ang = Math.random() * Math.PI * 2;
       const dist = Math.random() * PACK_CLUSTER_RADIUS;
@@ -85,6 +86,7 @@ function spawnFighterPacks(game, side, zone, count, facing) {
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
       });
       ship.packId = packId;
+      ship.packRole = packRole;
       game.ships.push(ship);
     }
     remaining -= packSize;
