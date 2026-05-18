@@ -3,12 +3,31 @@ export const ARENA = {
   height: 5000,
   bounds: { minX: 0, maxX: 7000, minY: 0, maxY: 5000 },
   // Spawn zones at left (blue/Allied) and right (red/Hostile) ends.
-  // Wide + tall so packs/cruisers/battleships spread out at the start.
+  // Recomputed proportionally whenever the map is resized.
   spawn: {
     blue: { x: 700,  y: 2500, w: 900, h: 4200 },
     red:  { x: 6300, y: 2500, w: 900, h: 4200 },
   },
 };
+
+// Map size presets shown on the start menu.
+// Uses mapW / mapH to avoid colliding with rect width/height when these
+// records are spread into menu hit-rects.
+export const MAP_SIZES = [
+  { key: "small",  label: "Small",  mapW: 4500,  mapH: 3200 },
+  { key: "medium", label: "Medium", mapW: 7000,  mapH: 5000 },
+  { key: "large",  label: "Large",  mapW: 11000, mapH: 7800 },
+];
+
+// Mutate ARENA in place so all consumers (game.arena reference, etc.)
+// pick up the new bounds.
+export function setArenaSize(w, h) {
+  ARENA.width = w;
+  ARENA.height = h;
+  ARENA.bounds = { minX: 0, maxX: w, minY: 0, maxY: h };
+  ARENA.spawn.blue = { x: w * 0.10, y: h / 2, w: w * 0.13, h: h * 0.84 };
+  ARENA.spawn.red  = { x: w * 0.90, y: h / 2, w: w * 0.13, h: h * 0.84 };
+}
 
 // Build a starfield: a few parallax layers of points sprinkled across the arena.
 export function createStarfield() {

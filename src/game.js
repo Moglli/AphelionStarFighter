@@ -1,16 +1,14 @@
-import { ARENA, randomSpawnPos, createStarfield } from "./arena.js";
+import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
 import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
+import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
 
-const ROSTER = { fighter: 30, frigate: 5, cruiser: 2, battleship: 1 };
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
-const PACK_CLUSTER_RADIUS = 130; // jitter around pack center at spawn
+const BOMBER_PACK_SIZE = 2;
+const PACK_CLUSTER_RADIUS = 130;
 
-// Roles cycle through packs at spawn so squadrons diverge instead of all
-// converging on the same central target. Each role biases the pack's
-// target selection toward a class.
 const PACK_ROLES = [
   "hunt-fighter",
   "strike-capital",
@@ -24,46 +22,88 @@ let nextPackId = 1;
 let nextPackRoleIdx = 0;
 
 export function createGame() {
+  // Default map size for the menu backdrop. Replaced when the user picks
+  // a size in startGame.
+  setArenaSize(7000, 5000);
   const game = {
     ships: [],
     projectiles: [],
+    beams: [],
     arena: ARENA,
     starfield: createStarfield(),
-    playerController: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
+    playerController: {
+      thrust: { x: 0, y: 0 },
+      aim: null,
+      firing: false,
+      firingMissile: false,
+    },
     respawnTimer: 0,
     matchOver: false,
     winner: null,
+    spectating: false,
+    spectateTargetId: null,
+    // Lifecycle: "menu" before the player picks a map size, "playing"
+    // once a match is in progress.
+    state: "menu",
+    // Per-side race selection. Allied is picked from the start menu;
+    // Hostile is rolled at match start.
+    alliedRace: "terran",
+    hostileRace: "terran",
   };
-  spawnRoster(game);
   return game;
+}
+
+// Called from main when the player picks map size + allied race on the
+// start menu. Hostile race is rolled here so the enemy composition is a
+// surprise.
+export function startGame(game, mapW, mapH, alliedRace = "terran") {
+  setArenaSize(mapW, mapH);
+  game.starfield = createStarfield();
+  game.ships = [];
+  game.projectiles = [];
+  game.beams = [];
+  game.respawnTimer = 0;
+  game.matchOver = false;
+  game.winner = null;
+  game.spectating = false;
+  game.spectateTargetId = null;
+  game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
+  game.hostileRace = randomRaceKey();
+  game.state = "playing";
+  spawnRoster(game);
 }
 
 function spawnRoster(game) {
   for (const side of ["blue", "red"]) {
+    const race = side === "blue" ? game.alliedRace : game.hostileRace;
+    const roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
-    for (const [klass, count] of Object.entries(ROSTER)) {
+    for (const [klass, count] of Object.entries(roster)) {
+      if (count <= 0) continue;
       if (klass === "fighter") {
-        spawnFighterPacks(game, side, zone, count, facing);
+        spawnFighterPacks(game, side, race, zone, count, facing);
+      } else if (klass === "bomber") {
+        spawnBomberPairs(game, side, race, zone, count, facing);
+      } else if (klass === "carrier") {
+        spawnCarrierWithEscort(game, side, race, zone, count, facing);
       } else {
         for (let i = 0; i < count; i++) {
           const pos = randomSpawnPos(zone);
           const heading = facing + (Math.random() - 0.5) * 0.3;
           const ship = createShip({
-            klass, side, pos, heading,
-            controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
+            klass, race, side, pos, heading,
+            controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
           });
           game.ships.push(ship);
         }
       }
     }
   }
-  promotePlayer(game);
+  if (!game.spectating) promotePlayer(game);
 }
 
-// Spawn fighters in tight clusters of FIGHTER_PACK_SIZE. Each pack gets a
-// unique packId so the AI can target as a wing (see update() below).
-function spawnFighterPacks(game, side, zone, count, facing) {
+function spawnFighterPacks(game, side, race, zone, count, facing) {
   let remaining = count;
   while (remaining > 0) {
     const packSize = Math.min(FIGHTER_PACK_SIZE, remaining);
@@ -80,10 +120,11 @@ function spawnFighterPacks(game, side, zone, count, facing) {
       const heading = facing + (Math.random() - 0.5) * 0.3;
       const ship = createShip({
         klass: "fighter",
+        race,
         side,
         pos,
         heading,
-        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false },
+        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
       });
       ship.packId = packId;
       ship.packRole = packRole;
@@ -93,15 +134,78 @@ function spawnFighterPacks(game, side, zone, count, facing) {
   }
 }
 
-// Pick a friendly fighter and bind it to the player controller.
+// Bombers spawn in tight pairs. They don't share the fighter pack system —
+// their AI targets capitals directly, and they're meant to be the "loud"
+// threat that pulls fighter attention.
+function spawnBomberPairs(game, side, race, zone, count, facing) {
+  let remaining = count;
+  while (remaining > 0) {
+    const pairSize = Math.min(BOMBER_PACK_SIZE, remaining);
+    const center = randomSpawnPos(zone);
+    for (let i = 0; i < pairSize; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = Math.random() * (PACK_CLUSTER_RADIUS * 0.7);
+      const pos = {
+        x: center.x + Math.cos(ang) * dist,
+        y: center.y + Math.sin(ang) * dist,
+      };
+      const heading = facing + (Math.random() - 0.5) * 0.2;
+      const ship = createShip({
+        klass: "bomber",
+        race,
+        side,
+        pos,
+        heading,
+        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      });
+      game.ships.push(ship);
+    }
+    remaining -= pairSize;
+  }
+}
+
+// Carrier + fighter escort squadron. Each carrier spawns with a ring of
+// fighters that share a packId so they engage as a wing. The escort's
+// pack role is "hunt-fighter" — they screen against enemy small craft;
+// the pack target picker still upgrades them to a bomber if one shows up.
+function spawnCarrierWithEscort(game, side, race, zone, count, facing) {
+  for (let n = 0; n < count; n++) {
+    const pos = randomSpawnPos(zone);
+    const carrier = createShip({
+      klass: "carrier", race, side, pos, heading: facing,
+      controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+    });
+    game.ships.push(carrier);
+
+    const escortSize = carrier.spec.escortSize || 6;
+    const packId = nextPackId++;
+    for (let i = 0; i < escortSize; i++) {
+      const ang = (i / escortSize) * Math.PI * 2;
+      const dist = carrier.spec.radius + 70;
+      const epos = {
+        x: pos.x + Math.cos(ang) * dist,
+        y: pos.y + Math.sin(ang) * dist,
+      };
+      const heading = facing + (Math.random() - 0.5) * 0.3;
+      const escort = createShip({
+        klass: "fighter", race, side, pos: epos, heading,
+        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      });
+      escort.packId = packId;
+      escort.packRole = "hunt-fighter";
+      game.ships.push(escort);
+    }
+  }
+}
+
 function promotePlayer(game) {
   const candidate = game.ships.find(
     (s) => s.side === "blue" && s.klass === "fighter" && !s.isPlayer && !s.dead,
   );
   if (!candidate) {
-    // No friendly fighter alive — spawn a fresh one for the player.
     const ship = createShip({
       klass: "fighter",
+      race: game.alliedRace,
       side: "blue",
       pos: randomSpawnPos(ARENA.spawn.blue),
       heading: 0,
@@ -113,46 +217,118 @@ function promotePlayer(game) {
   }
   candidate.controller = game.playerController;
   candidate.isPlayer = true;
-  // Move to spawn zone for a clean respawn feel.
   candidate.pos = randomSpawnPos(ARENA.spawn.blue);
   candidate.vel = { x: 0, y: 0 };
   candidate.hp = candidate.hpMax;
+  candidate.shield = candidate.shieldMax;
+  candidate.shieldHitTimer = 999;
   candidate.heading = 0;
+  candidate.missileCd = 0;
+  if (candidate.spec.weapon && candidate.spec.weapon.capacity) {
+    candidate.weaponAmmo = candidate.spec.weapon.capacity;
+    candidate.weaponReloading = false;
+    candidate.weaponReloadTimer = 0;
+  }
   return candidate;
 }
 
+// ---------------------------------------------------------------------------
+// Spectate API — called from main when the player toggles spectate.
+// ---------------------------------------------------------------------------
+export function enterSpectate(game) {
+  if (game.spectating) return;
+  game.spectating = true;
+  // Remove the live player ship; leave the rest of the world running.
+  for (const s of game.ships) if (s.isPlayer) s.dead = true;
+  game.ships = game.ships.filter((s) => !s.isPlayer);
+  // Pick a spectate target — prefer the player's side, fall back to anyone.
+  const tgt = pickSpectateInitial(game);
+  game.spectateTargetId = tgt ? tgt.id : null;
+}
+
+function pickSpectateInitial(game) {
+  return game.ships.find((s) => !s.dead && s.side === "blue")
+      || game.ships.find((s) => !s.dead);
+}
+
+export function exitSpectate(game) {
+  if (!game.spectating) return;
+  game.spectating = false;
+  game.spectateTargetId = null;
+  promotePlayer(game);
+}
+
+export function cycleSpectate(game, dir) {
+  if (!game.spectating) return;
+  const alive = game.ships.filter((s) => !s.dead);
+  if (alive.length === 0) { game.spectateTargetId = null; return; }
+  // Sort so cycling is stable.
+  alive.sort((a, b) => a.id - b.id);
+  let idx = alive.findIndex((s) => s.id === game.spectateTargetId);
+  if (idx === -1) idx = 0;
+  idx = (idx + (dir > 0 ? 1 : -1) + alive.length) % alive.length;
+  game.spectateTargetId = alive[idx].id;
+}
+
+export function getSpectateTarget(game) {
+  if (!game.spectating || game.spectateTargetId == null) return null;
+  return game.ships.find((s) => s.id === game.spectateTargetId && !s.dead) || null;
+}
+
+// ---------------------------------------------------------------------------
+// Tick.
+// ---------------------------------------------------------------------------
 export function update(game, dt) {
-  // Pack centroids + shared targets — fighter packs engage as a wing.
+  if (game.state !== "playing") return;
+
   game.packs = computePacks(game.ships);
 
-  // AI controllers update first (skip the player ship).
   for (const ship of game.ships) {
     if (ship.dead || ship.isPlayer) continue;
     updateAI(ship, game, dt);
   }
-  // Player controller is already populated externally (input -> game.playerController).
 
-  // Ship physics + firing.
   for (const ship of game.ships) {
     if (ship.dead) continue;
     updateShip(ship, dt, game);
   }
 
-  // Heavies (frigate / cruiser / battleship) can't overlap each other.
   resolveHeavyOverlap(game.ships, game.arena.bounds);
 
-  // Projectiles + collisions.
+  // Projectiles: movement + ship collisions + PD-vs-missile collisions.
   for (const p of game.projectiles) {
     if (p.dead) continue;
-    updateProjectile(p, dt);
+    updateProjectile(p, dt, game);
     if (p.dead) continue;
+
+    // PD rounds can intercept enemy missiles before they reach a ship.
+    if (p.kind !== "missile" && p.fromKlass === "pd") {
+      let interceptedMissile = false;
+      for (const m of game.projectiles) {
+        if (m.dead || m.kind !== "missile" || m.side === p.side) continue;
+        const dx = m.pos.x - p.pos.x;
+        const dy = m.pos.y - p.pos.y;
+        const r = m.radius + p.radius + 1;
+        if (dx * dx + dy * dy <= r * r) {
+          m.hp -= p.damage;
+          if (m.hp <= 0) m.dead = true;
+          p.dead = true;
+          interceptedMissile = true;
+          break;
+        }
+      }
+      if (interceptedMissile) continue;
+    }
+
+    // Hit a ship.
     for (const ship of game.ships) {
       if (ship.dead || ship.side === p.side) continue;
       const dx = ship.pos.x - p.pos.x;
       const dy = ship.pos.y - p.pos.y;
       const r = ship.spec.radius + p.radius;
       if (dx * dx + dy * dy <= r * r) {
-        ship.hp -= p.damage;
+        applyDamage(ship, p);
+        // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) ship.dead = true;
         break;
@@ -160,29 +336,38 @@ export function update(game, dt) {
     }
   }
 
-  // Cull dead projectiles.
+  // Beams: apply damage once, then tick down.
+  applyAndAgeBeams(game, dt);
+
   if (game.projectiles.length > 0) {
     game.projectiles = game.projectiles.filter((p) => !p.dead);
   }
 
-  // Player death + respawn.
-  const player = game.ships.find((s) => s.isPlayer);
-  if (player && player.dead) {
-    if (game.respawnTimer <= 0) game.respawnTimer = RESPAWN_SECONDS;
-    game.respawnTimer -= dt;
-    if (game.respawnTimer <= 0) {
-      // Remove dead player marker, promote a new fighter.
-      game.ships = game.ships.filter((s) => !(s.isPlayer && s.dead));
-      promotePlayer(game);
-      game.respawnTimer = 0;
+  // Player death + respawn (only when not spectating).
+  if (!game.spectating) {
+    const player = game.ships.find((s) => s.isPlayer);
+    if (player && player.dead) {
+      if (game.respawnTimer <= 0) game.respawnTimer = RESPAWN_SECONDS;
+      game.respawnTimer -= dt;
+      if (game.respawnTimer <= 0) {
+        game.ships = game.ships.filter((s) => !(s.isPlayer && s.dead));
+        promotePlayer(game);
+        game.respawnTimer = 0;
+      }
     }
   }
 
-  // Cull other dead ships (after player handling so we don't clobber the
-  // dead-player marker before respawn fires).
-  game.ships = game.ships.filter((s) => s.isPlayer || !s.dead);
+  game.ships = game.ships.filter((s) => (s.isPlayer && !game.spectating) || !s.dead);
 
-  // Win check: a side wiped (excluding the always-respawning player).
+  // Keep spectate target valid.
+  if (game.spectating) {
+    const tgt = getSpectateTarget(game);
+    if (!tgt) {
+      const next = pickSpectateInitial(game);
+      game.spectateTargetId = next ? next.id : null;
+    }
+  }
+
   if (!game.matchOver) {
     const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
     const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
@@ -191,24 +376,110 @@ export function update(game, dt) {
   }
 }
 
+// Return to the start menu. The user picks a (possibly new) map size and
+// startGame spawns a fresh match.
 export function restart(game) {
   game.ships = [];
   game.projectiles = [];
+  game.beams = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
-  spawnRoster(game);
+  game.spectating = false;
+  game.spectateTargetId = null;
+  game.state = "menu";
 }
 
-// Separate any overlapping heavy hulls (frigate / cruiser / battleship) by
-// pushing each pair apart along the axis between them. Fighters pass through
-// freely — only the big hulls have ship-vs-ship collision. Run a few
-// iterations so chained overlaps untangle in one tick (e.g., at spawn).
+// ---------------------------------------------------------------------------
+// Damage rules.
+//   Layered defence: shield → armor → hull.
+//   Missiles bypass shields entirely (straight to armor / hull).
+//   Shields are doubly effective vs lasers and fighter cannons: those weapons
+//   cost only 50% of their damage from the shield bank.
+//   Armor (big ships only) absorbs incoming damage at spec.armor.wearRate —
+//   a 100-damage hit erodes ~50 armor by default — so a thick plate
+//   "slowly deteriorates" rather than burning through in a single salvo.
+// ---------------------------------------------------------------------------
+function applyDamage(ship, p) {
+  let remaining = p.damage;
+
+  // Step 1: Shield (unless missile, which bypasses).
+  if (p.kind !== "missile" && ship.shieldMax > 0 && ship.shield > 0) {
+    const isFighterRound = p.fromKlass === "fighter";
+    const isLaser = p.kind === "laser";
+    const shieldMul = (isFighterRound || isLaser) ? 0.5 : 1;
+    ship.shieldHitTimer = 0;
+    ship.shieldFlash = Math.min(1, ship.shieldFlash + 0.4);
+    const shieldCost = remaining * shieldMul;
+    if (shieldCost <= ship.shield) {
+      ship.shield -= shieldCost;
+      return; // shield ate the whole hit
+    }
+    // Shield breaks; convert remaining capacity back into incoming damage.
+    const dmgAbsorbed = ship.shield / shieldMul;
+    ship.shield = 0;
+    remaining = remaining - dmgAbsorbed;
+    if (remaining <= 0) return;
+  }
+
+  // Step 2: Armor (capitals). Wear at a reduced rate so plates last.
+  if (ship.armorMax > 0 && ship.armor > 0 && ship.spec.armor) {
+    const wearRate = ship.spec.armor.wearRate || 0.5;
+    ship.armorFlash = Math.min(1, ship.armorFlash + 0.5);
+    const armorWear = remaining * wearRate;
+    if (armorWear <= ship.armor) {
+      ship.armor -= armorWear;
+      return; // armor ate the whole hit
+    }
+    // Armor strips; convert remaining capacity back into incoming damage.
+    const dmgAbsorbed = ship.armor / wearRate;
+    ship.armor = 0;
+    remaining = remaining - dmgAbsorbed;
+    if (remaining <= 0) return;
+  }
+
+  // Step 3: Hull.
+  ship.hp -= remaining;
+}
+
+// ---------------------------------------------------------------------------
+// Beam ticking. Each beam applies its damage to the locked target on the
+// first frame it exists, then lingers as visual for `ttl` seconds.
+// ---------------------------------------------------------------------------
+function applyAndAgeBeams(game, dt) {
+  if (!game.beams || game.beams.length === 0) return;
+  for (const beam of game.beams) {
+    if (!beam.applied) {
+      // Verify target is still alive + still in range. If not, beam misses.
+      const t = beam.target;
+      if (t && !t.dead) {
+        const dx = t.pos.x - beam.origin.x;
+        const dy = t.pos.y - beam.origin.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= beam.range * beam.range) {
+          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" });
+          if (t.hp <= 0) t.dead = true;
+          beam.hit = { x: t.pos.x, y: t.pos.y };
+        } else {
+          beam.hit = null;
+        }
+      } else {
+        beam.hit = null;
+      }
+      beam.applied = true;
+    }
+    beam.ttl -= dt;
+  }
+  game.beams = game.beams.filter((b) => b.ttl > 0);
+}
+
+// ---------------------------------------------------------------------------
 function resolveHeavyOverlap(ships, bounds) {
   const heavies = [];
   for (const s of ships) {
     if (s.dead) continue;
-    if (s.klass === "frigate" || s.klass === "cruiser" || s.klass === "battleship") {
+    if (s.klass === "frigate" || s.klass === "cruiser"
+        || s.klass === "battleship" || s.klass === "carrier") {
       heavies.push(s);
     }
   }
@@ -223,7 +494,6 @@ function resolveHeavyOverlap(ships, bounds) {
         const d2 = dx * dx + dy * dy;
         if (d2 < minDist * minDist) {
           const d = d2 > 1e-6 ? Math.sqrt(d2) : 0;
-          // Coincident-center fallback: nudge along x.
           const nx = d > 1e-6 ? dx / d : 1;
           const ny = d > 1e-6 ? dy / d : 0;
           const overlap = (minDist - d) * 0.5;
@@ -237,7 +507,6 @@ function resolveHeavyOverlap(ships, bounds) {
     }
     if (!pushed) break;
   }
-  // Re-clamp to arena bounds in case a push shoved someone outside.
   for (const s of heavies) {
     const r = s.spec.radius;
     if (s.pos.x < bounds.minX + r) s.pos.x = bounds.minX + r;
@@ -247,10 +516,6 @@ function resolveHeavyOverlap(ships, bounds) {
   }
 }
 
-// Build a Map<packId, {center, role, target}> from current ships. Each pack
-// has a role assigned at spawn that biases its target selection — packs with
-// different roles diverge instead of all flocking to the same central foe.
-// Falls back to nearest enemy if no role-matching target exists.
 function computePacks(ships) {
   const packs = new Map();
   for (const s of ships) {
@@ -270,6 +535,9 @@ function computePacks(ships) {
 }
 
 function pickPackTarget(ships, side, center, role) {
+  // Bombers outrank every role-preferred target — any fighter pack that
+  // can see an enemy bomber peels off to swat it.
+  let bestBomber = null, bestBomberD2 = Infinity;
   let bestPreferred = null, bestPreferredD2 = Infinity;
   let bestAny = null, bestAnyD2 = Infinity;
   for (const o of ships) {
@@ -278,11 +546,14 @@ function pickPackTarget(ships, side, center, role) {
     const dy = o.pos.y - center.y;
     const d2 = dx * dx + dy * dy;
     if (d2 < bestAnyD2) { bestAnyD2 = d2; bestAny = o; }
+    if (o.klass === "bomber" && d2 < bestBomberD2) {
+      bestBomberD2 = d2; bestBomber = o;
+    }
     if (matchPackRole(o.klass, role) && d2 < bestPreferredD2) {
       bestPreferredD2 = d2; bestPreferred = o;
     }
   }
-  return bestPreferred || bestAny;
+  return bestBomber || bestPreferred || bestAny;
 }
 
 function matchPackRole(klass, role) {
