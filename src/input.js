@@ -3,6 +3,7 @@
 // center because the camera follows the player ship, so center == player.
 
 import { MAP_SIZES } from "./arena.js";
+import { RACES, RACE_KEYS } from "./races.js";
 
 const DEADZONE = 0.15;
 
@@ -120,70 +121,146 @@ export class MissileButton {
   }
 }
 
-// Pre-match menu: lets the player pick a map size before the world spawns.
-// Rendering and hit-test layout live together so the rectangles stay in
-// sync with the visible buttons.
+// Pre-match menu: lets the player pick a map size and an Allied race
+// before the world spawns. Layout is two rows of chips plus an explicit
+// START button. Each chip toggles its row's selection; START emits the
+// chosen { mapW, mapH, race } bundle.
 export class StartMenu {
   constructor() {
-    this.options = MAP_SIZES;
-    this.rects = []; // recomputed each layout()
-    this.justClicked = null;
+    this.sizeRects = [];
+    this.raceRects = [];
+    this.startRect = null;
+    this.selectedSize = "medium"; // default key
+    this.selectedRace = "terran"; // default key
+    this.justStarted = null;      // populated on START click; consumed by main
   }
+
   layout(viewW, viewH) {
-    const n = this.options.length;
-    const btnW = Math.min(220, (viewW - 80) / n - 20);
-    const btnH = 100;
-    const gap = 20;
-    const totalW = n * btnW + (n - 1) * gap;
-    const startX = (viewW - totalW) / 2;
-    const y = viewH / 2 - btnH / 2 + 20;
-    this.rects = this.options.map((o, i) => ({
-      ...o,
-      x: startX + i * (btnW + gap),
-      y, w: btnW, h: btnH,
+    const chipH = 64;
+    const gapX = 14;
+    const titleY = viewH / 2 - 170;
+
+    // Size row.
+    const sizeOpts = MAP_SIZES;
+    const sn = sizeOpts.length;
+    const sizeBtnW = Math.min(180, (viewW - 80) / sn - gapX);
+    const sizeRowW = sn * sizeBtnW + (sn - 1) * gapX;
+    const sizeY = titleY + 80;
+    const sizeStartX = (viewW - sizeRowW) / 2;
+    this.sizeRects = sizeOpts.map((o, i) => ({
+      key: o.key, label: o.label, mapW: o.mapW, mapH: o.mapH,
+      x: sizeStartX + i * (sizeBtnW + gapX),
+      y: sizeY, w: sizeBtnW, h: chipH,
     }));
+
+    // Race row.
+    const raceKeys = RACE_KEYS;
+    const rn = raceKeys.length;
+    const raceBtnW = Math.min(150, (viewW - 60) / rn - gapX);
+    const raceRowW = rn * raceBtnW + (rn - 1) * gapX;
+    const raceY = sizeY + chipH + 60;
+    const raceStartX = (viewW - raceRowW) / 2;
+    this.raceRects = raceKeys.map((k, i) => ({
+      key: k, label: RACES[k].name,
+      x: raceStartX + i * (raceBtnW + gapX),
+      y: raceY, w: raceBtnW, h: chipH,
+    }));
+
+    // START button.
+    const startW = 220, startH = 56;
+    this.startRect = {
+      x: (viewW - startW) / 2,
+      y: raceY + chipH + 50,
+      w: startW, h: startH,
+    };
   }
-  hitTest(x, y) {
-    for (const r of this.rects) {
-      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
-    }
-    return null;
-  }
+
   click(x, y) {
-    const r = this.hitTest(x, y);
-    if (r) this.justClicked = r;
+    for (const r of this.sizeRects) {
+      if (this._hit(r, x, y)) { this.selectedSize = r.key; return; }
+    }
+    for (const r of this.raceRects) {
+      if (this._hit(r, x, y)) { this.selectedRace = r.key; return; }
+    }
+    if (this.startRect && this._hit(this.startRect, x, y)) {
+      this._emitStart();
+    }
   }
-  consumeClick() {
-    const r = this.justClicked;
-    this.justClicked = null;
-    return r;
+
+  _hit(r, x, y) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
+
+  _emitStart() {
+    const size = this.sizeRects.find((r) => r.key === this.selectedSize)
+              || this.sizeRects[0];
+    this.justStarted = { mapW: size.mapW, mapH: size.mapH, race: this.selectedRace };
+  }
+
+  consumeStart() {
+    const s = this.justStarted;
+    this.justStarted = null;
+    return s;
+  }
+
   draw(ctx, viewW, viewH) {
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(0, 0, viewW, viewH);
+
     ctx.fillStyle = "#cef";
     ctx.textAlign = "center";
     ctx.font = "bold 36px system-ui, sans-serif";
-    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 120);
-    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 180);
+
+    // Size row.
     ctx.fillStyle = "#9bd";
-    ctx.fillText("Choose map size", viewW / 2, viewH / 2 - 90);
-    for (const r of this.rects) {
-      ctx.fillStyle = "rgba(20,40,60,0.85)";
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = "#7df";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = "#cef";
-      ctx.font = "bold 22px system-ui, sans-serif";
-      ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 - 2);
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillStyle = "#9bd";
-      ctx.fillText(`${r.mapW} × ${r.mapH}`, r.x + r.w / 2, r.y + r.h / 2 + 18);
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("MAP SIZE", viewW / 2, this.sizeRects[0].y - 14);
+    for (const r of this.sizeRects) {
+      this._drawChip(ctx, r, r.key === this.selectedSize,
+        r.label, `${r.mapW} × ${r.mapH}`);
     }
+
+    // Race row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("ALLIED RACE", viewW / 2, this.raceRects[0].y - 14);
+    for (const r of this.raceRects) {
+      const race = RACES[r.key];
+      this._drawChip(ctx, r, r.key === this.selectedRace,
+        r.label, race.tagline || "");
+    }
+
+    // START button.
+    const s = this.startRect;
+    ctx.fillStyle = "rgba(60,140,90,0.85)";
+    ctx.fillRect(s.x, s.y, s.w, s.h);
+    ctx.strokeStyle = "#9f8";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(s.x, s.y, s.w, s.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 24px system-ui, sans-serif";
+    ctx.fillText("START", s.x + s.w / 2, s.y + s.h / 2 + 8);
+
     ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  _drawChip(ctx, r, selected, label, sublabel) {
+    ctx.fillStyle = selected ? "rgba(40,90,140,0.95)" : "rgba(20,40,60,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = selected ? "#fff" : "#7df";
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 2);
+    if (sublabel) {
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillStyle = "#9bd";
+      ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 16);
+    }
   }
 }
 

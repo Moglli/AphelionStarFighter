@@ -2,11 +2,8 @@ import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js
 import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
+import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
 
-// Roster sized so totals stay manageable once the carrier starts spawning
-// replacements: carriers add 6 escort fighters at spawn and keep launching
-// reinforcements throughout the match.
-const ROSTER = { fighter: 24, bomber: 6, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 };
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
 const BOMBER_PACK_SIZE = 2;
@@ -48,12 +45,18 @@ export function createGame() {
     // Lifecycle: "menu" before the player picks a map size, "playing"
     // once a match is in progress.
     state: "menu",
+    // Per-side race selection. Allied is picked from the start menu;
+    // Hostile is rolled at match start.
+    alliedRace: "terran",
+    hostileRace: "terran",
   };
   return game;
 }
 
-// Called from main when the player picks a map size on the start menu.
-export function startGame(game, mapW, mapH) {
+// Called from main when the player picks map size + allied race on the
+// start menu. Hostile race is rolled here so the enemy composition is a
+// surprise.
+export function startGame(game, mapW, mapH, alliedRace = "terran") {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -64,27 +67,32 @@ export function startGame(game, mapW, mapH) {
   game.winner = null;
   game.spectating = false;
   game.spectateTargetId = null;
+  game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
+  game.hostileRace = randomRaceKey();
   game.state = "playing";
   spawnRoster(game);
 }
 
 function spawnRoster(game) {
   for (const side of ["blue", "red"]) {
+    const race = side === "blue" ? game.alliedRace : game.hostileRace;
+    const roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
-    for (const [klass, count] of Object.entries(ROSTER)) {
+    for (const [klass, count] of Object.entries(roster)) {
+      if (count <= 0) continue;
       if (klass === "fighter") {
-        spawnFighterPacks(game, side, zone, count, facing);
+        spawnFighterPacks(game, side, race, zone, count, facing);
       } else if (klass === "bomber") {
-        spawnBomberPairs(game, side, zone, count, facing);
+        spawnBomberPairs(game, side, race, zone, count, facing);
       } else if (klass === "carrier") {
-        spawnCarrierWithEscort(game, side, zone, count, facing);
+        spawnCarrierWithEscort(game, side, race, zone, count, facing);
       } else {
         for (let i = 0; i < count; i++) {
           const pos = randomSpawnPos(zone);
           const heading = facing + (Math.random() - 0.5) * 0.3;
           const ship = createShip({
-            klass, side, pos, heading,
+            klass, race, side, pos, heading,
             controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
           });
           game.ships.push(ship);
@@ -95,7 +103,7 @@ function spawnRoster(game) {
   if (!game.spectating) promotePlayer(game);
 }
 
-function spawnFighterPacks(game, side, zone, count, facing) {
+function spawnFighterPacks(game, side, race, zone, count, facing) {
   let remaining = count;
   while (remaining > 0) {
     const packSize = Math.min(FIGHTER_PACK_SIZE, remaining);
@@ -112,6 +120,7 @@ function spawnFighterPacks(game, side, zone, count, facing) {
       const heading = facing + (Math.random() - 0.5) * 0.3;
       const ship = createShip({
         klass: "fighter",
+        race,
         side,
         pos,
         heading,
@@ -128,7 +137,7 @@ function spawnFighterPacks(game, side, zone, count, facing) {
 // Bombers spawn in tight pairs. They don't share the fighter pack system —
 // their AI targets capitals directly, and they're meant to be the "loud"
 // threat that pulls fighter attention.
-function spawnBomberPairs(game, side, zone, count, facing) {
+function spawnBomberPairs(game, side, race, zone, count, facing) {
   let remaining = count;
   while (remaining > 0) {
     const pairSize = Math.min(BOMBER_PACK_SIZE, remaining);
@@ -143,6 +152,7 @@ function spawnBomberPairs(game, side, zone, count, facing) {
       const heading = facing + (Math.random() - 0.5) * 0.2;
       const ship = createShip({
         klass: "bomber",
+        race,
         side,
         pos,
         heading,
@@ -158,11 +168,11 @@ function spawnBomberPairs(game, side, zone, count, facing) {
 // fighters that share a packId so they engage as a wing. The escort's
 // pack role is "hunt-fighter" — they screen against enemy small craft;
 // the pack target picker still upgrades them to a bomber if one shows up.
-function spawnCarrierWithEscort(game, side, zone, count, facing) {
+function spawnCarrierWithEscort(game, side, race, zone, count, facing) {
   for (let n = 0; n < count; n++) {
     const pos = randomSpawnPos(zone);
     const carrier = createShip({
-      klass: "carrier", side, pos, heading: facing,
+      klass: "carrier", race, side, pos, heading: facing,
       controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
     });
     game.ships.push(carrier);
@@ -178,7 +188,7 @@ function spawnCarrierWithEscort(game, side, zone, count, facing) {
       };
       const heading = facing + (Math.random() - 0.5) * 0.3;
       const escort = createShip({
-        klass: "fighter", side, pos: epos, heading,
+        klass: "fighter", race, side, pos: epos, heading,
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
       });
       escort.packId = packId;
@@ -195,6 +205,7 @@ function promotePlayer(game) {
   if (!candidate) {
     const ship = createShip({
       klass: "fighter",
+      race: game.alliedRace,
       side: "blue",
       pos: randomSpawnPos(ARENA.spawn.blue),
       heading: 0,

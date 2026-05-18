@@ -1,14 +1,107 @@
-import { CLASSES, SIDES } from "./classes.js";
+import { SIDES } from "./classes.js";
+import { resolveSpec } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
 
 let nextId = 1;
 
-export function createShip({ klass, side, pos, heading = 0, controller }) {
-  const spec = CLASSES[klass];
+// Hull polygons per [race][klass]. Vertices are scaled by ship.spec.radius
+// at draw time. Each race has its own visual language:
+//   Terran   — utilitarian: triangles, trapezoids, hexagons.
+//   Reavers  — angular, asymmetric, predatory spikes.
+//   Hegemony — blocky, slabby, armored rectangles.
+//   Voidsworn — sleek crescents and swept-wing curves.
+const HULLS = {
+  terran: {
+    fighter:    [[1.0, 0], [-0.7, 0.8], [-0.4, 0], [-0.7, -0.8]],
+    bomber:     [[1.0, 0], [0.3, 0.55], [-0.4, 0.95], [-0.85, 0.55], [-0.6, 0],
+                 [-0.85, -0.55], [-0.4, -0.95], [0.3, -0.55]],
+    frigate:    [[1.0, 0], [0.3, 0.7], [-0.9, 0.6], [-0.9, -0.6], [0.3, -0.7]],
+    cruiser:    [[1.0, 0], [0.5, 0.8], [-0.6, 0.9], [-1.0, 0.4],
+                 [-1.0, -0.4], [-0.6, -0.9], [0.5, -0.8]],
+    battleship: [[1.0, 0], [0.7, 0.6], [-0.2, 0.7], [-0.4, 0.95], [-1.0, 0.7],
+                 [-1.0, -0.7], [-0.4, -0.95], [-0.2, -0.7], [0.7, -0.6]],
+    carrier:    [[1.0, 0.32], [0.55, 0.55], [-0.85, 0.6], [-1.0, 0.4],
+                 [-1.0, -0.4], [-0.85, -0.6], [0.55, -0.55], [1.0, -0.32]],
+  },
+  reavers: {
+    // Hooked dart with re-entrant tail.
+    fighter:    [[1.0, 0], [-0.2, 0.35], [-0.55, 0.9], [-0.4, 0.3], [-0.2, 0],
+                 [-0.4, -0.3], [-0.55, -0.9], [-0.2, -0.35]],
+    // Scorpion carapace with claw stubs.
+    bomber:     [[1.0, 0], [0.5, 0.4], [0.1, 0.9], [-0.5, 0.95], [-0.7, 0.5],
+                 [-0.45, 0], [-0.7, -0.5], [-0.5, -0.95], [0.1, -0.9], [0.5, -0.4]],
+    // Pincer profile — twin claws at the rear.
+    frigate:    [[1.0, 0], [0.5, 0.5], [0.2, 0.85], [-0.3, 0.65], [-0.9, 0.55],
+                 [-0.7, 0.2], [-0.55, 0], [-0.7, -0.2], [-0.9, -0.55],
+                 [-0.3, -0.65], [0.2, -0.85], [0.5, -0.5]],
+    // Wedge with side blades.
+    cruiser:    [[1.0, 0], [0.7, 0.4], [0.2, 0.9], [-0.4, 0.95], [-0.85, 0.5],
+                 [-0.65, 0.18], [-1.0, 0], [-0.65, -0.18], [-0.85, -0.5],
+                 [-0.4, -0.95], [0.2, -0.9], [0.7, -0.4]],
+    // Spiked dreadnought — multiple swept facets.
+    battleship: [[1.0, 0], [0.85, 0.38], [0.5, 0.85], [0.0, 0.7], [-0.4, 0.95],
+                 [-0.8, 0.55], [-1.0, 0.2], [-0.85, 0], [-1.0, -0.2],
+                 [-0.8, -0.55], [-0.4, -0.95], [0.0, -0.7], [0.5, -0.85], [0.85, -0.38]],
+    // Long predator hull with hangars.
+    carrier:    [[1.0, 0.3], [0.6, 0.45], [0.1, 0.7], [-0.4, 0.65], [-0.9, 0.55],
+                 [-1.0, 0.35], [-1.0, -0.35], [-0.9, -0.55], [-0.4, -0.65],
+                 [0.1, -0.7], [0.6, -0.45], [1.0, -0.3]],
+  },
+  hegemony: {
+    // Armored gunship — chamfered slab.
+    fighter:    [[1.0, 0], [0.7, 0.6], [-0.3, 0.85], [-0.75, 0.6],
+                 [-0.75, -0.6], [-0.3, -0.85], [0.7, -0.6]],
+    // Fat brick with bomb bays.
+    bomber:     [[1.0, 0.4], [0.7, 0.8], [-0.6, 0.85], [-1.0, 0.5],
+                 [-1.0, -0.5], [-0.6, -0.85], [0.7, -0.8], [1.0, -0.4]],
+    // Rectangular hull with side turrets.
+    frigate:    [[1.0, 0.3], [0.8, 0.6], [-0.85, 0.6], [-0.95, 0.3],
+                 [-0.95, -0.3], [-0.85, -0.6], [0.8, -0.6], [1.0, -0.3]],
+    // Blocky wedge with thick aft.
+    cruiser:    [[1.0, 0], [0.85, 0.5], [0.4, 0.9], [-0.7, 0.9], [-1.0, 0.5],
+                 [-1.0, -0.5], [-0.7, -0.9], [0.4, -0.9], [0.85, -0.5]],
+    // Massive brick with deep ridges.
+    battleship: [[1.0, 0.4], [0.9, 0.7], [0.4, 0.9], [-0.5, 0.95], [-0.9, 0.7],
+                 [-1.0, 0.4], [-1.0, -0.4], [-0.9, -0.7], [-0.5, -0.95],
+                 [0.4, -0.9], [0.9, -0.7], [1.0, -0.4]],
+    // Huge cube with internal hangars.
+    carrier:    [[1.0, 0.35], [0.9, 0.55], [0.3, 0.6], [-0.9, 0.6], [-1.0, 0.4],
+                 [-1.0, -0.4], [-0.9, -0.6], [0.3, -0.6], [0.9, -0.55], [1.0, -0.35]],
+  },
+  voidsworn: {
+    // Needle with swept wings.
+    fighter:    [[1.0, 0], [0.4, 0.25], [-0.3, 0.75], [-0.7, 0.5],
+                 [-0.5, 0], [-0.7, -0.5], [-0.3, -0.75], [0.4, -0.25]],
+    // Crescent body with energy emitters.
+    bomber:     [[1.0, 0], [0.7, 0.5], [-0.2, 0.95], [-0.8, 0.7], [-0.6, 0.3],
+                 [-0.4, 0], [-0.6, -0.3], [-0.8, -0.7], [-0.2, -0.95], [0.7, -0.5]],
+    // Elegant arrowhead.
+    frigate:    [[1.0, 0], [0.5, 0.55], [-0.6, 0.7], [-0.95, 0.4], [-0.7, 0],
+                 [-0.95, -0.4], [-0.6, -0.7], [0.5, -0.55]],
+    // Graceful curve.
+    cruiser:    [[1.0, 0], [0.6, 0.7], [-0.3, 0.95], [-0.9, 0.65], [-0.95, 0.3],
+                 [-0.7, 0], [-0.95, -0.3], [-0.9, -0.65], [-0.3, -0.95], [0.6, -0.7]],
+    // Swept-wing dreadnought.
+    battleship: [[1.0, 0], [0.85, 0.4], [0.3, 0.85], [-0.6, 0.95], [-0.95, 0.5],
+                 [-1.0, 0], [-0.95, -0.5], [-0.6, -0.95], [0.3, -0.85], [0.85, -0.4]],
+    // Long crescent with central spine.
+    carrier:    [[1.0, 0.25], [0.7, 0.55], [-0.4, 0.7], [-0.95, 0.55], [-1.0, 0.3],
+                 [-0.8, 0], [-1.0, -0.3], [-0.95, -0.55], [-0.4, -0.7], [0.7, -0.55],
+                 [1.0, -0.25]],
+  },
+};
+
+function getHull(race, klass) {
+  return (HULLS[race] && HULLS[race][klass]) || HULLS.terran[klass];
+}
+
+export function createShip({ klass, race = "terran", side, pos, heading = 0, controller }) {
+  const spec = resolveSpec(race, klass);
   const ship = {
     id: nextId++,
     klass,
+    race,
     side,
     spec,
     pos: { ...pos },
@@ -211,6 +304,7 @@ function launchReplacement(carrier, world, klass) {
   const heading = carrier.heading + (Math.random() - 0.5) * 0.4;
   const ship = createShip({
     klass,
+    race: carrier.race,
     side: carrier.side,
     pos,
     heading,
@@ -598,56 +692,12 @@ export function drawShip(ctx, ship) {
   ctx.fillStyle = SIDES[ship.side].accent;
   ctx.lineWidth = 2;
 
+  // Hull silhouette — looked up per (race, klass).
+  const poly = getHull(ship.race, ship.klass);
   ctx.beginPath();
-  if (ship.klass === "fighter") {
-    ctx.moveTo(s.radius, 0);
-    ctx.lineTo(-s.radius * 0.7, s.radius * 0.8);
-    ctx.lineTo(-s.radius * 0.4, 0);
-    ctx.lineTo(-s.radius * 0.7, -s.radius * 0.8);
-  } else if (ship.klass === "bomber") {
-    // Wide kite with a notched tail — reads as "carrying ordnance".
-    ctx.moveTo(s.radius, 0);
-    ctx.lineTo(s.radius * 0.3, s.radius * 0.55);
-    ctx.lineTo(-s.radius * 0.4, s.radius * 0.95);
-    ctx.lineTo(-s.radius * 0.85, s.radius * 0.55);
-    ctx.lineTo(-s.radius * 0.6, 0);
-    ctx.lineTo(-s.radius * 0.85, -s.radius * 0.55);
-    ctx.lineTo(-s.radius * 0.4, -s.radius * 0.95);
-    ctx.lineTo(s.radius * 0.3, -s.radius * 0.55);
-  } else if (ship.klass === "frigate") {
-    ctx.moveTo(s.radius, 0);
-    ctx.lineTo(s.radius * 0.3, s.radius * 0.7);
-    ctx.lineTo(-s.radius * 0.9, s.radius * 0.6);
-    ctx.lineTo(-s.radius * 0.9, -s.radius * 0.6);
-    ctx.lineTo(s.radius * 0.3, -s.radius * 0.7);
-  } else if (ship.klass === "cruiser") {
-    ctx.moveTo(s.radius, 0);
-    ctx.lineTo(s.radius * 0.5, s.radius * 0.8);
-    ctx.lineTo(-s.radius * 0.6, s.radius * 0.9);
-    ctx.lineTo(-s.radius, s.radius * 0.4);
-    ctx.lineTo(-s.radius, -s.radius * 0.4);
-    ctx.lineTo(-s.radius * 0.6, -s.radius * 0.9);
-    ctx.lineTo(s.radius * 0.5, -s.radius * 0.8);
-  } else if (ship.klass === "carrier") {
-    // Long flat hull — flight deck silhouette. Bow tapers; aft stays wide.
-    ctx.moveTo(s.radius, s.radius * 0.32);
-    ctx.lineTo(s.radius * 0.55, s.radius * 0.55);
-    ctx.lineTo(-s.radius * 0.85, s.radius * 0.6);
-    ctx.lineTo(-s.radius, s.radius * 0.4);
-    ctx.lineTo(-s.radius, -s.radius * 0.4);
-    ctx.lineTo(-s.radius * 0.85, -s.radius * 0.6);
-    ctx.lineTo(s.radius * 0.55, -s.radius * 0.55);
-    ctx.lineTo(s.radius, -s.radius * 0.32);
-  } else {
-    ctx.moveTo(s.radius, 0);
-    ctx.lineTo(s.radius * 0.7, s.radius * 0.6);
-    ctx.lineTo(-s.radius * 0.2, s.radius * 0.7);
-    ctx.lineTo(-s.radius * 0.4, s.radius * 0.95);
-    ctx.lineTo(-s.radius, s.radius * 0.7);
-    ctx.lineTo(-s.radius, -s.radius * 0.7);
-    ctx.lineTo(-s.radius * 0.4, -s.radius * 0.95);
-    ctx.lineTo(-s.radius * 0.2, -s.radius * 0.7);
-    ctx.lineTo(s.radius * 0.7, -s.radius * 0.6);
+  ctx.moveTo(poly[0][0] * s.radius, poly[0][1] * s.radius);
+  for (let i = 1; i < poly.length; i++) {
+    ctx.lineTo(poly[i][0] * s.radius, poly[i][1] * s.radius);
   }
   ctx.closePath();
   ctx.fill();

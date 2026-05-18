@@ -1,6 +1,7 @@
 import { CLASSES, SIDES } from "./classes.js";
 import { ARENA, MAP_SIZES } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
+import { RACES } from "./races.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
 
@@ -21,8 +22,8 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
 
   const counts = countBySide(game.ships);
 
-  drawSideStrip(ctx, counts.blue, "blue", 16, 16, "left");
-  drawSideStrip(ctx, counts.red,  "red",  viewW - 16, 16, "right");
+  drawSideStrip(ctx, counts.blue, "blue", game.alliedRace, 16, 16, "left");
+  drawSideStrip(ctx, counts.red,  "red",  game.hostileRace, viewW - 16, 16, "right");
 
   const player = game.ships.find((s) => s.isPlayer && !s.dead);
   if (player) {
@@ -53,15 +54,20 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   drawMinimap(ctx, game, viewW, viewH);
 }
 
-function drawSideStrip(ctx, counts, side, anchorX, anchorY, align) {
+function drawSideStrip(ctx, counts, side, race, anchorX, anchorY, align) {
   const palette = SIDES[side];
   ctx.fillStyle = palette.primary;
   ctx.font = "bold 14px system-ui, sans-serif";
   ctx.textAlign = align;
   ctx.fillText(palette.name, anchorX, anchorY + 14);
+  // Race name beneath the side label.
+  const raceInfo = RACES[race] || RACES.terran;
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillStyle = "#9bd";
+  ctx.fillText(raceInfo.name.toUpperCase(), anchorX, anchorY + 30);
   ctx.font = "13px system-ui, sans-serif";
   ctx.fillStyle = "#cdf";
-  let y = anchorY + 34;
+  let y = anchorY + 50;
   for (const klass of CLASS_ORDER) {
     const c = counts[klass];
     if (c === 0) ctx.globalAlpha = 0.35; else ctx.globalAlpha = 1;
@@ -163,8 +169,9 @@ function drawSpectateOverlay(ctx, game, viewW, viewH) {
     const armorPart = t.armorMax > 0
       ? `  ·  ARMOR ${Math.round(t.armor)}/${t.armorMax}`
       : "";
+    const raceInfo = RACES[t.race] || RACES.terran;
     ctx.fillText(
-      `${palette.name} ${t.spec.name}  ·  HULL ${Math.round(t.hp)}/${t.hpMax}  ·  SHIELD ${Math.round(t.shield)}/${t.shieldMax}${armorPart}`,
+      `${palette.name} ${raceInfo.name} ${t.spec.name}  ·  HULL ${Math.round(t.hp)}/${t.hpMax}  ·  SHIELD ${Math.round(t.shield)}/${t.shieldMax}${armorPart}`,
       viewW / 2, viewH - 20);
   } else {
     ctx.fillStyle = "#cdf";

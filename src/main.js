@@ -48,8 +48,8 @@ function frame(now) {
   input.menuActive = game.state === "menu";
 
   if (game.state === "menu") {
-    const choice = input.startMenu.consumeClick();
-    if (choice) startGame(game, choice.mapW, choice.mapH);
+    const choice = input.startMenu.consumeStart();
+    if (choice) startGame(game, choice.mapW, choice.mapH, choice.race);
   } else {
     // Player input → controller.
     const ctrl = input.controller();
