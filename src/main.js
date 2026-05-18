@@ -7,6 +7,14 @@ import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
 import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
+import { saveStore } from "./save.js";
+import { events } from "./events.js";
+
+// Touch the foundation modules so they're initialized on startup. Save data
+// is now loaded into memory before the first frame; later phases will read
+// from saveStore.get() and emit gameplay events via the bus.
+void saveStore;
+void events;
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
