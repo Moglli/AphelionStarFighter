@@ -3,9 +3,10 @@ import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 
-const ROSTER = { fighter: 30, frigate: 5, cruiser: 2, battleship: 1 };
+const ROSTER = { fighter: 30, bomber: 6, frigate: 5, cruiser: 2, battleship: 1 };
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
+const BOMBER_PACK_SIZE = 2;
 const PACK_CLUSTER_RADIUS = 130;
 
 const PACK_ROLES = [
@@ -71,6 +72,8 @@ function spawnRoster(game) {
     for (const [klass, count] of Object.entries(ROSTER)) {
       if (klass === "fighter") {
         spawnFighterPacks(game, side, zone, count, facing);
+      } else if (klass === "bomber") {
+        spawnBomberPairs(game, side, zone, count, facing);
       } else {
         for (let i = 0; i < count; i++) {
           const pos = randomSpawnPos(zone);
@@ -114,6 +117,35 @@ function spawnFighterPacks(game, side, zone, count, facing) {
       game.ships.push(ship);
     }
     remaining -= packSize;
+  }
+}
+
+// Bombers spawn in tight pairs. They don't share the fighter pack system —
+// their AI targets capitals directly, and they're meant to be the "loud"
+// threat that pulls fighter attention.
+function spawnBomberPairs(game, side, zone, count, facing) {
+  let remaining = count;
+  while (remaining > 0) {
+    const pairSize = Math.min(BOMBER_PACK_SIZE, remaining);
+    const center = randomSpawnPos(zone);
+    for (let i = 0; i < pairSize; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = Math.random() * (PACK_CLUSTER_RADIUS * 0.7);
+      const pos = {
+        x: center.x + Math.cos(ang) * dist,
+        y: center.y + Math.sin(ang) * dist,
+      };
+      const heading = facing + (Math.random() - 0.5) * 0.2;
+      const ship = createShip({
+        klass: "bomber",
+        side,
+        pos,
+        heading,
+        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      });
+      game.ships.push(ship);
+    }
+    remaining -= pairSize;
   }
 }
 
@@ -452,6 +484,9 @@ function computePacks(ships) {
 }
 
 function pickPackTarget(ships, side, center, role) {
+  // Bombers outrank every role-preferred target — any fighter pack that
+  // can see an enemy bomber peels off to swat it.
+  let bestBomber = null, bestBomberD2 = Infinity;
   let bestPreferred = null, bestPreferredD2 = Infinity;
   let bestAny = null, bestAnyD2 = Infinity;
   for (const o of ships) {
@@ -460,11 +495,14 @@ function pickPackTarget(ships, side, center, role) {
     const dy = o.pos.y - center.y;
     const d2 = dx * dx + dy * dy;
     if (d2 < bestAnyD2) { bestAnyD2 = d2; bestAny = o; }
+    if (o.klass === "bomber" && d2 < bestBomberD2) {
+      bestBomberD2 = d2; bestBomber = o;
+    }
     if (matchPackRole(o.klass, role) && d2 < bestPreferredD2) {
       bestPreferredD2 = d2; bestPreferred = o;
     }
   }
-  return bestPreferred || bestAny;
+  return bestBomber || bestPreferred || bestAny;
 }
 
 function matchPackRole(klass, role) {

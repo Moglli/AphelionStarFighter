@@ -56,11 +56,11 @@ export function updateShip(ship, dt, world) {
   const s = ship.spec;
   const c = ship.controller;
 
-  // Fighters use an aircraft flight model: velocity is locked to nose
-  // direction at constant maxSpeed. They cannot strafe or snap-turn — the
-  // only way to change direction is to bank (rotate heading), which is
-  // turn-rate-limited.
-  if (ship.klass === "fighter") {
+  // Fighters and bombers use an aircraft flight model: velocity is locked
+  // to nose direction at constant maxSpeed. They cannot strafe or
+  // snap-turn — the only way to change direction is to bank (rotate
+  // heading), which is turn-rate-limited.
+  if (ship.klass === "fighter" || ship.klass === "bomber") {
     ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
     ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
   } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
@@ -287,8 +287,9 @@ function emitBroadside(ship, world, sideVec, fwd) {
 // Point-defence cannons.
 // Each turret independently picks the highest-priority target:
 //   1) missile in range
-//   2) fighter in range
-//   3) nearest enemy in range
+//   2) bomber in range  (their pods are the next wave of inbound missiles)
+//   3) fighter in range
+//   4) nearest enemy in range
 // ---------------------------------------------------------------------------
 function pdTurretOffset(ship, i) {
   // Spread turrets around the hull as a ring.
@@ -307,6 +308,7 @@ function pdTurretOffset(ship, i) {
 
 function pickPDTarget(turretPos, range2, side, world) {
   let bestMissile = null, bestMissileD2 = range2;
+  let bestBomber = null,  bestBomberD2 = range2;
   let bestFighter = null, bestFighterD2 = range2;
   let bestAny = null,     bestAnyD2 = range2;
 
@@ -325,12 +327,15 @@ function pickPDTarget(turretPos, range2, side, world) {
     const dy = o.pos.y - turretPos.y;
     const d2 = dx * dx + dy * dy;
     if (d2 > range2) continue;
+    if (o.klass === "bomber" && d2 < bestBomberD2) {
+      bestBomberD2 = d2; bestBomber = o;
+    }
     if (o.klass === "fighter" && d2 < bestFighterD2) {
       bestFighterD2 = d2; bestFighter = o;
     }
     if (d2 < bestAnyD2) { bestAnyD2 = d2; bestAny = o; }
   }
-  return bestFighter || bestAny;
+  return bestBomber || bestFighter || bestAny;
 }
 
 function updatePDFire(ship, world) {
@@ -555,6 +560,16 @@ export function drawShip(ctx, ship) {
     ctx.lineTo(-s.radius * 0.7, s.radius * 0.8);
     ctx.lineTo(-s.radius * 0.4, 0);
     ctx.lineTo(-s.radius * 0.7, -s.radius * 0.8);
+  } else if (ship.klass === "bomber") {
+    // Wide kite with a notched tail — reads as "carrying ordnance".
+    ctx.moveTo(s.radius, 0);
+    ctx.lineTo(s.radius * 0.3, s.radius * 0.55);
+    ctx.lineTo(-s.radius * 0.4, s.radius * 0.95);
+    ctx.lineTo(-s.radius * 0.85, s.radius * 0.55);
+    ctx.lineTo(-s.radius * 0.6, 0);
+    ctx.lineTo(-s.radius * 0.85, -s.radius * 0.55);
+    ctx.lineTo(-s.radius * 0.4, -s.radius * 0.95);
+    ctx.lineTo(s.radius * 0.3, -s.radius * 0.55);
   } else if (ship.klass === "frigate") {
     ctx.moveTo(s.radius, 0);
     ctx.lineTo(s.radius * 0.3, s.radius * 0.7);

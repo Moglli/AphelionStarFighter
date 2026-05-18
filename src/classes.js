@@ -1,9 +1,11 @@
 // Ship class stats. Each class has a defined role:
 //   fighter    — interceptor: fastest, fragile, light damage, fast shots
-//   frigate    — skirmisher: balanced forward guns, PD, single missile pod
-//   cruiser    — heavy gunship: slow, durable, hard forward turret, PD, missile pods
-//   battleship — dreadnought: slowest, massive HP, broadside barrage, heavy laser,
-//                missile pods, point defence wall
+//   bomber     — strike bomber: slow capital killer with heavy missile pods.
+//                Fighters prioritise hunting them down before anything else.
+//   frigate    — anti-fighter escort: rapid forward gun + heavy PD wall
+//   cruiser    — strike cruiser: heavy guns + heavy torpedoes from standoff
+//   battleship — dreadnought: slowest, massive HP, broadside barrage, heavy
+//                laser, missile pods, point-defence wall
 // Invariant: bigger ship = slower (lower maxSpeed, accel, turnRate).
 //
 // Subsystems beyond the primary `weapon`:
@@ -56,6 +58,51 @@ export const CLASSES = {
     aiRange: 380,
     aiOrbit: 220,
     aiMissileCooldown: 9.0, // AI-side throttling on top of weapon cooldown
+  },
+  bomber: {
+    name: "Bomber",
+    role: "Strike Bomber",
+    hp: 75,
+    maxSpeed: 220,        // slower than any fighter; fighters easily intercept
+    accel: 350,
+    drag: 0.985,
+    turnRate: 1.6,        // sluggish vs fighter's 3.2 — they can't dogfight
+    radius: 16,           // visibly bigger silhouette than a fighter
+    color: "#cdf",
+    firingMode: "forward",
+    // Light defensive cannon — bombers don't dogfight, they alpha-strike.
+    weapon: {
+      damage: 3,
+      cooldown: 0.28,
+      projectileSpeed: 580,
+      range: 600,
+      spread: 0.06,
+      muzzles: 2,
+      muzzleSpread: 12,
+      projectileRadius: 3.5,
+      projectileColors: { blue: "#7df", red: "#fb8" },
+      capacity: 24,
+      reloadTime: 1.2,
+    },
+    shield: { max: 35, regen: 6, regenDelay: 3.5 },
+    // No armor — bombers are still light craft.
+    // Heavy missile pods are the bomber's reason to exist. Each pod is
+    // tougher than a frigate's missile (more hp) so it survives some PD.
+    missilePods: {
+      count: 2,
+      damage: 70,
+      cooldown: 11.0,
+      projectileSpeed: 290,
+      range: 1700,
+      ttl: 7.0,
+      turnRate: 1.7,
+      hp: 3,
+      radius: 7,
+      acquireRange: 2000,
+      colors: { blue: "#9cf", red: "#fa6" },
+    },
+    aiRange: 1400,
+    aiOrbit: 800,
   },
   frigate: {
     name: "Frigate",

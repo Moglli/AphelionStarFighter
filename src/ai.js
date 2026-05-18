@@ -39,17 +39,59 @@ function nearestEnemyBattleship(ship, ships) {
   return best;
 }
 
+function nearestEnemyOfClass(ship, ships, klass) {
+  let best = null, bestD2 = Infinity;
+  for (const other of ships) {
+    if (other.dead || other.side === ship.side) continue;
+    if (other.klass !== klass) continue;
+    const dx = other.pos.x - ship.pos.x;
+    const dy = other.pos.y - ship.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = other; }
+  }
+  return best;
+}
+
+// Bombers hunt the biggest capital they can reach: battleship > cruiser >
+// frigate. Other small craft are ignored as targets.
+function pickBomberTarget(ship, ships) {
+  const RANK = { battleship: 4, cruiser: 3, frigate: 2 };
+  let best = null, bestRank = -1, bestD2 = Infinity;
+  for (const o of ships) {
+    if (o.dead || o.side === ship.side) continue;
+    const rank = RANK[o.klass] || 0;
+    if (rank === 0) continue;
+    const dx = o.pos.x - ship.pos.x;
+    const dy = o.pos.y - ship.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (rank > bestRank || (rank === bestRank && d2 < bestD2)) {
+      bestRank = rank; bestD2 = d2; best = o;
+    }
+  }
+  return best;
+}
+
 export function updateAI(ship, world, dt) {
   const c = ship.controller;
 
-  // Battleships are dueling specialists: lock onto the nearest enemy
-  // battleship if one exists, fall back to packs/nearest enemy.
+  // Battleships duel each other; bombers hunt capitals.
   let target = null;
   if (ship.klass === "battleship") {
     target = nearestEnemyBattleship(ship, world.ships);
+  } else if (ship.klass === "bomber") {
+    target = pickBomberTarget(ship, world.ships);
+  }
+
+  // Fighters peel off everything else when a bomber is on the field —
+  // checked before pack target so even role-locked packs divert to
+  // intercept the bigger threat.
+  if (!target && ship.klass === "fighter") {
+    const bomber = nearestEnemyOfClass(ship, world.ships, "bomber");
+    if (bomber) target = bomber;
   }
 
   // Packed fighters share their pack's target so a pack engages as a wing.
+  // (The pack target picker also prefers bombers — see game.js.)
   if (!target && ship.packId != null && world.packs) {
     const pack = world.packs.get(ship.packId);
     if (pack && pack.target && !pack.target.dead) target = pack.target;
@@ -64,7 +106,7 @@ export function updateAI(ship, world, dt) {
     return;
   }
 
-  if (ship.klass === "fighter") {
+  if (ship.klass === "fighter" || ship.klass === "bomber") {
     flybyAI(ship, target, dt, world);
   } else if (ship.klass === "battleship") {
     battleshipAI(ship, target, dt, world);
