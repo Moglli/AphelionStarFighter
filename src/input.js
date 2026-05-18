@@ -121,31 +121,39 @@ export class MissileButton {
   }
 }
 
-// Pre-match menu: lets the player pick a map size and an Allied race
-// before the world spawns. Layout is two rows of chips plus an explicit
-// START button. Each chip toggles its row's selection; START emits the
-// chosen { mapW, mapH, race } bundle.
+// Pre-match menu: lets the player pick a map size, game mode, and Allied
+// race before the world spawns. Layout is three rows of chips plus an
+// explicit START button. Each chip toggles its row's selection; START
+// emits the chosen { mapW, mapH, race, mode } bundle.
+const MODE_OPTIONS = [
+  { key: "open",   label: "Open Battle",     tagline: "Wipe the enemy fleet" },
+  { key: "defend", label: "Defend Station", tagline: "Destroy enemy station" },
+];
+
 export class StartMenu {
   constructor() {
     this.sizeRects = [];
+    this.modeRects = [];
     this.raceRects = [];
     this.startRect = null;
-    this.selectedSize = "medium"; // default key
-    this.selectedRace = "terran"; // default key
-    this.justStarted = null;      // populated on START click; consumed by main
+    this.selectedSize = "medium";
+    this.selectedMode = "open";
+    this.selectedRace = "terran";
+    this.justStarted = null;
   }
 
   layout(viewW, viewH) {
-    const chipH = 64;
+    const chipH = 60;
     const gapX = 14;
-    const titleY = viewH / 2 - 170;
+    const rowGap = 44;
+    const titleY = viewH / 2 - 220;
 
     // Size row.
     const sizeOpts = MAP_SIZES;
     const sn = sizeOpts.length;
     const sizeBtnW = Math.min(180, (viewW - 80) / sn - gapX);
     const sizeRowW = sn * sizeBtnW + (sn - 1) * gapX;
-    const sizeY = titleY + 80;
+    const sizeY = titleY + 70;
     const sizeStartX = (viewW - sizeRowW) / 2;
     this.sizeRects = sizeOpts.map((o, i) => ({
       key: o.key, label: o.label, mapW: o.mapW, mapH: o.mapH,
@@ -153,12 +161,24 @@ export class StartMenu {
       y: sizeY, w: sizeBtnW, h: chipH,
     }));
 
+    // Mode row.
+    const mn = MODE_OPTIONS.length;
+    const modeBtnW = Math.min(220, (viewW - 60) / mn - gapX);
+    const modeRowW = mn * modeBtnW + (mn - 1) * gapX;
+    const modeY = sizeY + chipH + rowGap;
+    const modeStartX = (viewW - modeRowW) / 2;
+    this.modeRects = MODE_OPTIONS.map((o, i) => ({
+      key: o.key, label: o.label, tagline: o.tagline,
+      x: modeStartX + i * (modeBtnW + gapX),
+      y: modeY, w: modeBtnW, h: chipH,
+    }));
+
     // Race row.
     const raceKeys = RACE_KEYS;
     const rn = raceKeys.length;
     const raceBtnW = Math.min(150, (viewW - 60) / rn - gapX);
     const raceRowW = rn * raceBtnW + (rn - 1) * gapX;
-    const raceY = sizeY + chipH + 60;
+    const raceY = modeY + chipH + rowGap;
     const raceStartX = (viewW - raceRowW) / 2;
     this.raceRects = raceKeys.map((k, i) => ({
       key: k, label: RACES[k].name,
@@ -170,7 +190,7 @@ export class StartMenu {
     const startW = 220, startH = 56;
     this.startRect = {
       x: (viewW - startW) / 2,
-      y: raceY + chipH + 50,
+      y: raceY + chipH + rowGap,
       w: startW, h: startH,
     };
   }
@@ -178,6 +198,9 @@ export class StartMenu {
   click(x, y) {
     for (const r of this.sizeRects) {
       if (this._hit(r, x, y)) { this.selectedSize = r.key; return; }
+    }
+    for (const r of this.modeRects) {
+      if (this._hit(r, x, y)) { this.selectedMode = r.key; return; }
     }
     for (const r of this.raceRects) {
       if (this._hit(r, x, y)) { this.selectedRace = r.key; return; }
@@ -194,7 +217,11 @@ export class StartMenu {
   _emitStart() {
     const size = this.sizeRects.find((r) => r.key === this.selectedSize)
               || this.sizeRects[0];
-    this.justStarted = { mapW: size.mapW, mapH: size.mapH, race: this.selectedRace };
+    this.justStarted = {
+      mapW: size.mapW, mapH: size.mapH,
+      race: this.selectedRace,
+      mode: this.selectedMode,
+    };
   }
 
   consumeStart() {
@@ -211,9 +238,8 @@ export class StartMenu {
     ctx.fillStyle = "#cef";
     ctx.textAlign = "center";
     ctx.font = "bold 36px system-ui, sans-serif";
-    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 180);
+    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 230);
 
-    // Size row.
     ctx.fillStyle = "#9bd";
     ctx.font = "13px system-ui, sans-serif";
     ctx.fillText("MAP SIZE", viewW / 2, this.sizeRects[0].y - 14);
@@ -222,7 +248,14 @@ export class StartMenu {
         r.label, `${r.mapW} × ${r.mapH}`);
     }
 
-    // Race row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("GAME MODE", viewW / 2, this.modeRects[0].y - 14);
+    for (const r of this.modeRects) {
+      this._drawChip(ctx, r, r.key === this.selectedMode,
+        r.label, r.tagline);
+    }
+
     ctx.fillStyle = "#9bd";
     ctx.font = "13px system-ui, sans-serif";
     ctx.fillText("ALLIED RACE", viewW / 2, this.raceRects[0].y - 14);
@@ -232,7 +265,6 @@ export class StartMenu {
         r.label, race.tagline || "");
     }
 
-    // START button.
     const s = this.startRect;
     ctx.fillStyle = "rgba(60,140,90,0.85)";
     ctx.fillRect(s.x, s.y, s.w, s.h);
@@ -254,12 +286,12 @@ export class StartMenu {
     ctx.lineWidth = selected ? 3 : 2;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.fillStyle = "#cef";
-    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.font = "bold 17px system-ui, sans-serif";
     ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 2);
     if (sublabel) {
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillStyle = "#9bd";
-      ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 16);
+      ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 15);
     }
   }
 }

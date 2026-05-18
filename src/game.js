@@ -2,7 +2,7 @@ import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js
 import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
-import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
+import { RACES, RACE_KEYS, randomRaceKey, getStationDef } from "./races.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -49,14 +49,17 @@ export function createGame() {
     // Hostile is rolled at match start.
     alliedRace: "terran",
     hostileRace: "terran",
+    // Game mode: "open" (fleet vs fleet, current default) or "defend"
+    // (each side has a multi-node station; first station down loses).
+    mode: "open",
   };
   return game;
 }
 
-// Called from main when the player picks map size + allied race on the
-// start menu. Hostile race is rolled here so the enemy composition is a
-// surprise.
-export function startGame(game, mapW, mapH, alliedRace = "terran") {
+// Called from main when the player picks map size + allied race + mode
+// on the start menu. Hostile race is rolled here so the enemy
+// composition is a surprise.
+export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open") {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -69,6 +72,7 @@ export function startGame(game, mapW, mapH, alliedRace = "terran") {
   game.spectateTargetId = null;
   game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
   game.hostileRace = randomRaceKey();
+  game.mode = mode === "defend" ? "defend" : "open";
   game.state = "playing";
   spawnRoster(game);
 }
@@ -99,8 +103,41 @@ function spawnRoster(game) {
         }
       }
     }
+    // Defend mode: one multi-node station per side, dropped at the
+    // centre of that side's spawn zone (so the fleet sits between
+    // the station and the contested middle of the map).
+    if (game.mode === "defend") {
+      spawnStation(game, side, race, zone, facing);
+    }
   }
   if (!game.spectating) promotePlayer(game);
+}
+
+// Each station = N separate ships of klass "station" arranged at offsets
+// from the spawn-zone centre. Each carries its own per-node weapon kit
+// applied as a createShip specOverride.
+function spawnStation(game, side, race, zone, facing) {
+  const def = getStationDef(race);
+  if (!def) return;
+  const center = { x: zone.x, y: zone.y };
+  const spread = def.spread || 240;
+  for (const node of def.nodes) {
+    const pos = {
+      x: center.x + (node.offset.x || 0) * spread,
+      y: center.y + (node.offset.y || 0) * spread,
+    };
+    const ship = createShip({
+      klass: "station",
+      race,
+      side,
+      pos,
+      heading: facing,
+      controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      specOverride: node.mods,
+    });
+    ship.stationNodeName = node.name;
+    game.ships.push(ship);
+  }
 }
 
 function spawnFighterPacks(game, side, race, zone, count, facing) {
@@ -369,10 +406,20 @@ export function update(game, dt) {
   }
 
   if (!game.matchOver) {
-    const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
-    const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
-    if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
-    else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
+    if (game.mode === "defend") {
+      // First side to lose every station node loses the match.
+      const blueStation = game.ships.some(
+        (s) => s.side === "blue" && s.klass === "station" && !s.dead);
+      const redStation  = game.ships.some(
+        (s) => s.side === "red"  && s.klass === "station" && !s.dead);
+      if (!redStation)  { game.matchOver = true; game.winner = "blue"; }
+      else if (!blueStation) { game.matchOver = true; game.winner = "red"; }
+    } else {
+      const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
+      const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
+      if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
+      else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
+    }
   }
 }
 
@@ -479,7 +526,8 @@ function resolveHeavyOverlap(ships, bounds) {
   for (const s of ships) {
     if (s.dead) continue;
     if (s.klass === "frigate" || s.klass === "cruiser"
-        || s.klass === "battleship" || s.klass === "carrier") {
+        || s.klass === "battleship" || s.klass === "carrier"
+        || s.klass === "station") {
       heavies.push(s);
     }
   }
@@ -496,11 +544,23 @@ function resolveHeavyOverlap(ships, bounds) {
           const d = d2 > 1e-6 ? Math.sqrt(d2) : 0;
           const nx = d > 1e-6 ? dx / d : 1;
           const ny = d > 1e-6 ? dy / d : 0;
-          const overlap = (minDist - d) * 0.5;
-          a.pos.x -= nx * overlap;
-          a.pos.y -= ny * overlap;
-          b.pos.x += nx * overlap;
-          b.pos.y += ny * overlap;
+          const overlap = minDist - d;
+          // Stations are immobile — only the other hull gets shoved.
+          const aImmovable = a.klass === "station";
+          const bImmovable = b.klass === "station";
+          if (aImmovable && bImmovable) continue;
+          if (aImmovable) {
+            b.pos.x += nx * overlap;
+            b.pos.y += ny * overlap;
+          } else if (bImmovable) {
+            a.pos.x -= nx * overlap;
+            a.pos.y -= ny * overlap;
+          } else {
+            a.pos.x -= nx * overlap * 0.5;
+            a.pos.y -= ny * overlap * 0.5;
+            b.pos.x += nx * overlap * 0.5;
+            b.pos.y += ny * overlap * 0.5;
+          }
           pushed = true;
         }
       }
@@ -508,6 +568,7 @@ function resolveHeavyOverlap(ships, bounds) {
     if (!pushed) break;
   }
   for (const s of heavies) {
+    if (s.klass === "station") continue; // never shove stations into bounds
     const r = s.spec.radius;
     if (s.pos.x < bounds.minX + r) s.pos.x = bounds.minX + r;
     if (s.pos.x > bounds.maxX - r) s.pos.x = bounds.maxX - r;

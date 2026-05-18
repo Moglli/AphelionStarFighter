@@ -52,10 +52,10 @@ function nearestEnemyOfClass(ship, ships, klass) {
   return best;
 }
 
-// Bombers hunt the biggest capital they can reach: battleship > cruiser >
-// frigate. Other small craft are ignored as targets.
+// Bombers hunt the biggest capital they can reach. Stations outrank every
+// mobile capital because they're the strategic objective.
 function pickBomberTarget(ship, ships) {
-  const RANK = { battleship: 4, cruiser: 3, frigate: 2 };
+  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2 };
   let best = null, bestRank = -1, bestD2 = Infinity;
   for (const o of ships) {
     if (o.dead || o.side === ship.side) continue;
@@ -75,6 +75,12 @@ export function updateAI(ship, world, dt) {
   // Carriers have their own passive routine — no target hunt, no orbit.
   if (ship.klass === "carrier") {
     carrierAI(ship, world);
+    return;
+  }
+  // Station nodes are immobile — they only update aim (slow tracking) so
+  // heavy-laser arcs and missile-pod launch geometry follow the action.
+  if (ship.klass === "station") {
+    stationAI(ship, world);
     return;
   }
 
@@ -483,4 +489,20 @@ function carrierAI(ship, world) {
   const sep = capitalSeparation(ship, world.ships);
   thrust = blendThrustWithSeparation(thrust, sep, 1.1);
   c.thrust = thrust;
+}
+
+// ---------------------------------------------------------------------------
+// Station nodes: immobile, no thrust. Heading rotates slowly (per the
+// class's small turnRate) to keep heavy-laser arcs and missile-pod launch
+// geometry pointed at the nearest threat.
+// ---------------------------------------------------------------------------
+function stationAI(ship, world) {
+  const c = ship.controller;
+  c.thrust = { x: 0, y: 0 };
+  c.firing = false;
+  c.firingMissile = false;
+  const enemy = nearestEnemy(ship, world.ships);
+  c.aim = enemy
+    ? { x: enemy.pos.x - ship.pos.x, y: enemy.pos.y - ship.pos.y }
+    : null;
 }

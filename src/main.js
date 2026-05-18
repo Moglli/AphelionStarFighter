@@ -49,7 +49,7 @@ function frame(now) {
 
   if (game.state === "menu") {
     const choice = input.startMenu.consumeStart();
-    if (choice) startGame(game, choice.mapW, choice.mapH, choice.race);
+    if (choice) startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode);
   } else {
     // Player input → controller.
     const ctrl = input.controller();

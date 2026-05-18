@@ -9,6 +9,9 @@
 //   carrier    — fleet carrier: huge non-combatant capital. Defends only
 //                with PD; slowly launches replacement fighters and bombers,
 //                arrives with a fighter escort squadron.
+//   station    — defence platform: immobile multi-node structure. Spawned
+//                in groups; each node is a separate destruction target.
+//                Used in Defend Station mode.
 // Invariant: bigger ship = slower (lower maxSpeed, accel, turnRate).
 //
 // Subsystems beyond the primary `weapon`:
@@ -309,6 +312,27 @@ export const CLASSES = {
     },
     // Escort fighter squadron spawned alongside the carrier at game start.
     escortSize: 6,
+    aiRange: 0,
+    aiOrbit: 0,
+  },
+  station: {
+    // Base station node — immobile, no built-in weapons. Per-race node
+    // specs in races.js layer on the heavy-laser / missile-pod / PD that
+    // each node carries.
+    name: "Station",
+    role: "Defense Platform",
+    hp: 600,
+    maxSpeed: 0,
+    accel: 0,
+    drag: 1,
+    // Nodes rotate slowly so heavy-laser arcs and missile-pod launch
+    // geometry can still track the nearest enemy.
+    turnRate: 0.06,
+    radius: 70,
+    color: "#9bf",
+    firingMode: "none",
+    shield: { max: 250, regen: 8, regenDelay: 5.0 },
+    armor: { max: 300, wearRate: 0.5 },
     aiRange: 0,
     aiOrbit: 0,
   },
