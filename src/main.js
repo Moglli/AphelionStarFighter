@@ -7,10 +7,15 @@ import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
 import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
+import { prerenderSprites } from "./sprites.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const input = new InputManager(canvas);
+// Bake every (race, klass, side) ship sprite into an offscreen canvas
+// before the first frame so drawShip can blit instead of re-drawing
+// polygons each tick.
+prerenderSprites();
 const game = createGame();
 window.game = game; // for console smoke-testing
 

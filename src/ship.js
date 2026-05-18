@@ -2,6 +2,7 @@ import { SIDES } from "./classes.js";
 import { resolveSpec, deepMerge } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
+import { getSprite } from "./sprites.js";
 
 let nextId = 1;
 
@@ -105,9 +106,11 @@ const HULLS = {
   },
 };
 
-function getHull(race, klass) {
+export function getHull(race, klass) {
   return (HULLS[race] && HULLS[race][klass]) || HULLS.terran[klass];
 }
+
+export { HULLS };
 
 export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null }) {
   let spec = resolveSpec(race, klass);
@@ -706,24 +709,22 @@ export function drawShip(ctx, ship) {
   ctx.fillStyle = SIDES[ship.side].accent;
   ctx.lineWidth = 2;
 
-  // Hull silhouette — looked up per (race, klass).
-  const poly = getHull(ship.race, ship.klass);
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0] * s.radius, poly[0][1] * s.radius);
-  for (let i = 1; i < poly.length; i++) {
-    ctx.lineTo(poly[i][0] * s.radius, poly[i][1] * s.radius);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Carrier flight-deck stripe — a thin line down the centerline.
-  if (ship.klass === "carrier") {
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
-    ctx.lineWidth = 1.5;
+  // Hull — pre-rendered schematic sprite (panels + shading + glow + outline).
+  // Falls back to a flat polygon if the sprite cache isn't ready (eg. tests).
+  const sprite = getSprite(ship.race, ship.klass, ship.side);
+  if (sprite) {
+    const scale = s.radius / sprite.baseRadius;
+    const half = sprite.halfExtent * scale;
+    ctx.drawImage(sprite.canvas, -half, -half, half * 2, half * 2);
+  } else {
+    const poly = getHull(ship.race, ship.klass);
     ctx.beginPath();
-    ctx.moveTo(s.radius * 0.85, 0);
-    ctx.lineTo(-s.radius * 0.85, 0);
+    ctx.moveTo(poly[0][0] * s.radius, poly[0][1] * s.radius);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0] * s.radius, poly[i][1] * s.radius);
+    }
+    ctx.closePath();
+    ctx.fill();
     ctx.stroke();
   }
 
