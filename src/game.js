@@ -310,37 +310,54 @@ export function restart(game) {
 
 // ---------------------------------------------------------------------------
 // Damage rules.
-//   Missiles bypass shields entirely.
+//   Layered defence: shield → armor → hull.
+//   Missiles bypass shields entirely (straight to armor / hull).
 //   Shields are doubly effective vs lasers and fighter cannons: those weapons
 //   cost only 50% of their damage from the shield bank.
+//   Armor (big ships only) absorbs incoming damage at spec.armor.wearRate —
+//   a 100-damage hit erodes ~50 armor by default — so a thick plate
+//   "slowly deteriorates" rather than burning through in a single salvo.
 // ---------------------------------------------------------------------------
 function applyDamage(ship, p) {
-  const dmg = p.damage;
-  if (p.kind === "missile") {
-    ship.hp -= dmg;
-    return;
-  }
-  if (ship.shieldMax <= 0 || ship.shield <= 0) {
-    ship.hp -= dmg;
-    return;
-  }
-  // Shield modifier — half-cost incoming for lasers and fighter cannon rounds.
-  const isFighterRound = p.fromKlass === "fighter";
-  const isLaser = p.kind === "laser";
-  const shieldMul = (isFighterRound || isLaser) ? 0.5 : 1;
-  const shieldCost = dmg * shieldMul;
+  let remaining = p.damage;
 
-  ship.shieldHitTimer = 0;
-  ship.shieldFlash = Math.min(1, ship.shieldFlash + 0.4);
-  if (shieldCost <= ship.shield) {
-    ship.shield -= shieldCost;
-  } else {
-    // Convert remaining shield capacity back to incoming damage absorbed.
+  // Step 1: Shield (unless missile, which bypasses).
+  if (p.kind !== "missile" && ship.shieldMax > 0 && ship.shield > 0) {
+    const isFighterRound = p.fromKlass === "fighter";
+    const isLaser = p.kind === "laser";
+    const shieldMul = (isFighterRound || isLaser) ? 0.5 : 1;
+    ship.shieldHitTimer = 0;
+    ship.shieldFlash = Math.min(1, ship.shieldFlash + 0.4);
+    const shieldCost = remaining * shieldMul;
+    if (shieldCost <= ship.shield) {
+      ship.shield -= shieldCost;
+      return; // shield ate the whole hit
+    }
+    // Shield breaks; convert remaining capacity back into incoming damage.
     const dmgAbsorbed = ship.shield / shieldMul;
     ship.shield = 0;
-    const overflow = dmg - dmgAbsorbed;
-    if (overflow > 0) ship.hp -= overflow;
+    remaining = remaining - dmgAbsorbed;
+    if (remaining <= 0) return;
   }
+
+  // Step 2: Armor (capitals). Wear at a reduced rate so plates last.
+  if (ship.armorMax > 0 && ship.armor > 0 && ship.spec.armor) {
+    const wearRate = ship.spec.armor.wearRate || 0.5;
+    ship.armorFlash = Math.min(1, ship.armorFlash + 0.5);
+    const armorWear = remaining * wearRate;
+    if (armorWear <= ship.armor) {
+      ship.armor -= armorWear;
+      return; // armor ate the whole hit
+    }
+    // Armor strips; convert remaining capacity back into incoming damage.
+    const dmgAbsorbed = ship.armor / wearRate;
+    ship.armor = 0;
+    remaining = remaining - dmgAbsorbed;
+    if (remaining <= 0) return;
+  }
+
+  // Step 3: Hull.
+  ship.hp -= remaining;
 }
 
 // ---------------------------------------------------------------------------

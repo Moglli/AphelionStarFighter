@@ -80,6 +80,10 @@ export const CLASSES = {
       projectileColors: { blue: "#3af", red: "#f85" },
     },
     shield: { max: 90, regen: 8, regenDelay: 4.0 },
+    // Armor sits between shield and hull. It takes hits at a reduced wear
+    // rate (only `wearRate` fraction of incoming damage actually erodes
+    // the plating), and it never regenerates.
+    armor: { max: 100, wearRate: 0.55 },
     pdCannons: {
       count: 2,
       damage: 6,
@@ -127,6 +131,7 @@ export const CLASSES = {
       projectileColors: { blue: "#5fc", red: "#fc3" },
     },
     shield: { max: 260, regen: 14, regenDelay: 5.0 },
+    armor: { max: 280, wearRate: 0.5 },
     pdCannons: {
       count: 4,
       damage: 6,
@@ -178,6 +183,7 @@ export const CLASSES = {
       projectileColors: { blue: "#a3f", red: "#f25" },
     },
     shield: { max: 600, regen: 22, regenDelay: 5.5 },
+    armor: { max: 650, wearRate: 0.45 },
     pdCannons: {
       count: 6,
       damage: 7,

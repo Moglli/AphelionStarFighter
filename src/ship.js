@@ -27,6 +27,11 @@ export function createShip({ klass, side, pos, heading = 0, controller }) {
     shieldMax: spec.shield ? spec.shield.max : 0,
     shieldHitTimer: 0, // counts up since last hit; regen kicks in past regenDelay
     shieldFlash: 0,    // visual: brief brighten when hit
+    // Armor plating (big ships only). Never regenerates. Sits between
+    // shield and hull and absorbs damage at spec.armor.wearRate.
+    armor: spec.armor ? spec.armor.max : 0,
+    armorMax: spec.armor ? spec.armor.max : 0,
+    armorFlash: 0,     // visual: brief flash when armor takes a hit
     // Missile state (single-shot weapons like the fighter's missile).
     missileCd: 0,
     aiMissileCd: 0,
@@ -105,6 +110,7 @@ export function updateShip(ship, dt, world) {
     }
   }
   if (ship.shieldFlash > 0) ship.shieldFlash = Math.max(0, ship.shieldFlash - dt * 4);
+  if (ship.armorFlash > 0) ship.armorFlash = Math.max(0, ship.armorFlash - dt * 4);
 
   // Primary weapon — branch by firing mode.
   if (s.firingMode === "broadside") {
@@ -635,15 +641,29 @@ export function drawShip(ctx, ship) {
     ctx.stroke();
   }
 
-  // HP bar.
-  if (ship.hp < ship.hpMax) {
+  // HP bar (with an armor strip stacked above for capitals).
+  const showHp = ship.hp < ship.hpMax;
+  const showArmor = ship.armorMax > 0 && ship.armor < ship.armorMax;
+  if (showHp || showArmor) {
     const w = s.radius * 2.4;
     const h = 3;
     const x = ship.pos.x - w / 2;
-    const y = ship.pos.y - s.radius - 10;
-    ctx.fillStyle = "#400";
-    ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = "#4f6";
-    ctx.fillRect(x, y, w * (ship.hp / ship.hpMax), h);
+    let y = ship.pos.y - s.radius - 10;
+    if (showArmor) {
+      ctx.fillStyle = "#321";
+      ctx.fillRect(x, y, w, h);
+      // Tint shifts toward red as the plates strip away.
+      const frac = ship.armor / ship.armorMax;
+      const hit = Math.min(1, ship.armorFlash);
+      ctx.fillStyle = hit > 0.5 ? "#fda" : (frac > 0.4 ? "#c93" : "#c63");
+      ctx.fillRect(x, y, w * frac, h);
+      y -= h + 1;
+    }
+    if (showHp) {
+      ctx.fillStyle = "#400";
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "#4f6";
+      ctx.fillRect(x, y, w * (ship.hp / ship.hpMax), h);
+    }
   }
 }

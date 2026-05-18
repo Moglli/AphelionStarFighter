@@ -160,7 +160,11 @@ function drawSpectateOverlay(ctx, game, viewW, viewH) {
   if (t) {
     const palette = SIDES[t.side];
     ctx.fillStyle = palette.primary;
-    ctx.fillText(`${palette.name} ${t.spec.name}  ·  HULL ${Math.round(t.hp)}/${t.hpMax}  ·  SHIELD ${Math.round(t.shield)}/${t.shieldMax}`,
+    const armorPart = t.armorMax > 0
+      ? `  ·  ARMOR ${Math.round(t.armor)}/${t.armorMax}`
+      : "";
+    ctx.fillText(
+      `${palette.name} ${t.spec.name}  ·  HULL ${Math.round(t.hp)}/${t.hpMax}  ·  SHIELD ${Math.round(t.shield)}/${t.shieldMax}${armorPart}`,
       viewW / 2, viewH - 20);
   } else {
     ctx.fillStyle = "#cdf";
