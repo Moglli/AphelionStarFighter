@@ -413,13 +413,14 @@ function updateMissilePodFire(ship, world) {
     const outward = ship.heading + sideSign * (Math.PI / 2);
     const launchHeading = lerpAngle(outward, toT, 0.4);
 
+    const colors = pods.colors || { blue: "#fff", red: "#fc8" };
     world.projectiles.push(createMissile({
       pos: origin,
       heading: launchHeading,
       damage: pods.damage,
       ttl: pods.ttl,
       radius: pods.radius,
-      color: ship.side === "blue" ? "#fff" : "#fc8",
+      color: colors[ship.side],
       side: ship.side,
       ownerId: ship.id,
       speed: pods.projectileSpeed,
