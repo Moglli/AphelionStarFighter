@@ -72,6 +72,12 @@ function pickBomberTarget(ship, ships) {
 }
 
 export function updateAI(ship, world, dt) {
+  // Carriers have their own passive routine — no target hunt, no orbit.
+  if (ship.klass === "carrier") {
+    carrierAI(ship, world);
+    return;
+  }
+
   const c = ship.controller;
 
   // Battleships duel each other; bombers hunt capitals.
@@ -124,7 +130,8 @@ function capitalSeparation(ship, ships) {
   const myR = ship.spec.radius;
   for (const o of ships) {
     if (o.dead || o === ship) continue;
-    if (o.klass === "fighter") continue;
+    // Only capitals push each other apart. Small craft pass through.
+    if (o.klass === "fighter" || o.klass === "bomber") continue;
     const dx = ship.pos.x - o.pos.x;
     const dy = ship.pos.y - o.pos.y;
     const sep = myR + o.spec.radius + 90;
@@ -434,4 +441,46 @@ function orbitAI(ship, target, dt, world) {
   }
 
   c.firingMissile = false;
+}
+
+// ---------------------------------------------------------------------------
+// Carrier behaviour: no offensive weapons, no target hunt. Faces the action
+// so the PD wall covers the threat axis, retreats from approaching enemy
+// capitals, and stays out of friendly capitals' way via separation.
+// ---------------------------------------------------------------------------
+function carrierAI(ship, world) {
+  const c = ship.controller;
+  c.firing = false;
+  c.firingMissile = false;
+
+  // Face the nearest enemy so PD turrets get usable target geometry.
+  const enemy = nearestEnemy(ship, world.ships);
+  c.aim = enemy
+    ? { x: enemy.pos.x - ship.pos.x, y: enemy.pos.y - ship.pos.y }
+    : null;
+
+  // Retreat from approaching enemy capitals. Small craft are PD's job.
+  let threat = null, threatD2 = Infinity;
+  for (const o of world.ships) {
+    if (o.dead || o.side === ship.side) continue;
+    if (o.klass === "fighter" || o.klass === "bomber") continue;
+    const dx = o.pos.x - ship.pos.x;
+    const dy = o.pos.y - ship.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < threatD2) { threatD2 = d2; threat = o; }
+  }
+  let thrust = { x: 0, y: 0 };
+  if (threat) {
+    const SAFE_DIST = 1500;
+    const d = Math.sqrt(threatD2);
+    if (d > 1e-6 && d < SAFE_DIST) {
+      thrust = {
+        x: (ship.pos.x - threat.pos.x) / d,
+        y: (ship.pos.y - threat.pos.y) / d,
+      };
+    }
+  }
+  const sep = capitalSeparation(ship, world.ships);
+  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
+  c.thrust = thrust;
 }

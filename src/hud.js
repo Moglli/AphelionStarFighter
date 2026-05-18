@@ -2,12 +2,12 @@ import { CLASSES, SIDES } from "./classes.js";
 import { ARENA, MAP_SIZES } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
 
-const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship"];
+const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
 
 function countBySide(ships) {
   const out = {
-    blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0 },
-    red:  { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0 },
+    blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0 },
+    red:  { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0 },
   };
   for (const s of ships) if (!s.dead) out[s.side][s.klass]++;
   return out;
@@ -193,7 +193,8 @@ function drawMinimap(ctx, game, viewW, viewH) {
     const isSpec = game.spectating && s.id === game.spectateTargetId;
     ctx.fillStyle = (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
     const r = (s.isPlayer || isSpec) ? 2.5
-      : (s.klass === "battleship" ? 2.2
+      : (s.klass === "carrier" ? 2.6
+      : s.klass === "battleship" ? 2.2
       : s.klass === "cruiser" ? 1.8
       : s.klass === "bomber" ? 1.6
       : 1.2);

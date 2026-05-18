@@ -45,6 +45,9 @@ export function createShip({ klass, side, pos, heading = 0, controller }) {
     weaponAmmo: spec.weapon && spec.weapon.capacity ? spec.weapon.capacity : 0,
     weaponReloading: false,
     weaponReloadTimer: 0,
+    // Carrier replenishment cadence — counts down to the next launch.
+    fighterLaunchCd: spec.replenish ? spec.replenish.fighter : 0,
+    bomberLaunchCd: spec.replenish ? spec.replenish.bomber : 0,
   };
   return ship;
 }
@@ -112,12 +115,13 @@ export function updateShip(ship, dt, world) {
   if (ship.shieldFlash > 0) ship.shieldFlash = Math.max(0, ship.shieldFlash - dt * 4);
   if (ship.armorFlash > 0) ship.armorFlash = Math.max(0, ship.armorFlash - dt * 4);
 
-  // Primary weapon — branch by firing mode.
+  // Primary weapon — branch by firing mode. "none" (carrier) has no
+  // primary armament; PD and replenishment handle it.
   if (s.firingMode === "broadside") {
     ship.cooldownPort -= dt;
     ship.cooldownStarboard -= dt;
     updateBroadsideFire(ship, world);
-  } else {
+  } else if (s.firingMode === "forward") {
     ship.cooldown -= dt;
     // Magazine reload: when empty, the timer ticks down and then refills.
     if (s.weapon.capacity != null && ship.weaponReloading) {
@@ -171,8 +175,48 @@ export function updateShip(ship, dt, world) {
   if (s.pdCannons) updatePDFire(ship, world);
   if (s.missilePods) updateMissilePodFire(ship, world);
   if (s.heavyLaser) updateHeavyLaser(ship, world);
+  if (s.replenish) updateReplenishment(ship, dt, world);
 
   if (ship.hp <= 0) ship.dead = true;
+}
+
+// ---------------------------------------------------------------------------
+// Carrier replenishment: every spec.replenish.fighter seconds launch one
+// fighter, every spec.replenish.bomber seconds launch one bomber. With the
+// bomber cycle at 2x the fighter cycle, the launch ratio is 2:1.
+// ---------------------------------------------------------------------------
+function updateReplenishment(carrier, dt, world) {
+  carrier.fighterLaunchCd -= dt;
+  carrier.bomberLaunchCd -= dt;
+  if (carrier.fighterLaunchCd <= 0) {
+    launchReplacement(carrier, world, "fighter");
+    carrier.fighterLaunchCd = carrier.spec.replenish.fighter;
+  }
+  if (carrier.bomberLaunchCd <= 0) {
+    launchReplacement(carrier, world, "bomber");
+    carrier.bomberLaunchCd = carrier.spec.replenish.bomber;
+  }
+}
+
+function launchReplacement(carrier, world, klass) {
+  const fwd = V.fromAngle(carrier.heading);
+  const lateralVec = { x: -fwd.y, y: fwd.x };
+  const lateralSign = Math.random() < 0.5 ? -1 : 1;
+  const offset = carrier.spec.radius + 30;
+  const lat = 30 + Math.random() * 60;
+  const pos = {
+    x: carrier.pos.x + fwd.x * offset + lateralVec.x * lateralSign * lat,
+    y: carrier.pos.y + fwd.y * offset + lateralVec.y * lateralSign * lat,
+  };
+  const heading = carrier.heading + (Math.random() - 0.5) * 0.4;
+  const ship = createShip({
+    klass,
+    side: carrier.side,
+    pos,
+    heading,
+    controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+  });
+  world.ships.push(ship);
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +628,16 @@ export function drawShip(ctx, ship) {
     ctx.lineTo(-s.radius, -s.radius * 0.4);
     ctx.lineTo(-s.radius * 0.6, -s.radius * 0.9);
     ctx.lineTo(s.radius * 0.5, -s.radius * 0.8);
+  } else if (ship.klass === "carrier") {
+    // Long flat hull — flight deck silhouette. Bow tapers; aft stays wide.
+    ctx.moveTo(s.radius, s.radius * 0.32);
+    ctx.lineTo(s.radius * 0.55, s.radius * 0.55);
+    ctx.lineTo(-s.radius * 0.85, s.radius * 0.6);
+    ctx.lineTo(-s.radius, s.radius * 0.4);
+    ctx.lineTo(-s.radius, -s.radius * 0.4);
+    ctx.lineTo(-s.radius * 0.85, -s.radius * 0.6);
+    ctx.lineTo(s.radius * 0.55, -s.radius * 0.55);
+    ctx.lineTo(s.radius, -s.radius * 0.32);
   } else {
     ctx.moveTo(s.radius, 0);
     ctx.lineTo(s.radius * 0.7, s.radius * 0.6);
@@ -598,6 +652,16 @@ export function drawShip(ctx, ship) {
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+
+  // Carrier flight-deck stripe — a thin line down the centerline.
+  if (ship.klass === "carrier") {
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(s.radius * 0.85, 0);
+    ctx.lineTo(-s.radius * 0.85, 0);
+    ctx.stroke();
+  }
 
   // Broadside gun ports.
   if (ship.spec.firingMode === "broadside") {

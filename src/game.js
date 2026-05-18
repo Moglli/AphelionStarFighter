@@ -3,7 +3,10 @@ import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 
-const ROSTER = { fighter: 30, bomber: 6, frigate: 5, cruiser: 2, battleship: 1 };
+// Roster sized so totals stay manageable once the carrier starts spawning
+// replacements: carriers add 6 escort fighters at spawn and keep launching
+// reinforcements throughout the match.
+const ROSTER = { fighter: 24, bomber: 6, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 };
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
 const BOMBER_PACK_SIZE = 2;
@@ -74,6 +77,8 @@ function spawnRoster(game) {
         spawnFighterPacks(game, side, zone, count, facing);
       } else if (klass === "bomber") {
         spawnBomberPairs(game, side, zone, count, facing);
+      } else if (klass === "carrier") {
+        spawnCarrierWithEscort(game, side, zone, count, facing);
       } else {
         for (let i = 0; i < count; i++) {
           const pos = randomSpawnPos(zone);
@@ -146,6 +151,40 @@ function spawnBomberPairs(game, side, zone, count, facing) {
       game.ships.push(ship);
     }
     remaining -= pairSize;
+  }
+}
+
+// Carrier + fighter escort squadron. Each carrier spawns with a ring of
+// fighters that share a packId so they engage as a wing. The escort's
+// pack role is "hunt-fighter" — they screen against enemy small craft;
+// the pack target picker still upgrades them to a bomber if one shows up.
+function spawnCarrierWithEscort(game, side, zone, count, facing) {
+  for (let n = 0; n < count; n++) {
+    const pos = randomSpawnPos(zone);
+    const carrier = createShip({
+      klass: "carrier", side, pos, heading: facing,
+      controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+    });
+    game.ships.push(carrier);
+
+    const escortSize = carrier.spec.escortSize || 6;
+    const packId = nextPackId++;
+    for (let i = 0; i < escortSize; i++) {
+      const ang = (i / escortSize) * Math.PI * 2;
+      const dist = carrier.spec.radius + 70;
+      const epos = {
+        x: pos.x + Math.cos(ang) * dist,
+        y: pos.y + Math.sin(ang) * dist,
+      };
+      const heading = facing + (Math.random() - 0.5) * 0.3;
+      const escort = createShip({
+        klass: "fighter", side, pos: epos, heading,
+        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      });
+      escort.packId = packId;
+      escort.packRole = "hunt-fighter";
+      game.ships.push(escort);
+    }
   }
 }
 
@@ -428,7 +467,8 @@ function resolveHeavyOverlap(ships, bounds) {
   const heavies = [];
   for (const s of ships) {
     if (s.dead) continue;
-    if (s.klass === "frigate" || s.klass === "cruiser" || s.klass === "battleship") {
+    if (s.klass === "frigate" || s.klass === "cruiser"
+        || s.klass === "battleship" || s.klass === "carrier") {
       heavies.push(s);
     }
   }

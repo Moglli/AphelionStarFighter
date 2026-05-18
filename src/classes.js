@@ -6,6 +6,9 @@
 //   cruiser    — strike cruiser: heavy guns + heavy torpedoes from standoff
 //   battleship — dreadnought: slowest, massive HP, broadside barrage, heavy
 //                laser, missile pods, point-defence wall
+//   carrier    — fleet carrier: huge non-combatant capital. Defends only
+//                with PD; slowly launches replacement fighters and bombers,
+//                arrives with a fighter escort squadron.
 // Invariant: bigger ship = slower (lower maxSpeed, accel, turnRate).
 //
 // Subsystems beyond the primary `weapon`:
@@ -273,6 +276,41 @@ export const CLASSES = {
     },
     aiRange: 1000,
     aiOrbit: 800,
+  },
+  carrier: {
+    name: "Carrier",
+    role: "Fleet Carrier",
+    hp: 1100,
+    maxSpeed: 45,
+    accel: 60,
+    drag: 0.994,
+    turnRate: 0.18,
+    radius: 180,         // largest hull
+    color: "#9bf",
+    // "none" = no primary weapon. The carrier defends with PD only.
+    firingMode: "none",
+    shield: { max: 550, regen: 20, regenDelay: 6.0 },
+    armor: { max: 600, wearRate: 0.45 },
+    pdCannons: {
+      count: 8,          // densest PD wall in the fleet
+      damage: 7,
+      cooldown: 0.22,
+      projectileSpeed: 1000,
+      range: 480,
+      projectileRadius: 3,
+      projectileColors: { blue: "#cef", red: "#fda" },
+    },
+    // Replenishment cadence (seconds per launch). Bomber cycle is double
+    // the fighter cycle, so over time the carrier sends 2 fighters for
+    // every 1 bomber.
+    replenish: {
+      fighter: 18.0,
+      bomber: 36.0,
+    },
+    // Escort fighter squadron spawned alongside the carrier at game start.
+    escortSize: 6,
+    aiRange: 0,
+    aiOrbit: 0,
   },
 };
 
