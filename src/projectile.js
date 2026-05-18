@@ -32,7 +32,7 @@ export function createProjectile({
 export function createMissile({
   pos, heading, damage, ttl, radius, color, side, ownerId,
   speed, turnRate, hp = 1, fromKlass = null, acquireRange = 2000,
-  initialTarget = null,
+  initialTarget = null, targetModuleName = null,
 }) {
   return {
     pos: { ...pos },
@@ -52,6 +52,10 @@ export function createMissile({
     turnRate,
     acquireRange,
     targetId: initialTarget ? initialTarget.id : null,
+    // When set, the missile homes at the live world position of the named
+    // module on the target ship (rather than the ship's center). Falls
+    // back to ship-center homing if the module is destroyed mid-flight.
+    targetModuleName,
     trail: [], // recent positions for rendering
   };
 }
@@ -82,13 +86,31 @@ function updateMissile(m, dt, world) {
   }
 
   if (target) {
-    // Lead intercept: aim at predicted future position.
-    const dx = target.pos.x - m.pos.x;
-    const dy = target.pos.y - m.pos.y;
+    // Aim point: by default the ship center, but bombers home on a
+    // specific module so a strike wave peels defences before the hull.
+    let aimX = target.pos.x;
+    let aimY = target.pos.y;
+    if (m.targetModuleName && target.moduleByName) {
+      const mod = target.moduleByName[m.targetModuleName];
+      if (mod && !mod.disabled) {
+        const R = target.spec.radius;
+        const lx = mod.offset.x * R;
+        const ly = mod.offset.y * R;
+        const c = Math.cos(target.heading), sh = Math.sin(target.heading);
+        aimX = target.pos.x + lx * c - ly * sh;
+        aimY = target.pos.y + lx * sh + ly * c;
+      } else {
+        // Module dead — drop the lock and use ship center.
+        m.targetModuleName = null;
+      }
+    }
+    // Lead intercept: aim at predicted future position of the aim point.
+    const dx = aimX - m.pos.x;
+    const dy = aimY - m.pos.y;
     const dist = Math.hypot(dx, dy);
     const t = dist / m.speed;
-    const px = target.pos.x + target.vel.x * t;
-    const py = target.pos.y + target.vel.y * t;
+    const px = aimX + target.vel.x * t;
+    const py = aimY + target.vel.y * t;
     const desired = Math.atan2(py - m.pos.y, px - m.pos.x);
     let delta = desired - m.heading;
     while (delta > Math.PI) delta -= Math.PI * 2;

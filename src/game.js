@@ -3,6 +3,9 @@ import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey, getStationDef } from "./races.js";
+import {
+  worldToLocal, findHitModuleLocal, findSplashModulesLocal,
+} from "./modules.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -364,7 +367,8 @@ export function update(game, dt) {
       const dy = ship.pos.y - p.pos.y;
       const r = ship.spec.radius + p.radius;
       if (dx * dx + dy * dy <= r * r) {
-        applyDamage(ship, p);
+        const targets = computeModuleTargets(ship, p);
+        applyDamage(ship, p, targets);
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) ship.dead = true;
@@ -447,7 +451,28 @@ export function restart(game) {
 //   a 100-damage hit erodes ~50 armor by default — so a thick plate
 //   "slowly deteriorates" rather than burning through in a single salvo.
 // ---------------------------------------------------------------------------
-function applyDamage(ship, p) {
+// Decide which modules (if any) absorb a hit. Cannon/laser hits land on
+// at most one module — the closest disc that contains the impact. Missile
+// hits splash: the directly-hit module takes full damage and every other
+// module within blast radius takes 50%. Laser beam damage skips module
+// routing entirely (lasers carve through to central hull).
+function computeModuleTargets(ship, p) {
+  if (!ship.modules || ship.modules.length === 0) return null;
+  if (p.kind === "laser") return null;
+  const local = worldToLocal(ship, p.pos.x, p.pos.y);
+  if (p.kind === "missile") {
+    const blastR = ship.spec.radius * 0.30;
+    const splash = findSplashModulesLocal(ship, local.x, local.y, blastR);
+    if (splash.length === 0) return null;
+    const direct = findHitModuleLocal(ship, local.x, local.y);
+    return splash.map((m) => ({ module: m, weight: m === direct ? 1.0 : 0.5 }));
+  }
+  // Cannon / PD round.
+  const hit = findHitModuleLocal(ship, local.x, local.y);
+  return hit ? [{ module: hit, weight: 1.0 }] : null;
+}
+
+function applyDamage(ship, p, moduleTargets = null) {
   let remaining = p.damage;
 
   // Step 1: Shield (unless missile, which bypasses).
@@ -485,7 +510,23 @@ function applyDamage(ship, p) {
     if (remaining <= 0) return;
   }
 
-  // Step 3: Hull.
+  // Step 3: Route to modules (if any matched) or to central hull.
+  if (moduleTargets && moduleTargets.length > 0) {
+    for (const { module, weight } of moduleTargets) {
+      if (module.disabled) continue;
+      const dmg = remaining * weight;
+      module.hp -= dmg;
+      module.flash = Math.min(1, module.flash + 0.6);
+      if (module.hp <= 0) {
+        module.disabled = true;
+        module.hp = 0;
+        // Killing a subsystem ruptures part of the central hull too —
+        // strip enough modules and the ship dies of cumulative breaches.
+        ship.hp -= module.hullPenalty;
+      }
+    }
+    return;
+  }
   ship.hp -= remaining;
 }
 
