@@ -1,9 +1,20 @@
 // Ship class stats. Each class has a defined role:
 //   fighter    — interceptor: fastest, fragile, light damage, fast shots
-//   frigate    — skirmisher: balanced forward guns
-//   cruiser    — heavy gunship: slow, durable, hard forward turret
-//   battleship — dreadnought: slowest, massive HP, broadside-only, no aim
+//   frigate    — skirmisher: balanced forward guns, PD, single missile pod
+//   cruiser    — heavy gunship: slow, durable, hard forward turret, PD, missile pods
+//   battleship — dreadnought: slowest, massive HP, broadside barrage, heavy laser,
+//                missile pods, point defence wall
 // Invariant: bigger ship = slower (lower maxSpeed, accel, turnRate).
+//
+// Subsystems beyond the primary `weapon`:
+//   shield      — regenerating energy shield (see ship.js for damage rules).
+//                 Bypassed by missiles. Lasers + fighter cannons cost half of
+//                 their damage from the shield bank.
+//   missile     — single homing missile launcher (fighter). Player-triggered.
+//   missilePods — multiple capital-grade launchers, each with its own cooldown.
+//   heavyLaser  — instant-hit beam weapon (battleship). Long range, big damage.
+//   pdCannons   — point-defence turrets. Auto-target: missiles, then fighters,
+//                 then nearest enemy. Many turrets, low individual damage.
 export const CLASSES = {
   fighter: {
     name: "Fighter",
@@ -26,8 +37,21 @@ export const CLASSES = {
       projectileRadius: 4,
       projectileColors: { blue: "#7df", red: "#fb8" },
     },
+    shield: { max: 24, regen: 8, regenDelay: 3.0 },
+    missile: {
+      damage: 28,
+      cooldown: 7.0,
+      projectileSpeed: 360,
+      range: 1500,
+      ttl: 5.0,
+      turnRate: 2.6,
+      hp: 1,
+      radius: 4,
+      acquireRange: 1800,
+    },
     aiRange: 380,
     aiOrbit: 220,
+    aiMissileCooldown: 9.0, // AI-side throttling on top of weapon cooldown
   },
   frigate: {
     name: "Frigate",
@@ -50,6 +74,28 @@ export const CLASSES = {
       muzzleSpread: 28,
       projectileRadius: 5,
       projectileColors: { blue: "#3af", red: "#f85" },
+    },
+    shield: { max: 90, regen: 8, regenDelay: 4.0 },
+    pdCannons: {
+      count: 2,
+      damage: 6,
+      cooldown: 0.28,
+      projectileSpeed: 980,
+      range: 380,
+      projectileRadius: 2.5,
+      projectileColors: { blue: "#cef", red: "#fda" },
+    },
+    missilePods: {
+      count: 1,
+      damage: 38,
+      cooldown: 9.0,
+      projectileSpeed: 320,
+      range: 1300,
+      ttl: 5.5,
+      turnRate: 2.2,
+      hp: 2,
+      radius: 5,
+      acquireRange: 1600,
     },
     aiRange: 620,
     aiOrbit: 460,
@@ -76,6 +122,28 @@ export const CLASSES = {
       projectileRadius: 7,
       projectileColors: { blue: "#5fc", red: "#fc3" },
     },
+    shield: { max: 260, regen: 14, regenDelay: 5.0 },
+    pdCannons: {
+      count: 4,
+      damage: 6,
+      cooldown: 0.25,
+      projectileSpeed: 1000,
+      range: 420,
+      projectileRadius: 2.5,
+      projectileColors: { blue: "#cef", red: "#fda" },
+    },
+    missilePods: {
+      count: 2,
+      damage: 52,
+      cooldown: 8.5,
+      projectileSpeed: 320,
+      range: 1700,
+      ttl: 6.0,
+      turnRate: 2.0,
+      hp: 2,
+      radius: 6,
+      acquireRange: 2000,
+    },
     aiRange: 860,
     aiOrbit: 700,
   },
@@ -91,9 +159,10 @@ export const CLASSES = {
     color: "#88f",
     firingMode: "broadside",
     // ±arc (radians) around each side perpendicular within which broadside
-    // guns will fire. Small enough that you have to position the ship.
+    // barrage guns will fire. Small enough that you have to position the ship.
     broadsideArc: Math.PI / 4,
     weapon: {
+      // Barrage cannons: 3 per side, broadside.
       damage: 70,
       cooldown: 2.6, // per side; sides fire independently
       projectileSpeed: 240, // slow, heavy shells
@@ -103,6 +172,37 @@ export const CLASSES = {
       muzzleSpread: 70, // spaced along the much longer hull
       projectileRadius: 10,
       projectileColors: { blue: "#a3f", red: "#f25" },
+    },
+    shield: { max: 600, regen: 22, regenDelay: 5.5 },
+    pdCannons: {
+      count: 6,
+      damage: 7,
+      cooldown: 0.22,
+      projectileSpeed: 1000,
+      range: 460,
+      projectileRadius: 3,
+      projectileColors: { blue: "#cef", red: "#fda" },
+    },
+    missilePods: {
+      count: 4,
+      damage: 65,
+      cooldown: 8.0,
+      projectileSpeed: 300,
+      range: 2200,
+      ttl: 7.5,
+      turnRate: 1.9,
+      hp: 3,
+      radius: 7,
+      acquireRange: 2400,
+    },
+    heavyLaser: {
+      damage: 180,
+      cooldown: 5.0,
+      range: 2400,
+      // Firing arc from the bow (radians, half-angle).
+      arc: Math.PI * 0.55,
+      beamDuration: 0.45,
+      beamColors: { blue: "#9ef", red: "#fc7" },
     },
     aiRange: 1000,
     aiOrbit: 800,

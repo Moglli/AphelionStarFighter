@@ -1,8 +1,11 @@
-import { createGame, update, restart } from "./game.js";
+import {
+  createGame, update, restart,
+  enterSpectate, exitSpectate, cycleSpectate, getSpectateTarget,
+} from "./game.js";
 import { drawArena, drawArenaBounds, ARENA } from "./arena.js";
 import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
-import { drawHUD } from "./hud.js";
+import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
 
 const canvas = document.getElementById("game");
@@ -21,11 +24,11 @@ function resize() {
   canvas.style.width = viewW + "px";
   canvas.style.height = viewH + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  input.layoutOverlays(viewW, viewH);
 }
 window.addEventListener("resize", resize);
 resize();
 
-// Player POV zoom. 0.5 = zoomed out 2x (see twice as much of the arena).
 const ZOOM = 0.5;
 
 const FIXED_DT = 1 / 60;
@@ -40,13 +43,25 @@ function frame(now) {
   if (delta > MAX_ACCUM) delta = MAX_ACCUM;
   accum += delta;
 
-  // Pump player input each frame into the shared controller object.
+  // Player input → controller.
   const ctrl = input.controller();
   game.playerController.thrust = ctrl.thrust;
   game.playerController.aim = ctrl.aim;
   game.playerController.firing = ctrl.firing;
+  // Edge-triggered missile fire. The flag is consumed inside updateShip.
+  // Clear stale presses when there's no live player to fire.
+  game.playerController.firingMissile = input.consumeMissilePress();
 
-  // Edge-triggered Enter restarts the match when it's over.
+  // Spectate hotkeys.
+  if (input.consumeSpectateToggle()) {
+    if (game.spectating) exitSpectate(game);
+    else enterSpectate(game);
+  }
+  if (game.spectating) {
+    if (input.consumeSpectateNext()) cycleSpectate(game, +1);
+    if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
+  }
+
   if (game.matchOver && input.consumeEnterPress()) restart(game);
 
   while (accum >= FIXED_DT) {
@@ -59,16 +74,22 @@ function frame(now) {
 }
 
 function draw() {
-  // Camera follows the player ship, falls back to arena center.
-  const player = game.ships.find((s) => s.isPlayer && !s.dead);
-  const camera = player
-    ? { x: player.pos.x, y: player.pos.y }
-    : { x: ARENA.width / 2, y: ARENA.height / 2 };
+  // Camera: spectate target if spectating, else player, else arena center.
+  let camera;
+  if (game.spectating) {
+    const spec = getSpectateTarget(game);
+    camera = spec
+      ? { x: spec.pos.x, y: spec.pos.y }
+      : { x: ARENA.width / 2, y: ARENA.height / 2 };
+  } else {
+    const player = game.ships.find((s) => s.isPlayer && !s.dead);
+    camera = player
+      ? { x: player.pos.x, y: player.pos.y }
+      : { x: ARENA.width / 2, y: ARENA.height / 2 };
+  }
 
   drawArena(ctx, game.starfield, camera, viewW, viewH, ZOOM);
 
-  // World transform with zoom-out. Order: translate to viewport center,
-  // scale, then translate world so the camera lands at the origin.
   ctx.save();
   ctx.translate(viewW / 2, viewH / 2);
   ctx.scale(ZOOM, ZOOM);
@@ -77,15 +98,14 @@ function draw() {
   drawArenaBounds(ctx);
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
+  drawBeams(ctx, game);
 
   ctx.restore();
 
-  drawHUD(ctx, game, viewW, viewH);
+  drawHUD(ctx, game, viewW, viewH, input.missileBtn);
   input.drawSticks(ctx);
 }
 
-// Tap-to-restart on match end. Use a separate listener so it doesn't fight
-// with the joystick pointer capture.
 window.addEventListener("pointerdown", () => {
   if (game.matchOver) restart(game);
 });

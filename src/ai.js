@@ -25,12 +25,32 @@ function leadAim(shooter, target, speed) {
   };
 }
 
+// Find nearest enemy battleship — battleships prioritise dueling each other.
+function nearestEnemyBattleship(ship, ships) {
+  let best = null, bestD2 = Infinity;
+  for (const other of ships) {
+    if (other.dead || other.side === ship.side) continue;
+    if (other.klass !== "battleship") continue;
+    const dx = other.pos.x - ship.pos.x;
+    const dy = other.pos.y - ship.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = other; }
+  }
+  return best;
+}
+
 export function updateAI(ship, world, dt) {
   const c = ship.controller;
 
-  // Packed fighters share their pack's target so a pack engages as a wing.
+  // Battleships are dueling specialists: lock onto the nearest enemy
+  // battleship if one exists, fall back to packs/nearest enemy.
   let target = null;
-  if (ship.packId != null && world.packs) {
+  if (ship.klass === "battleship") {
+    target = nearestEnemyBattleship(ship, world.ships);
+  }
+
+  // Packed fighters share their pack's target so a pack engages as a wing.
+  if (!target && ship.packId != null && world.packs) {
     const pack = world.packs.get(ship.packId);
     if (pack && pack.target && !pack.target.dead) target = pack.target;
   }
@@ -40,19 +60,22 @@ export function updateAI(ship, world, dt) {
     c.thrust = { x: 0, y: 0 };
     c.aim = null;
     c.firing = false;
+    c.firingMissile = false;
     return;
   }
 
   if (ship.klass === "fighter") {
     flybyAI(ship, target, dt, world);
+  } else if (ship.klass === "battleship") {
+    battleshipAI(ship, target, dt);
   } else {
     orbitAI(ship, target, dt);
   }
 }
 
-// Vector toward pack centroid when the ship has strayed from its packmates.
-// Returns null when close enough — cohesion only kicks in past a threshold
-// so it doesn't fight the dogfight.
+// ---------------------------------------------------------------------------
+// Pack cohesion / threat avoidance helpers (unchanged behaviour).
+// ---------------------------------------------------------------------------
 function packCohesion(ship, pack) {
   if (!pack || !pack.center) return null;
   const dx = pack.center.x - ship.pos.x;
@@ -63,13 +86,6 @@ function packCohesion(ship, pack) {
   return { x: dx / d, y: dy / d };
 }
 
-// Avoidance vector when the ship is inside any enemy capital's firing arc.
-// Broadside hulls (battleship): pushes toward the bow/stern axis the ship is
-// already aimed at — fastest exit from the side arc.
-// Forward-firing capitals (frigate, cruiser): pushes perpendicular to the
-// enemy's bow, toward whichever beam the ship is already drifting onto — so
-// fighters break out laterally instead of charging down the guns.
-// Returns null when not in danger.
 const FORWARD_ARC_HALF = Math.PI / 4;
 const FORWARD_ARC_COS = Math.cos(FORWARD_ARC_HALF);
 function bigShipDanger(ship, ships) {
@@ -87,7 +103,7 @@ function bigShipDanger(ship, ships) {
     const fwdX = Math.cos(other.heading), fwdY = Math.sin(other.heading);
     const toUsX = dx / d, toUsY = dy / d;
     const portX = -fwdY, portY = fwdX;
-    const urgency = 1 - d / range; // 0 at fringe, 1 at center
+    const urgency = 1 - d / range;
 
     if (other.spec.firingMode === "broadside") {
       const arcCos = Math.cos(other.spec.broadsideArc || Math.PI / 4);
@@ -95,18 +111,15 @@ function bigShipDanger(ship, ships) {
       const portDot = toUsX * portX + toUsY * portY;
       const stbdDot = toUsX * stbdX + toUsY * stbdY;
       if (portDot < arcCos && stbdDot < arcCos) continue;
-      // In an arc — pick whichever bow/stern direction we're already aimed
-      // toward; that exit is fastest with the limited turn rate.
       const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
       const dotF = myFwdX * fwdX + myFwdY * fwdY;
       const sign = dotF >= 0 ? 1 : -1;
       ax += sign * fwdX * urgency;
       ay += sign * fwdY * urgency;
     } else {
-      // Forward-firing capital: only dangerous inside the bow cone.
       if (toUsX * fwdX + toUsY * fwdY < FORWARD_ARC_COS) continue;
       const portDot = toUsX * portX + toUsY * portY;
-      const sign = portDot >= 0 ? 1 : -1; // push further onto the beam we're already on
+      const sign = portDot >= 0 ? 1 : -1;
       ax += sign * portX * urgency;
       ay += sign * portY * urgency;
     }
@@ -116,10 +129,6 @@ function bigShipDanger(ship, ships) {
   return { x: ax / aLen, y: ay / aLen };
 }
 
-// Tail evasion: an enemy fighter close behind with its nose lined up on us is
-// about to land hits. Push perpendicular to their line of fire, biased to
-// whichever side our velocity is already drifting — that's the cheapest jink.
-// Returns null when nothing is tailing us.
 function tailDanger(ship, ships) {
   let ax = 0, ay = 0;
   const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
@@ -127,7 +136,7 @@ function tailDanger(ship, ships) {
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
     if (other.klass !== "fighter") continue;
-    const dx = ship.pos.x - other.pos.x; // them -> us
+    const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
     const d2 = dx * dx + dy * dy;
     if (d2 > TAIL_RANGE * TAIL_RANGE) continue;
@@ -135,9 +144,7 @@ function tailDanger(ship, ships) {
     if (d < 1e-6) continue;
     const toUsX = dx / d, toUsY = dy / d;
     const otherFwdX = Math.cos(other.heading), otherFwdY = Math.sin(other.heading);
-    // Their nose is pointed at us.
     if (toUsX * otherFwdX + toUsY * otherFwdY < 0.85) continue;
-    // And they're behind us (us->them runs opposite our nose).
     if (toUsX * myFwdX + toUsY * myFwdY > -0.2) continue;
     const px = -toUsY, py = toUsX;
     const velDot = px * ship.vel.x + py * ship.vel.y;
@@ -151,17 +158,13 @@ function tailDanger(ship, ships) {
   return { x: ax / aLen, y: ay / aLen };
 }
 
-// Fighter behaviour: fly-by attack runs with curving breaks. The fighter
-// approaches a target along an offset path (sweeping past the target's side),
-// fires through the run, then when it begins to depart commits to a curving
-// arc tangent to the target. Alternating `breakSide` between passes traces
-// out a figure-8 pattern around the target. Pack cohesion and big-ship
-// danger avoidance modify the final aim direction.
+// ---------------------------------------------------------------------------
+// Fighter behaviour.
+// ---------------------------------------------------------------------------
 function flybyAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
 
-  // Per-ship state, lazily initialized.
   if (ship.attackState === undefined) {
     ship.attackState = "approach";
     ship.breakSide = (ship.id % 2 === 0) ? 1 : -1;
@@ -172,32 +175,23 @@ function flybyAI(ship, target, dt, world) {
   const rel = V.sub(target.pos, ship.pos);
   const dist = V.len(rel);
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
-  // Perpendicular (CCW); multiplied by breakSide for left/right.
   const perp = { x: -dir.y, y: dir.x };
 
   const REGROUP_DIST = 600;
-  const PASS_ZONE_DIST = 500;   // must be at least this close to count as a pass
+  const PASS_ZONE_DIST = 500;
   const MIN_BREAK_TIME = 1.2;
-  const MAX_APPROACH_TIME = 12; // failsafe: re-evaluate if approach drags
+  const MAX_APPROACH_TIME = 12;
 
   if (ship.attackState === "approach") {
     ship.approachTimer += dt;
-
-    // Aim at the lead target. Heading rotates toward it at turnRate, and
-    // the fighter's velocity is locked to its nose direction — so the
-    // curving pursuit emerges from the turn-rate limit. At close range
-    // bearing rotates faster than the fighter can bank, producing a
-    // natural overshoot (the strafe pass).
     const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
-    c.thrust = { x: 0, y: 0 }; // unused for fighters; kept tidy
+    c.thrust = { x: 0, y: 0 };
     c.aim = leadVec;
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     const aimNorm = V.norm(leadVec);
     const aligned = V.dot(fwd, aimNorm);
     c.firing = dist <= s.weapon.range && aligned > 0.92;
 
-    // Break when the fighter has gotten close AND is now moving away
-    // from the target (i.e., it has passed).
     const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
     const inPassZone = dist < PASS_ZONE_DIST;
     const settled = ship.approachTimer > 0.5;
@@ -207,9 +201,6 @@ function flybyAI(ship, target, dt, world) {
       ship.approachTimer = 0;
     }
   } else {
-    // Break: aim tangent to the target on the chosen side, biased outward,
-    // so the fighter banks into a wide curving exit. Velocity follows nose
-    // direction (turn-rate-limited), producing a smooth arc.
     const tangX = perp.x * ship.breakSide;
     const tangY = perp.y * ship.breakSide;
     const outX = -dir.x;
@@ -224,18 +215,14 @@ function flybyAI(ship, target, dt, world) {
     ship.breakTimer -= dt;
     const minTimeMet = ship.breakTimer <= 0;
     const farEnough = dist > REGROUP_DIST;
-    // Failsafe: if we've been breaking forever, just commit to a new pass.
     const breakOverdue = ship.breakTimer <= -3.0;
     if ((minTimeMet && farEnough) || breakOverdue) {
       ship.attackState = "approach";
-      ship.breakSide = -ship.breakSide; // alternate -> figure-8
+      ship.breakSide = -ship.breakSide;
       ship.approachTimer = 0;
     }
   }
 
-  // Blend in pack cohesion + big-ship danger over the primary aim.
-  // Cohesion is a soft pull toward packmates; danger is a strong push out
-  // of broadside arcs. Magnitudes set the relative pull on heading angle.
   const pack = world && world.packs ? world.packs.get(ship.packId) : null;
   const cohesion = packCohesion(ship, pack);
   const danger = bigShipDanger(ship, world ? world.ships : []);
@@ -247,13 +234,84 @@ function flybyAI(ship, target, dt, world) {
     if (danger)   { ax += danger.x   * 1.30; ay += danger.y   * 1.30; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
     c.aim = { x: ax, y: ay };
-    // While dodging a capital firing arc, stop firing — the nose isn't on target.
     if (danger) c.firing = false;
+  }
+
+  // AI-fired missile: launch at fat targets when the cooldowns are ready,
+  // we're roughly nose-on, and the target is large enough to be worth one.
+  c.firingMissile = false;
+  if (s.missile && ship.missileCd <= 0 && ship.aiMissileCd <= 0) {
+    const worthIt = (target.klass !== "fighter") || (target.spec.radius >= 40);
+    if (worthIt && dist < s.missile.acquireRange * 0.9) {
+      const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+      const aimedAtTarget = (dir.x * fwd.x + dir.y * fwd.y) > 0.7;
+      if (aimedAtTarget) {
+        c.firingMissile = true;
+        ship.aiMissileCd = s.aiMissileCooldown || s.missile.cooldown;
+      }
+    }
   }
 }
 
-// Frigate / cruiser / battleship: orbit at preferred range. Heavy hulls hold
-// position when in the orbit band; lighter and broadside hulls strafe.
+// ---------------------------------------------------------------------------
+// Battleship behaviour: rush enemy battleships nose-first; only turn to
+// broadside once within barrage range.
+// ---------------------------------------------------------------------------
+function battleshipAI(ship, target, dt) {
+  const c = ship.controller;
+  const s = ship.spec;
+  const rel = V.sub(target.pos, ship.pos);
+  const dist = V.len(rel);
+  const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
+
+  const barrageRange = s.weapon.range;
+  // Threshold for switching from rush -> broadside. A small hysteresis stops
+  // chatter at the range edge. Use a slightly inside-of-max engagement band.
+  const ENGAGE_DIST = barrageRange * 0.85;
+  if (ship.battleshipMode === undefined) ship.battleshipMode = "rush";
+  if (ship.battleshipMode === "rush" && dist <= ENGAGE_DIST) {
+    ship.battleshipMode = "broadside";
+  } else if (ship.battleshipMode === "broadside" && dist > barrageRange * 1.05) {
+    ship.battleshipMode = "rush";
+  }
+
+  if (ship.battleshipMode === "rush") {
+    // Sprint at the target: aim nose at it and apply full forward thrust.
+    c.thrust = { x: dir.x, y: dir.y };
+    c.aim = { x: rel.x, y: rel.y };
+    // Firing flag matters for the broadside arc check; allow it — the arc
+    // check itself will refuse to fire while we're nose-on.
+    c.firing = true;
+    c.firingMissile = false;
+    return;
+  }
+
+  // Broadside engagement (similar to the prior orbitAI broadside branch).
+  const orbit = s.aiOrbit;
+  let thrust;
+  if (dist > orbit * 1.15) {
+    thrust = dir;
+  } else if (dist < orbit * 0.85) {
+    thrust = { x: -dir.x, y: -dir.y };
+  } else {
+    const sign = (ship.id % 2 === 0) ? 1 : -1;
+    thrust = { x: -dir.y * sign, y: dir.x * sign };
+  }
+  c.thrust = thrust;
+
+  // Turn so a broadside (perpendicular axis) faces the target.
+  const perpA = { x: -dir.y, y: dir.x };
+  const perpB = { x: dir.y, y: -dir.x };
+  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+  c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
+  c.firing = true;
+  c.firingMissile = false;
+}
+
+// ---------------------------------------------------------------------------
+// Frigate / cruiser: orbit at preferred range. Heavy hulls hold position when
+// in the orbit band; lighter and broadside hulls strafe.
+// ---------------------------------------------------------------------------
 function orbitAI(ship, target, dt) {
   const c = ship.controller;
   const s = ship.spec;
@@ -265,9 +323,9 @@ function orbitAI(ship, target, dt) {
   const orbit = s.aiOrbit;
   let thrust;
   if (dist > orbit * 1.15) {
-    thrust = dir; // close in
+    thrust = dir;
   } else if (dist < orbit * 0.85) {
-    thrust = { x: -dir.x, y: -dir.y }; // back off
+    thrust = { x: -dir.x, y: -dir.y };
   } else {
     const shouldStrafe = isBroadside || ship.klass === "frigate";
     if (shouldStrafe) {
@@ -280,17 +338,12 @@ function orbitAI(ship, target, dt) {
   c.thrust = thrust;
 
   if (isBroadside) {
-    // Turn so a broadside (perpendicular axis) faces the target. Pick
-    // whichever of the two perpendiculars is closer to current heading
-    // to minimize rotation churn.
     const perpA = { x: -dir.y, y: dir.x };
     const perpB = { x: dir.y, y: -dir.x };
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
-    // Broadside firing is gated by per-side arc check, not this flag.
     c.firing = true;
   } else {
-    // Forward firing: aim with lead, fire when nose is on target.
     const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
     c.aim = leadVec;
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
@@ -298,4 +351,6 @@ function orbitAI(ship, target, dt) {
     const aligned = V.dot(fwd, aimNorm);
     c.firing = dist <= s.weapon.range && aligned > 0.9;
   }
+
+  c.firingMissile = false;
 }
