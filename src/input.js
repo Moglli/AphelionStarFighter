@@ -2,6 +2,8 @@
 // for desktop play. The aim direction is computed relative to canvas
 // center because the camera follows the player ship, so center == player.
 
+import { MAP_SIZES } from "./arena.js";
+
 const DEADZONE = 0.15;
 
 export class VirtualStick {
@@ -118,12 +120,81 @@ export class MissileButton {
   }
 }
 
+// Pre-match menu: lets the player pick a map size before the world spawns.
+// Rendering and hit-test layout live together so the rectangles stay in
+// sync with the visible buttons.
+export class StartMenu {
+  constructor() {
+    this.options = MAP_SIZES;
+    this.rects = []; // recomputed each layout()
+    this.justClicked = null;
+  }
+  layout(viewW, viewH) {
+    const n = this.options.length;
+    const btnW = Math.min(220, (viewW - 80) / n - 20);
+    const btnH = 100;
+    const gap = 20;
+    const totalW = n * btnW + (n - 1) * gap;
+    const startX = (viewW - totalW) / 2;
+    const y = viewH / 2 - btnH / 2 + 20;
+    this.rects = this.options.map((o, i) => ({
+      ...o,
+      x: startX + i * (btnW + gap),
+      y, w: btnW, h: btnH,
+    }));
+  }
+  hitTest(x, y) {
+    for (const r of this.rects) {
+      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+    }
+    return null;
+  }
+  click(x, y) {
+    const r = this.hitTest(x, y);
+    if (r) this.justClicked = r;
+  }
+  consumeClick() {
+    const r = this.justClicked;
+    this.justClicked = null;
+    return r;
+  }
+  draw(ctx, viewW, viewH) {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, viewW, viewH);
+    ctx.fillStyle = "#cef";
+    ctx.textAlign = "center";
+    ctx.font = "bold 36px system-ui, sans-serif";
+    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 120);
+    ctx.font = "16px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.fillText("Choose map size", viewW / 2, viewH / 2 - 90);
+    for (const r of this.rects) {
+      ctx.fillStyle = "rgba(20,40,60,0.85)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = "#7df";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 22px system-ui, sans-serif";
+      ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 - 2);
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillStyle = "#9bd";
+      ctx.fillText(`${r.mapW} × ${r.mapH}`, r.x + r.w / 2, r.y + r.h / 2 + 18);
+    }
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+}
+
 export class InputManager {
   constructor(canvas) {
     this.canvas = canvas;
     this.left = new VirtualStick({ side: "left", color: "#5cf" });
     this.right = new VirtualStick({ side: "right", color: "#f76" });
     this.missileBtn = new MissileButton();
+    this.startMenu = new StartMenu();
+    this.menuActive = false;
 
     this.keys = new Set();
     this.mouse = { x: 0, y: 0 };
@@ -170,12 +241,20 @@ export class InputManager {
 
   layoutOverlays(viewW, viewH) {
     this.missileBtn.layout(viewW, viewH);
+    this.startMenu.layout(viewW, viewH);
   }
 
   onDown(e) {
     e.preventDefault();
     const { x, y } = this.pos(e);
     this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+
+    // Pre-match menu: route the click to size-selection and swallow
+    // everything else.
+    if (this.menuActive) {
+      this.startMenu.click(x, y);
+      return;
+    }
 
     // Missile button hit-test first — works for both touch and mouse.
     if (this.missileBtn.hit(x, y)) {

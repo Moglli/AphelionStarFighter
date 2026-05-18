@@ -67,10 +67,45 @@ export function updateAI(ship, world, dt) {
   if (ship.klass === "fighter") {
     flybyAI(ship, target, dt, world);
   } else if (ship.klass === "battleship") {
-    battleshipAI(ship, target, dt);
+    battleshipAI(ship, target, dt, world);
   } else {
-    orbitAI(ship, target, dt);
+    orbitAI(ship, target, dt, world);
   }
+}
+
+// Steering force that pushes a capital ship away from any other capital it
+// is getting too close to (friendly or enemy). Buffer is just the hulls
+// plus a small margin, so engagement at orbit ranges is unaffected; only
+// near-collisions are nudged apart.
+function capitalSeparation(ship, ships) {
+  let ax = 0, ay = 0;
+  const myR = ship.spec.radius;
+  for (const o of ships) {
+    if (o.dead || o === ship) continue;
+    if (o.klass === "fighter") continue;
+    const dx = ship.pos.x - o.pos.x;
+    const dy = ship.pos.y - o.pos.y;
+    const sep = myR + o.spec.radius + 90;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > sep * sep || d2 < 1e-6) continue;
+    const d = Math.sqrt(d2);
+    const strength = 1 - d / sep;
+    ax += (dx / d) * strength;
+    ay += (dy / d) * strength;
+  }
+  if (Math.abs(ax) < 1e-6 && Math.abs(ay) < 1e-6) return null;
+  return { x: ax, y: ay };
+}
+
+function blendThrustWithSeparation(thrust, sep, weight) {
+  if (!sep) return thrust;
+  const tx = thrust.x + sep.x * weight;
+  const ty = thrust.y + sep.y * weight;
+  const l = Math.hypot(tx, ty);
+  if (l <= 1e-6) return { x: 0, y: 0 };
+  // Re-normalize so thrust magnitude doesn't exceed 1 (which would clip
+  // back to maxSpeed inside the ship update anyway).
+  return l > 1 ? { x: tx / l, y: ty / l } : { x: tx, y: ty };
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +292,7 @@ function flybyAI(ship, target, dt, world) {
 // Battleship behaviour: rush enemy battleships nose-first; only turn to
 // broadside once within barrage range.
 // ---------------------------------------------------------------------------
-function battleshipAI(ship, target, dt) {
+function battleshipAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
   const rel = V.sub(target.pos, ship.pos);
@@ -265,8 +300,6 @@ function battleshipAI(ship, target, dt) {
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
 
   const barrageRange = s.weapon.range;
-  // Threshold for switching from rush -> broadside. A small hysteresis stops
-  // chatter at the range edge. Use a slightly inside-of-max engagement band.
   const ENGAGE_DIST = barrageRange * 0.85;
   if (ship.battleshipMode === undefined) ship.battleshipMode = "rush";
   if (ship.battleshipMode === "rush" && dist <= ENGAGE_DIST) {
@@ -275,18 +308,20 @@ function battleshipAI(ship, target, dt) {
     ship.battleshipMode = "rush";
   }
 
+  const sep = capitalSeparation(ship, world ? world.ships : []);
+
   if (ship.battleshipMode === "rush") {
-    // Sprint at the target: aim nose at it and apply full forward thrust.
-    c.thrust = { x: dir.x, y: dir.y };
+    let thrust = { x: dir.x, y: dir.y };
+    // Separation has a hard floor under rush — we still want to close the
+    // distance, but not by ramming a friendly battleship along the way.
+    thrust = blendThrustWithSeparation(thrust, sep, 0.9);
+    c.thrust = thrust;
     c.aim = { x: rel.x, y: rel.y };
-    // Firing flag matters for the broadside arc check; allow it — the arc
-    // check itself will refuse to fire while we're nose-on.
     c.firing = true;
     c.firingMissile = false;
     return;
   }
 
-  // Broadside engagement (similar to the prior orbitAI broadside branch).
   const orbit = s.aiOrbit;
   let thrust;
   if (dist > orbit * 1.15) {
@@ -297,9 +332,9 @@ function battleshipAI(ship, target, dt) {
     const sign = (ship.id % 2 === 0) ? 1 : -1;
     thrust = { x: -dir.y * sign, y: dir.x * sign };
   }
+  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
   c.thrust = thrust;
 
-  // Turn so a broadside (perpendicular axis) faces the target.
   const perpA = { x: -dir.y, y: dir.x };
   const perpB = { x: dir.y, y: -dir.x };
   const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
@@ -312,7 +347,7 @@ function battleshipAI(ship, target, dt) {
 // Frigate / cruiser: orbit at preferred range. Heavy hulls hold position when
 // in the orbit band; lighter and broadside hulls strafe.
 // ---------------------------------------------------------------------------
-function orbitAI(ship, target, dt) {
+function orbitAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
   const rel = V.sub(target.pos, ship.pos);
@@ -335,6 +370,10 @@ function orbitAI(ship, target, dt) {
       thrust = { x: 0, y: 0 };
     }
   }
+  // Capitals nudge apart from each other so they don't clump on the same
+  // target and ram hulls.
+  const sep = capitalSeparation(ship, world ? world.ships : []);
+  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
   c.thrust = thrust;
 
   if (isBroadside) {

@@ -1,5 +1,5 @@
 import {
-  createGame, update, restart,
+  createGame, update, restart, startGame,
   enterSpectate, exitSpectate, cycleSpectate, getSpectateTarget,
 } from "./game.js";
 import { drawArena, drawArenaBounds, ARENA } from "./arena.js";
@@ -43,26 +43,35 @@ function frame(now) {
   if (delta > MAX_ACCUM) delta = MAX_ACCUM;
   accum += delta;
 
-  // Player input → controller.
-  const ctrl = input.controller();
-  game.playerController.thrust = ctrl.thrust;
-  game.playerController.aim = ctrl.aim;
-  game.playerController.firing = ctrl.firing;
-  // Edge-triggered missile fire. The flag is consumed inside updateShip.
-  // Clear stale presses when there's no live player to fire.
-  game.playerController.firingMissile = input.consumeMissilePress();
+  // Let the input layer know whether the start menu is up so it can
+  // intercept clicks before forwarding them to gameplay controls.
+  input.menuActive = game.state === "menu";
 
-  // Spectate hotkeys.
-  if (input.consumeSpectateToggle()) {
-    if (game.spectating) exitSpectate(game);
-    else enterSpectate(game);
-  }
-  if (game.spectating) {
-    if (input.consumeSpectateNext()) cycleSpectate(game, +1);
-    if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
-  }
+  if (game.state === "menu") {
+    const choice = input.startMenu.consumeClick();
+    if (choice) startGame(game, choice.mapW, choice.mapH);
+  } else {
+    // Player input → controller.
+    const ctrl = input.controller();
+    game.playerController.thrust = ctrl.thrust;
+    game.playerController.aim = ctrl.aim;
+    game.playerController.firing = ctrl.firing;
+    // Edge-triggered missile fire. The flag is consumed inside updateShip.
+    // Clear stale presses when there's no live player to fire.
+    game.playerController.firingMissile = input.consumeMissilePress();
 
-  if (game.matchOver && input.consumeEnterPress()) restart(game);
+    // Spectate hotkeys.
+    if (input.consumeSpectateToggle()) {
+      if (game.spectating) exitSpectate(game);
+      else enterSpectate(game);
+    }
+    if (game.spectating) {
+      if (input.consumeSpectateNext()) cycleSpectate(game, +1);
+      if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
+    }
+
+    if (game.matchOver && input.consumeEnterPress()) restart(game);
+  }
 
   while (accum >= FIXED_DT) {
     update(game, FIXED_DT);
@@ -102,12 +111,12 @@ function draw() {
 
   ctx.restore();
 
-  drawHUD(ctx, game, viewW, viewH, input.missileBtn);
+  drawHUD(ctx, game, viewW, viewH, input.missileBtn, input.startMenu);
   input.drawSticks(ctx);
 }
 
 window.addEventListener("pointerdown", () => {
-  if (game.matchOver) restart(game);
+  if (game.matchOver && game.state === "playing") restart(game);
 });
 
 requestAnimationFrame(frame);

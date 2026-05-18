@@ -36,6 +36,10 @@ export function createShip({ klass, side, pos, heading = 0, controller }) {
     podCooldowns: spec.missilePods ? new Array(spec.missilePods.count).fill(0) : null,
     // Heavy laser cooldown.
     laserCd: 0,
+    // Cannon magazine (only used when spec.weapon.capacity is set).
+    weaponAmmo: spec.weapon && spec.weapon.capacity ? spec.weapon.capacity : 0,
+    weaponReloading: false,
+    weaponReloadTimer: 0,
   };
   return ship;
 }
@@ -109,9 +113,26 @@ export function updateShip(ship, dt, world) {
     updateBroadsideFire(ship, world);
   } else {
     ship.cooldown -= dt;
-    if (c.firing && c.aim && ship.cooldown <= 0) {
+    // Magazine reload: when empty, the timer ticks down and then refills.
+    if (s.weapon.capacity != null && ship.weaponReloading) {
+      ship.weaponReloadTimer -= dt;
+      if (ship.weaponReloadTimer <= 0) {
+        ship.weaponAmmo = s.weapon.capacity;
+        ship.weaponReloading = false;
+        ship.weaponReloadTimer = 0;
+      }
+    }
+    const hasAmmo = s.weapon.capacity == null || ship.weaponAmmo > 0;
+    if (c.firing && c.aim && ship.cooldown <= 0 && hasAmmo) {
       fireForward(ship, world);
       ship.cooldown = s.weapon.cooldown;
+      if (s.weapon.capacity != null) {
+        ship.weaponAmmo -= 1;
+        if (ship.weaponAmmo <= 0) {
+          ship.weaponReloading = true;
+          ship.weaponReloadTimer = s.weapon.reloadTime;
+        }
+      }
     }
   }
 

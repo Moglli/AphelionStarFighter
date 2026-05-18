@@ -20,7 +20,7 @@ export const CLASSES = {
     name: "Fighter",
     role: "Interceptor",
     hp: 35,
-    maxSpeed: 300,
+    maxSpeed: 400,
     accel: 700,
     drag: 0.985,
     turnRate: 3.2,
@@ -31,11 +31,15 @@ export const CLASSES = {
       damage: 4,
       cooldown: 0.18,
       projectileSpeed: 760,
-      range: 520,
+      range: 900,
       spread: 0.05,
       muzzles: 1,
       projectileRadius: 4,
       projectileColors: { blue: "#7df", red: "#fb8" },
+      // Magazine: fires up to `capacity` rounds, then reloads over
+      // `reloadTime` seconds before the mag refills.
+      capacity: 30,
+      reloadTime: 0.6,
     },
     shield: { max: 24, regen: 8, regenDelay: 3.0 },
     missile: {

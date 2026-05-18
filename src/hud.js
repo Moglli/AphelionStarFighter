@@ -1,5 +1,5 @@
 import { CLASSES, SIDES } from "./classes.js";
-import { ARENA } from "./arena.js";
+import { ARENA, MAP_SIZES } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
 
 const CLASS_ORDER = ["fighter", "frigate", "cruiser", "battleship"];
@@ -13,7 +13,12 @@ function countBySide(ships) {
   return out;
 }
 
-export function drawHUD(ctx, game, viewW, viewH, missileBtn) {
+export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
+  if (game.state === "menu") {
+    if (startMenu) startMenu.draw(ctx, viewW, viewH);
+    return;
+  }
+
   const counts = countBySide(game.ships);
 
   drawSideStrip(ctx, counts.blue, "blue", 16, 16, "left");
@@ -104,6 +109,34 @@ function drawPlayerHUD(ctx, player, viewW, viewH, missileBtn) {
   ctx.textAlign = "center";
   ctx.fillText(`HULL ${Math.max(0, Math.round(player.hp))} / ${player.hpMax}`, viewW / 2, y - 3);
   ctx.textAlign = "left";
+
+  // Cannon ammo readout: a short bar below the hull bar.
+  if (player.spec.weapon && player.spec.weapon.capacity != null) {
+    const cap = player.spec.weapon.capacity;
+    const ay = y + h + 4;
+    const aw = w, ah = 8;
+    ctx.fillStyle = "#221";
+    ctx.fillRect(x, ay, aw, ah);
+    if (player.weaponReloading) {
+      const frac = 1 - (player.weaponReloadTimer / player.spec.weapon.reloadTime);
+      ctx.fillStyle = "#fa3";
+      ctx.fillRect(x, ay, aw * frac, ah);
+    } else {
+      ctx.fillStyle = "#fd6";
+      ctx.fillRect(x, ay, aw * (player.weaponAmmo / cap), ah);
+    }
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, ay, aw, ah);
+    ctx.fillStyle = "#fff";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const label = player.weaponReloading
+      ? `GUN RELOADING ${Math.max(0, player.weaponReloadTimer).toFixed(1)}s`
+      : `GUN ${player.weaponAmmo} / ${cap}`;
+    ctx.fillText(label, viewW / 2, ay + ah + 9);
+    ctx.textAlign = "left";
+  }
 
   // Missile cooldown indicator: also drawn through the on-screen button.
   if (missileBtn) {

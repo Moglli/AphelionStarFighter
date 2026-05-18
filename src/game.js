@@ -1,4 +1,4 @@
-import { ARENA, randomSpawnPos, createStarfield } from "./arena.js";
+import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
 import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
@@ -21,6 +21,9 @@ let nextPackId = 1;
 let nextPackRoleIdx = 0;
 
 export function createGame() {
+  // Default map size for the menu backdrop. Replaced when the user picks
+  // a size in startGame.
+  setArenaSize(7000, 5000);
   const game = {
     ships: [],
     projectiles: [],
@@ -36,13 +39,29 @@ export function createGame() {
     respawnTimer: 0,
     matchOver: false,
     winner: null,
-    // Spectate state. When `spectating` is true the player ship is not
-    // present and the camera follows `spectateTargetId`.
     spectating: false,
     spectateTargetId: null,
+    // Lifecycle: "menu" before the player picks a map size, "playing"
+    // once a match is in progress.
+    state: "menu",
   };
-  spawnRoster(game);
   return game;
+}
+
+// Called from main when the player picks a map size on the start menu.
+export function startGame(game, mapW, mapH) {
+  setArenaSize(mapW, mapH);
+  game.starfield = createStarfield();
+  game.ships = [];
+  game.projectiles = [];
+  game.beams = [];
+  game.respawnTimer = 0;
+  game.matchOver = false;
+  game.winner = null;
+  game.spectating = false;
+  game.spectateTargetId = null;
+  game.state = "playing";
+  spawnRoster(game);
 }
 
 function spawnRoster(game) {
@@ -123,6 +142,11 @@ function promotePlayer(game) {
   candidate.shieldHitTimer = 999;
   candidate.heading = 0;
   candidate.missileCd = 0;
+  if (candidate.spec.weapon && candidate.spec.weapon.capacity) {
+    candidate.weaponAmmo = candidate.spec.weapon.capacity;
+    candidate.weaponReloading = false;
+    candidate.weaponReloadTimer = 0;
+  }
   return candidate;
 }
 
@@ -173,6 +197,8 @@ export function getSpectateTarget(game) {
 // Tick.
 // ---------------------------------------------------------------------------
 export function update(game, dt) {
+  if (game.state !== "playing") return;
+
   game.packs = computePacks(game.ships);
 
   for (const ship of game.ships) {
@@ -268,6 +294,8 @@ export function update(game, dt) {
   }
 }
 
+// Return to the start menu. The user picks a (possibly new) map size and
+// startGame spawns a fresh match.
 export function restart(game) {
   game.ships = [];
   game.projectiles = [];
@@ -275,11 +303,9 @@ export function restart(game) {
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
-  spawnRoster(game);
-  if (game.spectating) {
-    const t = pickSpectateInitial(game);
-    game.spectateTargetId = t ? t.id : null;
-  }
+  game.spectating = false;
+  game.spectateTargetId = null;
+  game.state = "menu";
 }
 
 // ---------------------------------------------------------------------------
