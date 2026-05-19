@@ -205,11 +205,22 @@ export function updateShip(ship, dt, world) {
   const s = ship.spec;
   const c = ship.controller;
 
-  // Engine module gating — when the engine is destroyed the ship loses
-  // propulsion entirely. Current velocity bleeds away exponentially
-  // (dead-in-the-water drift) and the thrust controller is ignored.
-  const engineDead = ship.moduleByName && ship.moduleByName.engine
-                  && ship.moduleByName.engine.disabled;
+  // Engine module gating — each visible plume is its own targetable
+  // module (engine-0 .. engine-N-1). Lose half your engines, fly at half
+  // speed. Lose them all and the ship goes dead in the water (drifting
+  // velocity exponentially decays).
+  let aliveEngines = 0, totalEngines = 0;
+  if (ship.modules) {
+    for (const m of ship.modules) {
+      if (m.name[0] === "e" && m.name.startsWith("engine")) {
+        totalEngines++;
+        if (!m.disabled) aliveEngines++;
+      }
+    }
+  }
+  const engineFrac = totalEngines > 0 ? aliveEngines / totalEngines : 1;
+  const engineDead = totalEngines > 0 && aliveEngines === 0;
+  const effMaxSpeed = s.maxSpeed * engineFrac;
 
   // Fighters and bombers use an aircraft flight model: velocity is locked
   // to nose direction at constant maxSpeed. They cannot strafe or
@@ -221,23 +232,23 @@ export function updateShip(ship, dt, world) {
     ship.vel.x *= decay;
     ship.vel.y *= decay;
   } else if (ship.klass === "fighter" || ship.klass === "bomber") {
-    ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
-    ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+    ship.vel.x = Math.cos(ship.heading) * effMaxSpeed;
+    ship.vel.y = Math.sin(ship.heading) * effMaxSpeed;
   } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
     const t = V.clampLen(c.thrust, 1);
-    ship.vel.x = t.x * s.maxSpeed;
-    ship.vel.y = t.y * s.maxSpeed;
+    ship.vel.x = t.x * effMaxSpeed;
+    ship.vel.y = t.y * effMaxSpeed;
   } else if (ship.isPlayer) {
-    // Player never decelerates — keep flying at maxSpeed in current
+    // Player never decelerates — keep flying at effMaxSpeed in current
     // direction; fall back to heading when there's no prior velocity
     // (game start / respawn).
     const curLen = Math.hypot(ship.vel.x, ship.vel.y);
     if (curLen > 1e-6) {
-      ship.vel.x = (ship.vel.x / curLen) * s.maxSpeed;
-      ship.vel.y = (ship.vel.y / curLen) * s.maxSpeed;
+      ship.vel.x = (ship.vel.x / curLen) * effMaxSpeed;
+      ship.vel.y = (ship.vel.y / curLen) * effMaxSpeed;
     } else {
-      ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
-      ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+      ship.vel.x = Math.cos(ship.heading) * effMaxSpeed;
+      ship.vel.y = Math.sin(ship.heading) * effMaxSpeed;
     }
   } else {
     ship.vel.x = 0;
@@ -254,14 +265,15 @@ export function updateShip(ship, dt, world) {
   if (ship.pos.y < b.minY + s.radius) { ship.pos.y = b.minY + s.radius; if (ship.vel.y < 0) ship.vel.y = 0; }
   if (ship.pos.y > b.maxY - s.radius) { ship.pos.y = b.maxY - s.radius; if (ship.vel.y > 0) ship.vel.y = 0; }
 
-  // Rotate heading toward aim direction at class turn rate. Engine death
-  // also tanks turn rate — without main thrust the ship can barely
-  // adjust attitude on residual RCS.
+  // Rotate heading toward aim direction. Turn rate scales with the
+  // fraction of engines still alive: lose half your engines, turn at
+  // half speed. When every engine is gone we still allow 15% residual
+  // RCS so the silhouette can slowly drift its attitude.
   if (c.aim && (c.aim.x !== 0 || c.aim.y !== 0)) {
     const target = V.angle(c.aim);
     const delta = V.angleDelta(ship.heading, target);
-    const turnRate = engineDead ? s.turnRate * 0.15 : s.turnRate;
-    const step = Math.sign(delta) * Math.min(Math.abs(delta), turnRate * dt);
+    const turnScale = engineDead ? 0.15 : Math.max(0.15, engineFrac);
+    const step = Math.sign(delta) * Math.min(Math.abs(delta), s.turnRate * turnScale * dt);
     ship.heading += step;
   }
 
@@ -784,13 +796,11 @@ function updateHeavyLaser(ship, world) {
 // Rendering.
 // ---------------------------------------------------------------------------
 
-// Live engine glow / thrust plume. Replaces the previously-baked sprite
-// glow so the visual reacts to the engine module's HP — full brightness
-// when healthy, dimmer + jittery when damaged, completely off when the
-// engine is destroyed (the module's crater marker handles the dead-look).
-// Called inside the ship's rotated frame; ship faces +X so the glow
-// sits at -R on the X axis. ENGINES / ENGINE_X define count and rear
-// offset per class (lifted from the old sprite code, unchanged values).
+// Live engine glow / thrust plumes. Each plume corresponds to its own
+// targetable engine module (engine-0, engine-1, ...). A plume's
+// intensity scales with its module's HP — bright when healthy, dim and
+// jittery near death, fully extinguished when that module is destroyed
+// (the module-marker pass then paints the crater over the dead nozzle).
 function drawEnginePlumes(ctx, ship) {
   const klass = ship.klass;
   const count = ENGINES[klass] || 0;
@@ -798,24 +808,20 @@ function drawEnginePlumes(ctx, ship) {
   const R = ship.spec.radius;
   const side = ship.side;
 
-  // Intensity falls off with engine HP; full black-out when disabled.
-  let intensity = 1;
-  const eng = ship.moduleByName && ship.moduleByName.engine;
-  if (eng) {
-    if (eng.disabled) return;
-    const frac = eng.hp / eng.hpMax;
-    intensity = 0.35 + frac * 0.65; // 35% at near-death, 100% at full
-    if (frac < 0.4) {
-      // Stutter visible when the engine is heavily damaged.
-      intensity *= 0.7 + Math.random() * 0.3;
-    }
-  }
-
   const ex = (ENGINE_X[klass] || -0.9) * R;
   const glowHi = side === "blue" ? "rgba(140,210,255," : "rgba(255,180,100,";
   const glowMid = side === "blue" ? "rgba(80,170,255,"  : "rgba(255,130,60,";
   const glowR = R * (klass === "fighter" ? 0.18 : 0.14);
   for (let i = 0; i < count; i++) {
+    // Per-plume gating: read this engine module's state.
+    const eng = ship.moduleByName && ship.moduleByName["engine-" + i];
+    if (eng && eng.disabled) continue;
+    let intensity = 1;
+    if (eng) {
+      const frac = eng.hp / eng.hpMax;
+      intensity = 0.35 + frac * 0.65;
+      if (frac < 0.4) intensity *= 0.7 + Math.random() * 0.3;
+    }
     const yOff = count === 1 ? 0 : ((i / (count - 1)) - 0.5) * R * 1.05;
     const g = ctx.createRadialGradient(ex, yOff, 0, ex, yOff, glowR * 2.4);
     g.addColorStop(0.0, glowHi + (0.95 * intensity).toFixed(3) + ")");
@@ -825,7 +831,6 @@ function drawEnginePlumes(ctx, ship) {
     ctx.beginPath();
     ctx.arc(ex, yOff, glowR * 2.4, 0, Math.PI * 2);
     ctx.fill();
-    // Bright white-hot core dot.
     ctx.fillStyle = "rgba(240,250,255," + (0.95 * intensity).toFixed(3) + ")";
     ctx.beginPath();
     ctx.arc(ex + R * 0.02, yOff, glowR * 0.35, 0, Math.PI * 2);
