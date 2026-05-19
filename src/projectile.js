@@ -33,6 +33,7 @@ export function createMissile({
   pos, heading, damage, ttl, radius, color, side, ownerId,
   speed, turnRate, hp = 1, fromKlass = null, acquireRange = 2000,
   initialTarget = null, targetModuleName = null,
+  cluster = null,
 }) {
   return {
     pos: { ...pos },
@@ -56,6 +57,11 @@ export function createMissile({
     // module on the target ship (rather than the ship's center). Falls
     // back to ship-center homing if the module is destroyed mid-flight.
     targetModuleName,
+    // Cluster config (battleship pods). When non-null, the missile blooms
+    // into N smaller child warheads once it gets within bloomDistance of
+    // its target. Children inherit side / ownerId but not the cluster
+    // tag, so they don't recursively split.
+    cluster,
     trail: [], // recent positions for rendering
   };
 }
@@ -86,6 +92,23 @@ function updateMissile(m, dt, world) {
   }
 
   if (target) {
+    // Cluster bloom — once a cluster-tagged missile gets close enough
+    // to its target, it explodes into N smaller homing children that
+    // fan out toward the same target. The parent dies at bloom; the
+    // children carry their own much smaller payload + hp so PD has to
+    // intercept multiple tracks. Children don't carry `.cluster` so
+    // they don't recursively split.
+    if (m.cluster) {
+      const ddx = target.pos.x - m.pos.x;
+      const ddy = target.pos.y - m.pos.y;
+      const ddist2 = ddx * ddx + ddy * ddy;
+      const bloom = m.cluster.bloomDistance;
+      if (ddist2 <= bloom * bloom) {
+        spawnClusterChildren(m, target, world);
+        m.dead = true;
+        return;
+      }
+    }
     // Aim point: by default the ship center, but bombers home on a
     // specific module so a strike wave peels defences before the hull.
     let aimX = target.pos.x;
@@ -129,6 +152,44 @@ function updateMissile(m, dt, world) {
   m.pos.y += m.vel.y * dt;
   m.ttl -= dt;
   if (m.ttl <= 0) m.dead = true;
+}
+
+function spawnClusterChildren(parent, target, world) {
+  const cfg = parent.cluster;
+  const count = cfg.childCount || 5;
+  const spread = cfg.childSpread != null ? cfg.childSpread : 0.45;
+  const childSpeed = cfg.childSpeed || parent.speed * 1.05;
+  const childTurnRate = cfg.childTurnRate || parent.turnRate * 1.6;
+  const childTtl = cfg.childTtl || 2.5;
+  const childDamage = cfg.childDamage != null ? cfg.childDamage : Math.max(8, parent.damage * 0.25);
+  const childRadius = cfg.childRadius || Math.max(3, parent.radius * 0.6);
+  const childHp = cfg.childHp || 1;
+  // Heading toward the target at the moment of bloom, with each child
+  // offset around that heading by an angular spread so they cover area
+  // instead of stacking on top of each other. PD has to intercept
+  // multiple incoming tracks rather than one fat round.
+  const baseAng = Math.atan2(target.pos.y - parent.pos.y, target.pos.x - parent.pos.x);
+  for (let i = 0; i < count; i++) {
+    const offset = (count === 1) ? 0 : ((i - (count - 1) / 2) * (spread / Math.max(1, count - 1)));
+    const heading = baseAng + offset;
+    world.projectiles.push(createMissile({
+      pos: parent.pos,
+      heading,
+      damage: childDamage,
+      ttl: childTtl,
+      radius: childRadius,
+      color: parent.color,
+      side: parent.side,
+      ownerId: parent.ownerId,
+      speed: childSpeed,
+      turnRate: childTurnRate,
+      hp: childHp,
+      fromKlass: parent.fromKlass,
+      acquireRange: parent.acquireRange,
+      initialTarget: target,
+      // Children carry no .cluster so they don't recursively split.
+    }));
+  }
 }
 
 function acquireMissileTarget(m, ships) {

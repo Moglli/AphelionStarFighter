@@ -262,12 +262,22 @@ function drawMinimap(ctx, game, viewW, viewH) {
 export function drawBeams(ctx, game) {
   if (!game.beams || game.beams.length === 0) return;
   for (const beam of game.beams) {
-    const alpha = Math.max(0.2, Math.min(1, beam.ttl / 0.45));
+    // Alpha curve over the beam's lifetime — full brightness in the
+    // middle, soft falloff at start and end. Uses the recorded
+    // `duration` instead of a magic constant so the curve scales with
+    // whichever class fired the beam.
+    const dur = beam.duration || 1;
+    const frac = Math.max(0, Math.min(1, beam.ttl / dur));
+    const fadeOut = Math.min(1, frac * 5);     // last 20% fades
+    const fadeIn  = Math.min(1, (1 - frac) * 6); // first ~16% ramps
+    const alpha = Math.max(0.35, fadeOut * fadeIn);
+    // Tiny per-frame width jitter so a 3s sustained beam reads "live".
+    const wobble = 1 + Math.sin(performance.now() / 60 + beam.ownerId * 1.3) * 0.12;
     const hit = beam.hit || endPoint(beam);
     // Outer glow.
     ctx.globalAlpha = 0.4 * alpha;
     ctx.strokeStyle = beam.color;
-    ctx.lineWidth = 12;
+    ctx.lineWidth = 12 * wobble;
     ctx.beginPath();
     ctx.moveTo(beam.origin.x, beam.origin.y);
     ctx.lineTo(hit.x, hit.y);
@@ -275,7 +285,7 @@ export function drawBeams(ctx, game) {
     // Core.
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 * wobble;
     ctx.beginPath();
     ctx.moveTo(beam.origin.x, beam.origin.y);
     ctx.lineTo(hit.x, hit.y);

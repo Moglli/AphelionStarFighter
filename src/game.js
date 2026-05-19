@@ -722,35 +722,56 @@ function addImpactScar(ship, kind, localX, localY, dmg) {
 }
 
 // ---------------------------------------------------------------------------
-// Beam ticking. Each beam applies its damage to the locked target on the
-// first frame it exists, then lingers as visual for `ttl` seconds.
+// Beam ticking. The heavy laser is a SUSTAINED beam: each tick we
+// re-anchor the origin to the owner's current bow (so the beam tracks
+// the firing ship as it manoeuvres), deal `dps * dt` of damage to the
+// target if it's still alive and in range, and kill the beam early if
+// the owner ship has died or had its laser module shot off mid-fire.
 // ---------------------------------------------------------------------------
 function applyAndAgeBeams(game, dt) {
   if (!game.beams || game.beams.length === 0) return;
   for (const beam of game.beams) {
-    if (!beam.applied) {
-      // Verify target is still alive + still in range. If not, beam misses.
-      const t = beam.target;
-      if (t && !t.dead) {
-        const dx = t.pos.x - beam.origin.x;
-        const dy = t.pos.y - beam.origin.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= beam.range * beam.range) {
-          applyDamage(
-            t,
-            { damage: beam.damage, kind: "laser", fromKlass: "battleship", pos: { x: t.pos.x, y: t.pos.y } },
-            null,
-            game.particles,
-          );
-          if (t.hp <= 0) t.dead = true;
-          beam.hit = { x: t.pos.x, y: t.pos.y };
-        } else {
-          beam.hit = null;
-        }
+    // Owner check: if the firing ship died or its laser module is gone,
+    // the beam dies immediately (forcing ttl <= 0 so it's filtered out
+    // below). This prevents a beam from continuing to chew a target
+    // after the player has destroyed its emitter.
+    const owner = beam.ownerId != null
+      ? game.ships.find((s) => s.id === beam.ownerId)
+      : null;
+    const ownerLaserOk = !owner || !owner.moduleByName
+      || !owner.moduleByName.laser
+      || !owner.moduleByName.laser.disabled;
+    if (!owner || owner.dead || !ownerLaserOk) {
+      beam.ttl = 0;
+      beam.hit = null;
+      continue;
+    }
+    // Re-anchor the visible beam origin to the owner's live bow.
+    const fwd = { x: Math.cos(owner.heading), y: Math.sin(owner.heading) };
+    beam.origin.x = owner.pos.x + fwd.x * owner.spec.radius * 0.9;
+    beam.origin.y = owner.pos.y + fwd.y * owner.spec.radius * 0.9;
+
+    // Apply this tick's damage to the target if still alive + in range.
+    const t = beam.target;
+    if (t && !t.dead) {
+      const dx = t.pos.x - beam.origin.x;
+      const dy = t.pos.y - beam.origin.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= beam.range * beam.range) {
+        const tickDmg = beam.dps * dt;
+        applyDamage(
+          t,
+          { damage: tickDmg, kind: "laser", fromKlass: "battleship", pos: { x: t.pos.x, y: t.pos.y } },
+          null,
+          game.particles,
+        );
+        if (t.hp <= 0) t.dead = true;
+        beam.hit = { x: t.pos.x, y: t.pos.y };
       } else {
         beam.hit = null;
       }
-      beam.applied = true;
+    } else {
+      beam.hit = null;
     }
     beam.ttl -= dt;
   }

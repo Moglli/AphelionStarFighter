@@ -720,6 +720,10 @@ function updateMissilePodFire(ship, world) {
       acquireRange: pods.acquireRange,
       initialTarget: target,
       targetModuleName,
+      // Cluster config only set on classes that declare one (currently
+      // battleships). The missile carries the spec through to bloom
+      // time so updateMissile can split it on approach.
+      cluster: pods.cluster || null,
     }));
     ship.podCooldowns[i] = pods.cooldown;
   }
@@ -781,10 +785,15 @@ function pickLaserTarget(ship, world) {
   const range2 = l.range * l.range;
   const arcCos = Math.cos(l.arc);
   const fwd = V.fromAngle(ship.heading);
-  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2, fighter: 1 };
+  // Capital-only target table: aircraft (fighter / bomber) are too small
+  // and too cheap for a heavy laser to bother — they fall off the list
+  // entirely and the beam holds fire until a real ship of the line
+  // crosses the arc. PD turrets handle aircraft.
+  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2 };
   let bestRank = -1, bestD2 = Infinity, best = null;
   for (const o of world.ships) {
     if (o.dead || o.side === ship.side) continue;
+    if (o.klass === "fighter" || o.klass === "bomber") continue;
     const dx = o.pos.x - ship.pos.x;
     const dy = o.pos.y - ship.pos.y;
     const d2 = dx * dx + dy * dy;
@@ -818,12 +827,18 @@ function updateHeavyLaser(ship, world) {
     origin,
     target,       // the beam tracks the target while alive
     range: l.range,
+    // Sustained beam: total damage is spread across the beam's lifetime
+    // by game.js (dps = damage / duration), applied each tick to the
+    // target. Both fields are stored so the visual + damage layers can
+    // each pick what they need.
     damage: l.damage,
+    dps: l.damage / l.beamDuration,
+    duration: l.beamDuration,
     ttl: l.beamDuration,
     color: l.beamColors[ship.side],
     side: ship.side,
     ownerId: ship.id,
-    applied: false,
+    hit: null,
   });
   ship.laserCd = l.cooldown;
 }

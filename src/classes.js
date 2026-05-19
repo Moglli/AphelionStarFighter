@@ -257,24 +257,49 @@ export const CLASSES = {
     },
     missilePods: {
       count: 4,
-      damage: 65,
-      cooldown: 8.0,
+      // Parent missile is a slow heavy carrier — most of its job is
+      // delivering the cluster payload to bloom range. The headline
+      // `damage` is the direct-hit damage if it ever connects without
+      // splitting; total *cluster* damage = childCount * childDamage.
+      damage: 25,
+      cooldown: 9.5,
       projectileSpeed: 300,
       range: 2200,
       ttl: 7.5,
-      turnRate: 1.9,
-      hp: 3,
-      radius: 7,
+      turnRate: 1.8,
+      hp: 4,
+      radius: 9,
       acquireRange: 2400,
       colors: { blue: "#fff", red: "#fc8" },
+      // Cluster bloom: parent missile splits into N small homing
+      // warheads once it comes within bloomDistance of its target.
+      // Children fan out across childSpread radians from the
+      // approach heading so PD has to engage multiple tracks instead
+      // of one fat round.
+      cluster: {
+        bloomDistance: 420,
+        childCount: 5,
+        childSpread: 0.55,
+        childSpeed: 360,
+        childTurnRate: 3.2,
+        childTtl: 3.0,
+        childDamage: 28,
+        childRadius: 4,
+        childHp: 1,
+      },
     },
     heavyLaser: {
-      damage: 180,
-      cooldown: 5.0,
+      // Sustained beam: damage is spread across beamDuration (dps =
+      // damage / beamDuration). The beam re-anchors to the owner's
+      // bow each tick so it tracks the firing ship, and dies early
+      // if the owner is destroyed or the laser module is shot off
+      // mid-fire.
+      damage: 240,
+      cooldown: 6.0,
       range: 2400,
       // Firing arc from the bow (radians, half-angle).
       arc: Math.PI * 0.55,
-      beamDuration: 0.45,
+      beamDuration: 3.0,
       beamColors: { blue: "#9ef", red: "#fc7" },
     },
     aiRange: 1000,
