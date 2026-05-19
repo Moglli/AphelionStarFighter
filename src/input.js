@@ -9,6 +9,7 @@ import { MODES, MODE_KEYS } from "./modes/index.js";
 import { saveStore } from "./save.js";
 import { events } from "./events.js";
 import { todaySeed } from "./modes/daily.js";
+import { Hangar } from "./hangar.js";
 
 const DEADZONE = 0.15;
 
@@ -147,6 +148,7 @@ export class StartMenu {
     this.selectedSize = sel.mapSize || "medium";
     this.selectedRace = RACES[sel.race] ? sel.race : "terran";
     this.justStarted = null;
+    this.hangarRequested = false;
   }
 
   layout(viewW, viewH) {
@@ -206,13 +208,25 @@ export class StartMenu {
       y: raceY, w: raceBtnW, h: chipH,
     }));
 
-    // START button.
+    // START button + HANGAR button (sits to the left of START).
     const startW = 220, startH = 56;
+    const startY = raceY + chipH + 40;
     this.startRect = {
       x: (viewW - startW) / 2,
-      y: raceY + chipH + 40,
+      y: startY,
       w: startW, h: startH,
     };
+    this.hangarRect = {
+      x: this.startRect.x - 150 - 16,
+      y: startY,
+      w: 150, h: startH,
+    };
+  }
+
+  consumeHangarRequest() {
+    const r = this.hangarRequested;
+    this.hangarRequested = false;
+    return r;
   }
 
   /** True when daily mode is selected and the player already played today. */
@@ -254,6 +268,11 @@ export class StartMenu {
         this._persist();
         return;
       }
+    }
+    if (this.hangarRect && this._hit(this.hangarRect, x, y)) {
+      this.hangarRequested = true;
+      events.emit("uiClick", { source: "menu" });
+      return;
     }
     if (this.startRect && this._hit(this.startRect, x, y)) {
       if (this.dailyLocked()) {
@@ -341,6 +360,17 @@ export class StartMenu {
         r.label, race.tagline || "");
     }
 
+    // HANGAR button.
+    const h = this.hangarRect;
+    ctx.fillStyle = "rgba(40,60,100,0.85)";
+    ctx.fillRect(h.x, h.y, h.w, h.h);
+    ctx.strokeStyle = "#7df";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(h.x, h.y, h.w, h.h);
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("HANGAR", h.x + h.w / 2, h.y + h.h / 2 + 6);
+
     // START button.
     const s = this.startRect;
     const locked = this.dailyLocked();
@@ -360,8 +390,38 @@ export class StartMenu {
       ctx.fillText("START", s.x + s.w / 2, s.y + s.h / 2 + 8);
     }
 
+    // Profile strip — pinned top-right above the chips.
+    this._drawProfileStrip(ctx, viewW);
+
     ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  _drawProfileStrip(ctx, viewW) {
+    const data = saveStore.get();
+    const pad = 18;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fd6";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText(`${data.softCurrency}`, viewW - pad, pad + 18);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText("CREDITS", viewW - pad, pad + 32);
+
+    ctx.fillStyle = "#b6f";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText(`${data.hardCurrency}`, viewW - pad - 110, pad + 18);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText("APHELIUM", viewW - pad - 110, pad + 32);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText(`LV ${data.level}`, pad, pad + 18);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText(`XP ${data.xp}`, pad, pad + 32);
   }
 
   _drawChip(ctx, r, selected, label, sublabel) {
@@ -388,6 +448,10 @@ export class InputManager {
     this.right = new VirtualStick({ side: "right", color: "#f76" });
     this.missileBtn = new MissileButton();
     this.startMenu = new StartMenu();
+    this.hangar = new Hangar();
+    // Which pre-match panel is active. "menu" → start menu; "hangar" →
+    // hangar profile screen. Toggled by HANGAR / BACK buttons.
+    this.menuScreen = "menu";
     this.menuActive = false;
 
     this.keys = new Set();
@@ -436,6 +500,7 @@ export class InputManager {
   layoutOverlays(viewW, viewH) {
     this.missileBtn.layout(viewW, viewH);
     this.startMenu.layout(viewW, viewH);
+    this.hangar.layout(viewW, viewH);
   }
 
   onDown(e) {
@@ -443,10 +508,20 @@ export class InputManager {
     const { x, y } = this.pos(e);
     this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
 
-    // Pre-match menu: route the click to size-selection and swallow
-    // everything else.
+    // Pre-match panels: route the click to whichever screen is active
+    // and swallow everything else. Screen toggle handled below.
     if (this.menuActive) {
-      this.startMenu.click(x, y);
+      if (this.menuScreen === "hangar") {
+        this.hangar.click(x, y);
+        if (this.hangar.consumeBackRequest()) this.menuScreen = "menu";
+      } else {
+        this.startMenu.click(x, y);
+        if (this.startMenu.consumeHangarRequest()) {
+          // Re-layout in case the daily-claim chip needs to appear.
+          this.hangar.layout(this.canvas.clientWidth, this.canvas.clientHeight);
+          this.menuScreen = "hangar";
+        }
+      }
       return;
     }
 

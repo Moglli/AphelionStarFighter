@@ -10,13 +10,15 @@ import { InputManager } from "./input.js";
 import { saveStore } from "./save.js";
 import { events } from "./events.js";
 import { audio } from "./audio.js";
+import { progression } from "./progression.js";
 
 // Touch the foundation modules so they're initialized on startup. Save
-// data is loaded into memory before the first frame; audio subscribes to
-// events at construction.
+// data is loaded into memory before the first frame; audio + progression
+// subscribe to events at construction.
 void saveStore;
 void events;
 void audio;
+void progression;
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -121,7 +123,7 @@ function draw() {
 
   ctx.restore();
 
-  drawHUD(ctx, game, viewW, viewH, input.missileBtn, input.startMenu);
+  drawHUD(ctx, game, viewW, viewH, input);
   input.drawSticks(ctx);
 }
 

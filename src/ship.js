@@ -689,7 +689,11 @@ function updateHeavyLaser(ship, world) {
 // ---------------------------------------------------------------------------
 export function drawShip(ctx, ship) {
   const s = ship.spec;
-  const tint = SIDES[ship.side].primary;
+  // Cosmetic override for the player ship: equipped hull-skin tint
+  // replaces the default Allied / Hostile color. Only the player ship
+  // carries `ship.cosmetics`; everyone else falls through to side default.
+  const tint = (ship.cosmetics && ship.cosmetics.hullTint)
+    || SIDES[ship.side].primary;
   ctx.save();
   ctx.translate(ship.pos.x, ship.pos.y);
   ctx.rotate(ship.heading);

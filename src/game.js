@@ -7,6 +7,7 @@ import { events } from "./events.js";
 import { MODES, DEFAULT_MODE } from "./modes/index.js";
 import { saveStore } from "./save.js";
 import { audio } from "./audio.js";
+import { resolveCosmetic } from "./cosmetics.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -252,8 +253,9 @@ function promotePlayer(game, klass) {
   const candidate = game.ships.find(
     (s) => s.side === "blue" && s.klass === want && !s.isPlayer && !s.dead,
   );
+  let ship;
   if (!candidate) {
-    const ship = createShip({
+    ship = createShip({
       klass: want,
       race: game.alliedRace,
       side: "blue",
@@ -263,24 +265,31 @@ function promotePlayer(game, klass) {
     });
     ship.isPlayer = true;
     game.ships.push(ship);
-    return ship;
+  } else {
+    candidate.controller = game.playerController;
+    candidate.isPlayer = true;
+    candidate.pos = randomSpawnPos(ARENA.spawn.blue);
+    candidate.vel = { x: 0, y: 0 };
+    candidate.hp = candidate.hpMax;
+    candidate.shield = candidate.shieldMax;
+    if (candidate.armorMax > 0) candidate.armor = candidate.armorMax;
+    candidate.shieldHitTimer = 999;
+    candidate.heading = 0;
+    candidate.missileCd = 0;
+    if (candidate.spec.weapon && candidate.spec.weapon.capacity) {
+      candidate.weaponAmmo = candidate.spec.weapon.capacity;
+      candidate.weaponReloading = false;
+      candidate.weaponReloadTimer = 0;
+    }
+    ship = candidate;
   }
-  candidate.controller = game.playerController;
-  candidate.isPlayer = true;
-  candidate.pos = randomSpawnPos(ARENA.spawn.blue);
-  candidate.vel = { x: 0, y: 0 };
-  candidate.hp = candidate.hpMax;
-  candidate.shield = candidate.shieldMax;
-  if (candidate.armorMax > 0) candidate.armor = candidate.armorMax;
-  candidate.shieldHitTimer = 999;
-  candidate.heading = 0;
-  candidate.missileCd = 0;
-  if (candidate.spec.weapon && candidate.spec.weapon.capacity) {
-    candidate.weaponAmmo = candidate.spec.weapon.capacity;
-    candidate.weaponReloading = false;
-    candidate.weaponReloadTimer = 0;
-  }
-  return candidate;
+  // Apply equipped cosmetics. Renderer reads ship.cosmetics on draw.
+  const equipped = saveStore.get().equippedCosmetics;
+  const hullSkin = resolveCosmetic(equipped.hullSkin);
+  ship.cosmetics = {
+    hullTint: hullSkin && hullSkin.tint ? hullSkin.tint : null,
+  };
+  return ship;
 }
 
 // ---------------------------------------------------------------------------

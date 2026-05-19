@@ -43,6 +43,7 @@
  * @property {string|null} lastSeed       ISO date of last attempt (e.g. "2026-05-19")
  * @property {number}      lastScore
  * @property {"win"|"loss"|null} lastResult
+ * @property {string|null} firstWinSeed   ISO date of the first win bonus claimed today
  */
 
 /**
@@ -74,6 +75,7 @@
  * @property {EntitlementId[]} entitlements  mirrored from RevenueCat on launch
  * @property {BattlePassState|null} battlePass
  * @property {number|null} lastLoginEpochMs
+ * @property {number} loginStreak
  * @property {DailyState} daily
  * @property {BestScores} bestScores
  * @property {MenuSelection} menuSelection  last picked start-menu state

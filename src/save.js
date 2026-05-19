@@ -6,8 +6,10 @@
  * localStorage during gameplay event bursts.
  */
 
+import { DEFAULT_INVENTORY } from "./cosmetics.js";
+
 const STORAGE_KEY = "aphelion.save.v1";
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 const WRITE_DEBOUNCE_MS = 250;
 
 /** @type {import("./types.js").SaveData} */
@@ -33,14 +35,16 @@ const DEFAULT_SAVE = Object.freeze({
     weaponFX: null,
     audioPack: null,
   },
-  inventory: [],
+  inventory: [...DEFAULT_INVENTORY],
   entitlements: [],
   battlePass: null,
   lastLoginEpochMs: null,
+  loginStreak: 0,
   daily: {
     lastSeed: null,
     lastScore: 0,
     lastResult: null,
+    firstWinSeed: null,
   },
   bestScores: {
     arena: 0,
@@ -67,7 +71,19 @@ const DEFAULT_SAVE = Object.freeze({
  * @type {Record<number, (data: any) => any>}
  */
 const MIGRATIONS = {
-  // 1: (data) => ({ ...data, schemaVersion: 2, newField: defaultValue }),
+  // v1 → v2: Phase 2 seeds the starter cosmetic inventory + login-streak
+  // counter + daily.firstWinSeed. Empty-inventory check guards against
+  // wiping a future Phase 3 player's purchased items if they hit this
+  // path twice somehow.
+  1: (data) => ({
+    ...data,
+    schemaVersion: 2,
+    loginStreak: data.loginStreak || 0,
+    inventory: (Array.isArray(data.inventory) && data.inventory.length > 0)
+      ? data.inventory
+      : [...DEFAULT_INVENTORY],
+    daily: { firstWinSeed: null, ...(data.daily || {}) },
+  }),
 };
 
 function deepClone(value) {
