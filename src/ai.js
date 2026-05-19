@@ -177,6 +177,7 @@ function bigShipDanger(ship, ships) {
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
     if (other.klass === "fighter") continue;
+    if (!other.spec.weapon) continue;
     const range = other.spec.weapon.range;
     const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
@@ -393,8 +394,14 @@ function battleshipAI(ship, target, dt, world) {
 }
 
 // ---------------------------------------------------------------------------
-// Frigate / cruiser: orbit at preferred range. Heavy hulls hold position when
-// in the orbit band; lighter and broadside hulls strafe.
+// Frigate / cruiser: forward-firing capitals are on the fighter-flight
+// model now (velocity locked to heading), so the old "stop in the orbit
+// band and strafe" plan made them ram. They now use a flyby pattern —
+// approach with lead aim, then break to one side when they pass through
+// or run out the approach timer — tuned with longer windows than
+// fighters to account for slow turn rates. Broadside hulls (battleship)
+// keep their dedicated AI branch; this function only handles
+// forward-firing capitals.
 // ---------------------------------------------------------------------------
 function orbitAI(ship, target, dt, world) {
   const c = ship.controller;
@@ -404,43 +411,92 @@ function orbitAI(ship, target, dt, world) {
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
   const isBroadside = s.firingMode === "broadside";
 
-  const orbit = s.aiOrbit;
-  let thrust;
-  if (dist > orbit * 1.15) {
-    thrust = dir;
-  } else if (dist < orbit * 0.85) {
-    thrust = { x: -dir.x, y: -dir.y };
-  } else {
-    const shouldStrafe = isBroadside || ship.klass === "frigate";
-    if (shouldStrafe) {
-      const sign = (ship.id % 2 === 0) ? 1 : -1;
-      thrust = { x: -dir.y * sign, y: dir.x * sign };
-    } else {
-      thrust = { x: 0, y: 0 };
-    }
-  }
-  // Capitals nudge apart from each other so they don't clump on the same
-  // target and ram hulls.
-  const sep = capitalSeparation(ship, world ? world.ships : []);
-  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
-  c.thrust = thrust;
-
   if (isBroadside) {
+    // Broadside ship — aim perpendicular so velocity (locked to heading)
+    // strafes alongside the target instead of into it.
+    const sep = capitalSeparation(ship, world ? world.ships : []);
+    let thrust = { x: -dir.y, y: dir.x };
+    thrust = blendThrustWithSeparation(thrust, sep, 1.1);
+    c.thrust = thrust;
     const perpA = { x: -dir.y, y: dir.x };
     const perpB = { x: dir.y, y: -dir.x };
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
     c.firing = true;
-  } else {
-    const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
-    c.aim = leadVec;
-    const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-    const aimNorm = V.norm(leadVec);
-    const aligned = V.dot(fwd, aimNorm);
-    c.firing = dist <= s.weapon.range && aligned > 0.9;
+    c.firingMissile = false;
+    return;
   }
 
-  c.firingMissile = false;
+  // Forward-firing flyby pattern. Init state once.
+  if (ship.attackState === undefined) {
+    ship.attackState = "approach";
+    ship.breakSide = (ship.id % 2 === 0) ? 1 : -1;
+    ship.breakTimer = 0;
+    ship.approachTimer = 0;
+  }
+
+  // Tuned for slower capitals — much longer cycles than fighters.
+  const REGROUP_DIST = Math.max(1400, s.aiOrbit * 1.3);
+  const PASS_ZONE_DIST = Math.max(700, s.radius * 6);
+  const MIN_BREAK_TIME = 4.0;
+  const MAX_APPROACH_TIME = 24;
+
+  // Lead-aim toward the target's predicted position; in break mode swing
+  // aim hard to the side so the ship peels off instead of ramming.
+  const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
+  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+
+  if (ship.attackState === "approach") {
+    ship.approachTimer += dt;
+    c.thrust = { x: 0, y: 0 }; // ignored under fighter flight model
+    c.aim = leadVec;
+    const aimNorm = V.norm(leadVec);
+    const aligned = V.dot(fwd, aimNorm);
+    c.firing = dist <= s.weapon.range && aligned > 0.88;
+
+    const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
+    const inPassZone = dist < PASS_ZONE_DIST;
+    const settled = ship.approachTimer > 1.5;
+    if ((departing && inPassZone && settled) || ship.approachTimer > MAX_APPROACH_TIME) {
+      ship.attackState = "break";
+      ship.breakTimer = MIN_BREAK_TIME;
+      ship.approachTimer = 0;
+    }
+  } else {
+    // Break: aim perpendicular to the threat axis with a small "away"
+    // bias so the capital drifts out instead of orbiting back through.
+    const tangX = -dir.y * ship.breakSide;
+    const tangY =  dir.x * ship.breakSide;
+    const outX = -dir.x;
+    const outY = -dir.y;
+    const bx = tangX * 1.0 + outX * 0.35;
+    const by = tangY * 1.0 + outY * 0.35;
+    const bLen = Math.hypot(bx, by) || 1;
+    c.thrust = { x: 0, y: 0 };
+    c.aim = { x: bx / bLen, y: by / bLen };
+    c.firing = false;
+
+    ship.breakTimer -= dt;
+    const minTimeMet = ship.breakTimer <= 0;
+    const farEnough = dist > REGROUP_DIST;
+    const breakOverdue = ship.breakTimer <= -5.0;
+    if ((minTimeMet && farEnough) || breakOverdue) {
+      ship.attackState = "approach";
+      ship.breakSide = -ship.breakSide;
+      ship.approachTimer = 0;
+    }
+  }
+
+  // Push aim further off-axis when a friendly capital sits on the same
+  // line — keeps frigates from stacking noses into the same target.
+  const sep = capitalSeparation(ship, world ? world.ships : []);
+  if (sep) {
+    const aimN = V.norm(c.aim);
+    c.aim = {
+      x: aimN.x + sep.x * 0.5,
+      y: aimN.y + sep.y * 0.5,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------

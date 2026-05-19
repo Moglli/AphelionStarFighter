@@ -55,6 +55,13 @@ const DEFAULT_SAVE = Object.freeze({
     klass: "fighter",
     race: "terran",
     mapSize: "medium",
+    fleetMul: "medium", // small | medium | large | huge
+    factions: 2,        // 2, 3, or 4
+  },
+  customRoster: {
+    hostileRace: "terran",
+    blue:  { fighter: 12, bomber: 3, frigate: 2, cruiser: 1, battleship: 1, carrier: 1 },
+    red:   { fighter: 12, bomber: 3, frigate: 2, cruiser: 1, battleship: 1, carrier: 1 },
   },
   settings: {
     musicVolume: 0.6,
@@ -118,6 +125,13 @@ function mergeWithDefaults(loaded) {
     bestScores: { ...base.bestScores, ...(loaded.bestScores || {}) },
     menuSelection: { ...base.menuSelection, ...(loaded.menuSelection || {}) },
     settings: { ...base.settings, ...(loaded.settings || {}) },
+    customRoster: loaded.customRoster
+      ? {
+          hostileRace: loaded.customRoster.hostileRace || base.customRoster.hostileRace,
+          blue: { ...base.customRoster.blue, ...(loaded.customRoster.blue || {}) },
+          red:  { ...base.customRoster.red,  ...(loaded.customRoster.red  || {}) },
+        }
+      : base.customRoster,
   };
 }
 

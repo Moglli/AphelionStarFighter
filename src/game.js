@@ -1,5 +1,5 @@
-import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
-import { createShip, updateShip } from "./ship.js";
+import { ARENA, randomSpawnPos, createStarfield, setArenaSize, spawnZonesFor } from "./arena.js";
+import { createShip, updateShip, moduleWorldPos, recordDamageMark, emitPuff, emitSparks, damageCellsInRadius, pruneDisconnectedCells, shieldRadius, createWreckageChunks, updateWreck } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
@@ -34,6 +34,11 @@ export function createGame() {
     ships: [],
     projectiles: [],
     beams: [],
+    // Persistent wreckage chunks left behind by destroyed ships. Each entry
+    // drifts/spins from its initial blast impulse, burns for a few seconds,
+    // then settles as a charred husk. Capped to MAX_WRECKAGE so long runs
+    // don't accumulate unbounded draw cost.
+    wreckage: [],
     arena: ARENA,
     starfield: createStarfield(),
     playerController: {
@@ -47,6 +52,11 @@ export function createGame() {
     winner: null,
     spectating: false,
     spectateTargetId: null,
+    // Spectator camera. When `locked`, draw() reads the target ship's
+    // position; when the user nudges the left stick we detach into
+    // free-pan mode (locked=false) and let them roam the arena. PREV /
+    // NEXT re-lock onto whichever ship they cycle to.
+    spectateCamera: { x: 0, y: 0, locked: true },
     // Lifecycle: "menu" before the player picks options, "playing" during
     // a match.
     state: "menu",
@@ -62,6 +72,10 @@ export function createGame() {
     modeState: null,
     // Pack lookup, rebuilt each tick.
     packs: new Map(),
+    // Custom-mode roster, set by the menu when launching from the
+    // Custom Game screen. Shape: { blue: {fighter: N, ...}, red: {...},
+    // hostileRace: "terran" }. Ignored by non-custom modes.
+    customRoster: null,
   };
   return game;
 }
@@ -89,6 +103,7 @@ export function startGame(game, opts = {}) {
   game.ships = [];
   game.projectiles = [];
   game.beams = [];
+  game.wreckage = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -101,6 +116,9 @@ export function startGame(game, opts = {}) {
   game.kills = 0;
   game.elapsed = 0;
   game.modeState = null;
+  game.customRoster = opts.customRoster || null;
+  game.fleetMul = typeof opts.fleetMul === "number" ? opts.fleetMul : 1;
+  game.factions = [2, 3, 4].includes(opts.factions) ? opts.factions : 2;
   game.state = "playing";
 
   // Let the mode pick the hostile race and stage initial spawns. Falls
@@ -110,6 +128,7 @@ export function startGame(game, opts = {}) {
   } else {
     game.hostileRace = randomRaceKey();
     spawnRoster(game);
+    if (!game.spectating) promotePlayer(game);
   }
 
   // Lazy-start the ambient music drone — fades in over 3s. Browsers
@@ -121,12 +140,68 @@ export function startGame(game, opts = {}) {
 // Re-exported for modes that want to compose roster/promote behavior.
 export { spawnRoster, promotePlayer };
 
-function spawnRoster(game) {
-  for (const side of ["blue", "red"]) {
-    const race = side === "blue" ? game.alliedRace : game.hostileRace;
-    const roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
-    const zone = ARENA.spawn[side];
-    const facing = side === "blue" ? 0 : Math.PI;
+// Spawn rosters for every active faction. Honors:
+//   - `override`: per-side roster map { blue, red, ... } from Custom mode
+//   - `game.factions`: number of competing sides (2, 3, or 4)
+//   - `game.fleetMul`: roster count multiplier from the FLEET SIZE chip
+//   - `game.alliedRace`: race for the player's blue side
+//   - `game.hostileRaces`: array of races, one per non-blue side
+//   - `opts.onlySides`: optional whitelist (e.g. ["blue"]). Used by
+//     Waves mode to spawn just the player's allied custom fleet without
+//     also placing hostiles at match start — those come from waves.
+// Does NOT touch the player slot — callers (mode setup hooks) are
+// responsible for invoking promotePlayer afterward.
+function spawnRoster(game, override, opts) {
+  const onlySides = opts && opts.onlySides ? new Set(opts.onlySides) : null;
+  const factionCount = game.factions || 2;
+  const zones = spawnZonesFor(factionCount);
+  const sides = Object.keys(zones);
+  // Hostile-race book-keeping is only meaningful when we'll actually
+  // spawn at least one non-blue side this call. Skip it when filtered.
+  const willSpawnHostiles = !onlySides
+    || sides.some((s) => s !== "blue" && onlySides.has(s));
+  if (willSpawnHostiles) {
+    if (!Array.isArray(game.hostileRaces) || game.hostileRaces.length < sides.length - 1) {
+      game.hostileRaces = [];
+      for (let i = 0; i < sides.length - 1; i++) {
+        game.hostileRaces.push(randomRaceKey());
+      }
+    }
+    // Keep the legacy single `hostileRace` field pointing at the first
+    // hostile side so existing per-mode code still has a value to read.
+    game.hostileRace = game.hostileRaces[0];
+  }
+
+  const mul = game.fleetMul || 1;
+  let hostileIdx = 0;
+  for (const side of sides) {
+    // Advance the hostile race index regardless of filter, so the race
+    // assignment stays stable across calls when the caller spawns each
+    // side separately.
+    let race;
+    if (side === "blue") {
+      race = game.alliedRace;
+    } else {
+      race = (game.hostileRaces && game.hostileRaces[hostileIdx++])
+           || randomRaceKey();
+    }
+    if (onlySides && !onlySides.has(side)) continue;
+    const fallback = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
+    const baseRoster = (override && override[side]) || fallback;
+    // Apply fleet-size multiplier per class, rounding up so even a
+    // 0.5x small fleet keeps at least one of each non-zero class.
+    const roster = {};
+    for (const klass of Object.keys(baseRoster)) {
+      const n = baseRoster[klass] || 0;
+      roster[klass] = n > 0 ? Math.max(1, Math.round(n * mul)) : 0;
+    }
+    const zone = zones[side];
+    // Face roughly toward the arena center so initial flight paths
+    // cross instead of leaving the map.
+    const facing = Math.atan2(
+      ARENA.height / 2 - zone.y,
+      ARENA.width / 2 - zone.x,
+    );
     for (const [klass, count] of Object.entries(roster)) {
       if (count <= 0) continue;
       if (klass === "fighter") {
@@ -148,7 +223,6 @@ function spawnRoster(game) {
       }
     }
   }
-  if (!game.spectating) promotePlayer(game);
 }
 
 function spawnFighterPacks(game, side, race, zone, count, facing) {
@@ -304,6 +378,15 @@ export function enterSpectate(game) {
   // Pick a spectate target — prefer the player's side, fall back to anyone.
   const tgt = pickSpectateInitial(game);
   game.spectateTargetId = tgt ? tgt.id : null;
+  // Camera starts locked onto that target (or arena center if none).
+  game.spectateCamera.locked = true;
+  if (tgt) {
+    game.spectateCamera.x = tgt.pos.x;
+    game.spectateCamera.y = tgt.pos.y;
+  } else {
+    game.spectateCamera.x = game.arena.width / 2;
+    game.spectateCamera.y = game.arena.height / 2;
+  }
 }
 
 function pickSpectateInitial(game) {
@@ -328,6 +411,10 @@ export function cycleSpectate(game, dir) {
   if (idx === -1) idx = 0;
   idx = (idx + (dir > 0 ? 1 : -1) + alive.length) % alive.length;
   game.spectateTargetId = alive[idx].id;
+  // Re-lock the camera to the new target and snap to it.
+  game.spectateCamera.locked = true;
+  game.spectateCamera.x = alive[idx].pos.x;
+  game.spectateCamera.y = alive[idx].pos.y;
 }
 
 export function getSpectateTarget(game) {
@@ -389,17 +476,98 @@ export function update(game, dt) {
       if (interceptedMissile) continue;
     }
 
-    // Hit a ship.
+    // Hit a ship. Effective collision radius depends on shield state:
+    // when the bubble is up and the round isn't a missile (which bypasses
+    // shields by design), projectiles stop at the visible shield surface
+    // instead of phasing through to the hull.
     for (const ship of game.ships) {
       if (ship.dead || ship.side === p.side) continue;
       const dx = ship.pos.x - p.pos.x;
       const dy = ship.pos.y - p.pos.y;
-      const r = ship.spec.radius + p.radius;
-      if (dx * dx + dy * dy <= r * r) {
+      const shieldsUp = p.kind !== "missile"
+        && ship.shieldMax > 0 && ship.shield > 0;
+      const hitR = shieldsUp
+        ? shieldRadius(ship) + p.radius
+        : ship.spec.radius + p.radius;
+      if (dx * dx + dy * dy <= hitR * hitR) {
         const attacker = p.ownerId != null
           ? game.ships.find((s) => s.id === p.ownerId)
           : null;
+        // Legacy module hit-test runs first for ships that aren't on
+        // the new cell system (none right now, but kept as a fallback).
+        let legacyModule = null;
+        if (!ship.sprite) {
+          legacyModule = pickModuleHit(ship, p);
+          if (legacyModule) {
+            legacyModule.hp -= p.damage;
+            legacyModule.flash = 1;
+            if (legacyModule.hp <= 0 && !legacyModule.dead) {
+              legacyModule.dead = true;
+              legacyModule.hp = 0;
+              emitSparks(ship, legacyModule.lx, legacyModule.ly, 10);
+              emitPuff(ship, legacyModule.lx, legacyModule.ly, "ember");
+              emitPuff(ship, legacyModule.lx, legacyModule.ly, "smoke");
+              events.emit("moduleDestroyed", { ship, module: legacyModule, byPlayer: !!(attacker && attacker.isPlayer) });
+            } else {
+              emitSparks(ship, legacyModule.lx, legacyModule.ly, 3);
+            }
+          }
+        }
+        const armorBefore = ship.armor;
+        const hullBefore = ship.hp;
+        const shieldBefore = ship.shield;
         applyDamage(ship, p, attacker);
+        // Decide which layer absorbed enough damage and translate that
+        // into the right visual. Hull breaches chew cells; armor hits
+        // chew a smaller radius plus leave a scorch; shield hits just
+        // bump the all-ship flash.
+        const hitLocal = worldToShipLocal(ship, p.pos.x, p.pos.y);
+        let chewMul = 0;
+        if (ship.hp < hullBefore) {
+          chewMul = 1.0;
+          ship.hitFlash = Math.min(1, (ship.hitFlash || 0) + 0.7);
+          emitSparks(ship, hitLocal.lx, hitLocal.ly, 6);
+          emitPuff(ship, hitLocal.lx, hitLocal.ly, "ember");
+          // Hull breach blows a hard jet of atmosphere outward.
+          const outLen = Math.hypot(hitLocal.lx, hitLocal.ly) || 1;
+          const ventDir = { x: hitLocal.lx / outLen, y: hitLocal.ly / outLen };
+          emitPuff(ship, hitLocal.lx, hitLocal.ly, "vent", ventDir);
+          emitPuff(ship, hitLocal.lx, hitLocal.ly, "vent", ventDir);
+          if (!ship.sprite) {
+            recordDamageMark(ship, p.pos.x, p.pos.y, "hull", p.damage);
+          }
+        } else if (ship.armor < armorBefore) {
+          chewMul = 0.45;
+          recordDamageMark(ship, p.pos.x, p.pos.y, "armor", p.damage);
+          ship.hitFlash = Math.min(1, (ship.hitFlash || 0) + 0.4);
+          emitSparks(ship, hitLocal.lx, hitLocal.ly, 3);
+          // Armor crack — small puff of debris/atmosphere from the plate.
+          const outLen = Math.hypot(hitLocal.lx, hitLocal.ly) || 1;
+          emitPuff(ship, hitLocal.lx, hitLocal.ly, "vent",
+            { x: hitLocal.lx / outLen, y: hitLocal.ly / outLen });
+        } else if (ship.shield < shieldBefore) {
+          ship.hitFlash = Math.min(1, (ship.hitFlash || 0) + 0.2);
+        }
+        // Chew the sprite. Even a glancing armor hit cracks plating
+        // visibly — under the user's request, cells should "chew
+        // through" over the course of the engagement rather than only
+        // appearing when hull is breached.
+        if (chewMul > 0 && ship.sprite) {
+          const radius = chewRadius(ship, p.damage) * chewMul;
+          const { modulesDestroyed } = damageCellsInRadius(
+            ship, hitLocal.lx, hitLocal.ly, radius,
+          );
+          for (const mod of modulesDestroyed) {
+            emitSparks(ship, mod.lx, mod.ly, 10);
+            emitPuff(ship, mod.lx, mod.ly, "ember");
+            emitPuff(ship, mod.lx, mod.ly, "smoke");
+            events.emit("moduleDestroyed", {
+              ship, module: mod,
+              byPlayer: !!(attacker && attacker.isPlayer),
+            });
+          }
+          applyDisconnectionDamage(game, ship, attacker);
+        }
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) {
@@ -409,6 +577,13 @@ export function update(game, dt) {
         break;
       }
     }
+  }
+
+  // Wreckage: drift, spin down, age fires + smoke. Cheap per-entry —
+  // each wreck stops integrating motion once it settles.
+  if (game.wreckage && game.wreckage.length > 0) {
+    const bounds = game.arena.bounds;
+    for (const w of game.wreckage) updateWreck(w, dt, bounds);
   }
 
   // Beams: apply damage once, then tick down.
@@ -434,13 +609,33 @@ export function update(game, dt) {
 
   game.ships = game.ships.filter((s) => (s.isPlayer && !game.spectating) || !s.dead);
 
-  // Keep spectate target valid.
+  // Keep spectate target valid, and drive the spectator camera.
   if (game.spectating) {
-    const tgt = getSpectateTarget(game);
+    let tgt = getSpectateTarget(game);
     if (!tgt) {
       const next = pickSpectateInitial(game);
       game.spectateTargetId = next ? next.id : null;
+      tgt = next;
     }
+    // Read left-stick / WASD intent off the player controller. Any
+    // meaningful nudge detaches the camera into free-pan mode.
+    const c = game.playerController;
+    const thr = c.thrust;
+    const thrMag = Math.hypot(thr.x, thr.y);
+    if (thrMag > 0.1) {
+      game.spectateCamera.locked = false;
+      const PAN_SPEED = 1200; // px/sec in world space
+      game.spectateCamera.x += thr.x * PAN_SPEED * dt;
+      game.spectateCamera.y += thr.y * PAN_SPEED * dt;
+    } else if (game.spectateCamera.locked && tgt) {
+      // Locked-camera mode: track the target ship as it flies.
+      game.spectateCamera.x = tgt.pos.x;
+      game.spectateCamera.y = tgt.pos.y;
+    }
+    // Always clamp inside the arena.
+    const b = game.arena.bounds;
+    game.spectateCamera.x = Math.max(b.minX, Math.min(b.maxX, game.spectateCamera.x));
+    game.spectateCamera.y = Math.max(b.minY, Math.min(b.maxY, game.spectateCamera.y));
   }
 
   if (!game.matchOver) {
@@ -461,11 +656,95 @@ export function update(game, dt) {
   }
 }
 
+// After a chew, check whether the hull was severed. Any cells in
+// components smaller than the largest are jettisoned: they're marked
+// dead, the ship's hp pool takes proportional damage, and the dropped
+// area is dressed up with embers + sparks so the break-off reads as
+// catastrophic. Kills the ship if the lost mass takes hp under zero.
+function applyDisconnectionDamage(game, ship, attacker) {
+  const total = ship.sprite.cells.length;
+  if (total === 0) return;
+  const { dropped, droppedCells } = pruneDisconnectedCells(ship);
+  if (dropped === 0) return;
+  // Each dropped cell bills its share of hpMax — losing 30% of cells
+  // strips 30% of full hull hp from the pool.
+  const damage = ship.hpMax * (dropped / total);
+  ship.hp = Math.max(0, ship.hp - damage);
+  // Sample a few dropped cells to anchor visible debris FX instead of
+  // emitting one puff per cell (which would be silly for big breakups).
+  const sampleCount = Math.min(droppedCells.length, 6);
+  for (let i = 0; i < sampleCount; i++) {
+    const c = droppedCells[Math.floor((i / sampleCount) * droppedCells.length)];
+    emitSparks(ship, c.lx, c.ly, 8);
+    emitPuff(ship, c.lx, c.ly, "ember");
+    emitPuff(ship, c.lx, c.ly, "smoke");
+  }
+  ship.hitFlash = 1;
+  events.emit("hullSevered", {
+    ship, cellsLost: dropped, hpLost: damage,
+    byPlayer: !!(attacker && attacker.isPlayer),
+  });
+  if (ship.hp <= 0 && !ship.dead) {
+    ship.dead = true;
+    handleShipDestroyed(game, ship, attacker);
+  }
+}
+
+// Translate weapon damage into a cell-destruction radius in ship-local
+// pixels. Lighter rounds chew off one cell; heavier ones rip a chunk
+// scaled by sqrt(damage) so doubling damage roughly increases area by
+// ~2x (not 4x), keeping cannons and torpedoes both feeling distinct.
+function chewRadius(ship, damage) {
+  const cs = ship.sprite.cellSize;
+  return Math.max(cs * 0.55, Math.sqrt(Math.max(1, damage)) * cs * 0.42);
+}
+
+// World → ship-local transform. Used to anchor FX particles to a hit
+// position so they ride the hull as it moves and rotates.
+function worldToShipLocal(ship, wx, wy) {
+  const ca = Math.cos(-ship.heading), sa = Math.sin(-ship.heading);
+  const dx = wx - ship.pos.x;
+  const dy = wy - ship.pos.y;
+  return { lx: dx * ca - dy * sa, ly: dx * sa + dy * ca };
+}
+
+// Closest live module under the projectile, if any. Returns null when the
+// shot landed on bare hull (no module nearby) — keeps subsystem combat
+// optional rather than tax every hit with a per-module lookup.
+function pickModuleHit(ship, p) {
+  if (!ship.modules || ship.modules.length === 0) return null;
+  let best = null, bestD2 = Infinity;
+  for (const m of ship.modules) {
+    if (m.dead) continue;
+    const pos = moduleWorldPos(ship, m);
+    const dx = pos.x - p.pos.x;
+    const dy = pos.y - p.pos.y;
+    const reach = m.radius + p.radius;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= reach * reach && d2 < bestD2) {
+      bestD2 = d2; best = m;
+    }
+  }
+  return best;
+}
+
 function defaultArenaCheckEnd(game) {
-  const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
-  const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
-  if (!redAlive) return "blue";
-  if (!blueAlive) return "red";
+  // Multi-faction friendly: tally living ships per side (excluding the
+  // player, who is always on blue and shouldn't trip the blue-alive
+  // check on his own). Match ends when only one side still has ships,
+  // or when blue has nothing left but the player.
+  const aliveBySide = new Map();
+  for (const s of game.ships) {
+    if (s.dead) continue;
+    if (s.side === "blue" && s.isPlayer) continue;
+    aliveBySide.set(s.side, (aliveBySide.get(s.side) || 0) + 1);
+  }
+  if (!aliveBySide.has("blue")) {
+    // Player's faction wiped — whoever's still around wins.
+    for (const side of aliveBySide.keys()) return side;
+    return "red";
+  }
+  if (aliveBySide.size === 1) return "blue";
   return null;
 }
 
@@ -496,6 +775,7 @@ export function restart(game) {
   game.ships = [];
   game.projectiles = [];
   game.beams = [];
+  game.wreckage = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -588,7 +868,14 @@ function applyAndAgeBeams(game, dt) {
           const attacker = beam.ownerId != null
             ? game.ships.find((s) => s.id === beam.ownerId)
             : null;
+          const armorBefore = t.armor;
+          const hullBefore = t.hp;
           applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" }, attacker);
+          if (t.hp < hullBefore) {
+            recordDamageMark(t, t.pos.x, t.pos.y, "hull", beam.damage);
+          } else if (t.armor < armorBefore) {
+            recordDamageMark(t, t.pos.x, t.pos.y, "armor", beam.damage);
+          }
           if (t.hp <= 0) {
             t.dead = true;
             handleShipDestroyed(game, t, attacker);
@@ -618,6 +905,11 @@ const SCORE_PER_KILL = {
   carrier: 200,
 };
 
+// Hard cap on simultaneous wreckage entries. When exceeded, oldest
+// settled wrecks are pushed out so a long carrier-vs-carrier brawl
+// can't accumulate draw cost forever.
+const MAX_WRECKAGE = 80;
+
 function handleShipDestroyed(game, ship, killer) {
   const byPlayer = !!(killer && killer.isPlayer);
   events.emit("shipDestroyed", { ship, killer, byPlayer });
@@ -625,6 +917,23 @@ function handleShipDestroyed(game, ship, killer) {
   if (byPlayer && ship.side !== "blue") {
     game.kills += 1;
     game.score += SCORE_PER_KILL[ship.klass] || 10;
+  }
+  // Break the hull into drifting wreckage. The chunks inherit position
+  // + velocity from the ship and persist on the map.
+  if (!game.wreckage) game.wreckage = [];
+  const chunks = createWreckageChunks(ship);
+  for (const c of chunks) game.wreckage.push(c);
+  // If we blew past the cap, evict the oldest settled wrecks first so
+  // still-flying debris keeps its motion.
+  if (game.wreckage.length > MAX_WRECKAGE) {
+    game.wreckage.sort((a, b) => {
+      // Settled, older entries leave first.
+      const sa = a.settled ? 1 : 0;
+      const sb = b.settled ? 1 : 0;
+      if (sa !== sb) return sb - sa;
+      return b.age - a.age;
+    });
+    game.wreckage.length = MAX_WRECKAGE;
   }
 }
 
