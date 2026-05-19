@@ -71,6 +71,93 @@ export class VirtualStick {
   }
 }
 
+// Generic on-screen action button. Used for FIRE (primary gun) and
+// SPECTATE — touch-friendly, mouse also works. Each button owns one
+// pointer at a time so concurrent touches on other zones aren't stolen.
+class ActionButton {
+  constructor({ w = 90, h = 60 } = {}) {
+    this.pointerId = null;
+    this.pressed = false;
+    this.justPressed = false;
+    this.rect = { x: 0, y: 0, w, h };
+  }
+  hit(x, y) {
+    const r = this.rect;
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+  start(pointerId) {
+    this.pointerId = pointerId;
+    if (!this.pressed) this.justPressed = true;
+    this.pressed = true;
+  }
+  end() {
+    this.pointerId = null;
+    this.pressed = false;
+  }
+  consumeJustPressed() {
+    const j = this.justPressed;
+    this.justPressed = false;
+    return j;
+  }
+}
+
+// On-screen FIRE button (bottom-right, left of missile). Primary gun.
+// Holding fires continuously; the controller reads `pressed`.
+export class FireButton extends ActionButton {
+  constructor() { super({ w: 90, h: 60 }); }
+  layout(viewW, viewH) {
+    // Sit to the LEFT of the missile button, same row.
+    this.rect.x = viewW - this.rect.w - 18 - 90 - 12;
+    this.rect.y = viewH - this.rect.h - 135 - 16 - 12;
+  }
+  draw(ctx) {
+    const r = this.rect;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = this.pressed ? "rgba(70,30,30,0.85)" : "rgba(40,20,20,0.7)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = this.pressed ? "#fa6" : "#f76";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = "#fec";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("FIRE", r.x + r.w / 2, r.y + r.h / 2 - 2);
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = "#fcb";
+    ctx.fillText("GUN", r.x + r.w / 2, r.y + r.h / 2 + 14);
+    ctx.restore();
+  }
+}
+
+// On-screen SPECTATE toggle (top-centre under HUD strips). Edge-triggered.
+export class SpectateButton extends ActionButton {
+  constructor() { super({ w: 110, h: 36 }); }
+  layout(viewW /* , viewH */) {
+    // Centred at the top, below the headline; gets out of the way of
+    // the side-count strips on the corners.
+    this.rect.x = (viewW - this.rect.w) / 2;
+    this.rect.y = 12;
+  }
+  draw(ctx, spectating) {
+    const r = this.rect;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = spectating ? "rgba(30,60,80,0.85)" : "rgba(15,25,35,0.7)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = spectating ? "#7df" : "#467";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = spectating ? "#cef" : "#9ab";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText(spectating ? "RETURN TO SHIP" : "SPECTATE", r.x + r.w / 2, r.y + r.h / 2);
+    ctx.restore();
+  }
+}
+
 // On-screen missile button (top-right). Touch-friendly. Mouse also works.
 export class MissileButton {
   constructor() {
@@ -593,6 +680,8 @@ export class InputManager {
     this.left = new VirtualStick({ side: "left", color: "#5cf" });
     this.right = new VirtualStick({ side: "right", color: "#f76" });
     this.missileBtn = new MissileButton();
+    this.fireBtn = new FireButton();
+    this.spectateBtn = new SpectateButton();
     this.startMenu = new StartMenu();
     this.menuActive = false;
 
@@ -641,6 +730,8 @@ export class InputManager {
 
   layoutOverlays(viewW, viewH) {
     this.missileBtn.layout(viewW, viewH);
+    this.fireBtn.layout(viewW, viewH);
+    this.spectateBtn.layout(viewW, viewH);
     this.startMenu.layout(viewW, viewH);
   }
 
@@ -662,10 +753,21 @@ export class InputManager {
       return;
     }
 
-    // Missile button hit-test first — works for both touch and mouse.
+    // Action-button hit-tests first — works for both touch and mouse.
+    // Order matters: each button owns the pointer once it claims it.
     if (this.missileBtn.hit(x, y)) {
       this.canvas.setPointerCapture(e.pointerId);
       this.missileBtn.start(e.pointerId);
+      return;
+    }
+    if (this.fireBtn.hit(x, y)) {
+      this.canvas.setPointerCapture(e.pointerId);
+      this.fireBtn.start(e.pointerId);
+      return;
+    }
+    if (this.spectateBtn.hit(x, y)) {
+      this.canvas.setPointerCapture(e.pointerId);
+      this.spectateBtn.start(e.pointerId);
       return;
     }
 
@@ -696,6 +798,8 @@ export class InputManager {
     if (this.left.pointerId === e.pointerId) this.left.end();
     else if (this.right.pointerId === e.pointerId) this.right.end();
     if (this.missileBtn.pointerId === e.pointerId) this.missileBtn.end();
+    if (this.fireBtn.pointerId === e.pointerId) this.fireBtn.end();
+    if (this.spectateBtn.pointerId === e.pointerId) this.spectateBtn.end();
     if (e.pointerType !== "touch") {
       if (e.button === 2) this.mouseRightDown = false;
       else this.mouseDown = false;
@@ -729,7 +833,11 @@ export class InputManager {
     return keyEdge || rightEdge || btnEdge;
   }
 
-  consumeSpectateToggle()  { return this._consumeKey("KeyV", "_vLatched"); }
+  consumeSpectateToggle()  {
+    const keyEdge = this._consumeKey("KeyV", "_vLatched");
+    const btnEdge = this.spectateBtn.consumeJustPressed();
+    return keyEdge || btnEdge;
+  }
   consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }
   consumeMuteToggle()      { return this._consumeKey("KeyP", "_pLatched"); }
   consumeSpectatePrev()    { return this._consumeKey("KeyB", "_bLatched"); }
@@ -765,8 +873,12 @@ export class InputManager {
     else if (kLen > 0) aim = kbThrust;
     else aim = null;
 
+    // Firing sources: keyboard Enter/Space, mouse left-button, or the
+    // on-screen FIRE button. The right stick is aim-only — touching it
+    // no longer auto-fires, so movement-related touches stay on the
+    // left half and shooting stays an explicit action.
     const firing = this.keys.has("Enter") || this.keys.has("Space")
-                || this.mouseDown || touchAimLen > 0;
+                || this.mouseDown || this.fireBtn.pressed;
 
     return { thrust, aim, firing };
   }

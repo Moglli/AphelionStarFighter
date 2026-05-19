@@ -53,6 +53,11 @@ export function createGame() {
     winner: null,
     spectating: false,
     spectateTargetId: null,
+    // Spectator camera. While `locked`, draw() follows the target ship;
+    // a left-stick nudge during spectate flips `locked` to false and
+    // lets the camera free-pan around the arena. Cycling Prev / Next
+    // re-locks onto whichever ship the user picks.
+    spectateCamera: { x: 0, y: 0, locked: true },
     // Lifecycle: "menu" before the player picks a map size, "playing"
     // once a match is in progress.
     state: "menu",
@@ -88,6 +93,7 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.winner = null;
   game.spectating = false;
   game.spectateTargetId = null;
+  game.spectateCamera = { x: 0, y: 0, locked: true };
   game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
   game.hostileRace = randomRaceKey();
   game.mode = mode === "defend" ? "defend" : (mode === "campaign" ? "campaign" : "open");
@@ -314,6 +320,9 @@ export function enterSpectate(game) {
   // Pick a spectate target — prefer the player's side, fall back to anyone.
   const tgt = pickSpectateInitial(game);
   game.spectateTargetId = tgt ? tgt.id : null;
+  // Start locked on whatever we picked; free-pan engages on stick nudge.
+  if (tgt) game.spectateCamera = { x: tgt.pos.x, y: tgt.pos.y, locked: true };
+  else game.spectateCamera = { x: game.arena.width / 2, y: game.arena.height / 2, locked: false };
 }
 
 function pickSpectateInitial(game) {
@@ -338,6 +347,10 @@ export function cycleSpectate(game, dir) {
   if (idx === -1) idx = 0;
   idx = (idx + (dir > 0 ? 1 : -1) + alive.length) % alive.length;
   game.spectateTargetId = alive[idx].id;
+  // Cycling re-locks the camera onto the new target — free-pan exits
+  // the moment the user explicitly picks someone to watch.
+  const t = alive[idx];
+  game.spectateCamera = { x: t.pos.x, y: t.pos.y, locked: true };
 }
 
 export function getSpectateTarget(game) {

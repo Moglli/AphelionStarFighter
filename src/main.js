@@ -125,7 +125,7 @@ function frame(now) {
     // Clear stale presses when there's no live player to fire.
     game.playerController.firingMissile = input.consumeMissilePress();
 
-    // Spectate hotkeys.
+    // Spectate hotkey OR on-screen SPECTATE button.
     if (input.consumeSpectateToggle()) {
       if (game.spectating) exitSpectate(game);
       else enterSpectate(game);
@@ -133,6 +133,34 @@ function frame(now) {
     if (game.spectating) {
       if (input.consumeSpectateNext()) cycleSpectate(game, +1);
       if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
+
+      // Free-pan camera: in spectate, the left stick (or WASD) detaches
+      // the camera from the locked target and lets the user roam the
+      // arena. Re-lock happens when they cycle to a different ship via
+      // Prev / Next. The right stick is unused in spectate.
+      const camSpeed = 700; // world units per second at full deflection
+      const panX = ctrl.thrust.x * camSpeed * delta;
+      const panY = ctrl.thrust.y * camSpeed * delta;
+      if (panX !== 0 || panY !== 0) {
+        if (game.spectateCamera.locked) {
+          // First nudge — seed camera at the current target before
+          // unlocking so there's no jump.
+          const t = getSpectateTarget(game);
+          if (t) {
+            game.spectateCamera.x = t.pos.x;
+            game.spectateCamera.y = t.pos.y;
+          }
+          game.spectateCamera.locked = false;
+        }
+        game.spectateCamera.x += panX;
+        game.spectateCamera.y += panY;
+        // Clamp to arena so the user can't pan off into the void.
+        const b = game.arena.bounds;
+        if (game.spectateCamera.x < b.minX) game.spectateCamera.x = b.minX;
+        if (game.spectateCamera.x > b.maxX) game.spectateCamera.x = b.maxX;
+        if (game.spectateCamera.y < b.minY) game.spectateCamera.y = b.minY;
+        if (game.spectateCamera.y > b.maxY) game.spectateCamera.y = b.maxY;
+      }
     }
 
     // Edge-trigger: match just ended this frame. Bank a campaign
@@ -172,13 +200,20 @@ function frame(now) {
 }
 
 function draw() {
-  // Camera: spectate target if spectating, else player, else arena center.
+  // Camera: spectate target if spectating + locked, free-pan position
+  // if unlocked, else player, else arena center.
   let camera;
   if (game.spectating) {
-    const spec = getSpectateTarget(game);
-    camera = spec
-      ? { x: spec.pos.x, y: spec.pos.y }
-      : { x: ARENA.width / 2, y: ARENA.height / 2 };
+    if (game.spectateCamera && !game.spectateCamera.locked) {
+      camera = { x: game.spectateCamera.x, y: game.spectateCamera.y };
+    } else {
+      const spec = getSpectateTarget(game);
+      camera = spec
+        ? { x: spec.pos.x, y: spec.pos.y }
+        : (game.spectateCamera
+          ? { x: game.spectateCamera.x, y: game.spectateCamera.y }
+          : { x: ARENA.width / 2, y: ARENA.height / 2 });
+    }
   } else {
     const player = game.ships.find((s) => s.isPlayer && !s.dead);
     camera = player
@@ -211,6 +246,16 @@ function draw() {
   ctx.restore();
 
   drawHUD(ctx, game, viewW, viewH, input.missileBtn, input.startMenu);
+  // Touch-action overlays: only meaningful in-match, hidden in the
+  // pre-match menu and at match-over so they don't catch stray taps.
+  if (game.state === "playing" && !game.matchOver) {
+    const player = game.ships.find((s) => s.isPlayer && !s.dead);
+    if (player || game.spectating) {
+      // FIRE button is only useful when there's a live player to fire.
+      if (player) input.fireBtn.draw(ctx);
+      input.spectateBtn.draw(ctx, game.spectating);
+    }
+  }
   input.drawSticks(ctx);
 }
 
