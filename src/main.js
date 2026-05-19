@@ -9,6 +9,7 @@ import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
 import { prerenderSprites } from "./sprites.js";
 import { drawParticle } from "./particles.js";
+import { GameAudio } from "./audio.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -19,6 +20,8 @@ const input = new InputManager(canvas);
 prerenderSprites();
 const game = createGame();
 window.game = game; // for console smoke-testing
+const audio = new GameAudio();
+let musicWasPlaying = false; // tracks state for start/stop edge detection
 
 let viewW = 0, viewH = 0;
 function resize() {
@@ -55,7 +58,11 @@ function frame(now) {
 
   if (game.state === "menu") {
     const choice = input.startMenu.consumeStart();
-    if (choice) startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode);
+    if (choice) {
+      startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode);
+      // The "Play" click is the user-gesture that unlocks Web Audio.
+      audio.start();
+    }
   } else {
     // Player input → controller.
     const ctrl = input.controller();
@@ -76,8 +83,22 @@ function frame(now) {
       if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
     }
 
-    if (game.matchOver && input.consumeEnterPress()) restart(game);
+    if (game.matchOver && input.consumeEnterPress()) {
+      restart(game);
+      audio.stop();
+    }
   }
+
+  // P toggles music mute (works regardless of state).
+  if (input.consumeMuteToggle()) audio.toggleMute();
+
+  // Music plays only during active gameplay. Pause it on match-over
+  // and on the start menu; resume when a new game kicks off (the
+  // startGame branch above calls audio.start()).
+  const shouldPlay = game.state === "playing" && !game.matchOver;
+  if (shouldPlay && !musicWasPlaying) audio.start();
+  else if (!shouldPlay && musicWasPlaying) audio.stop();
+  musicWasPlaying = shouldPlay;
 
   while (accum >= FIXED_DT) {
     update(game, FIXED_DT);

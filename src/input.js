@@ -334,7 +334,7 @@ export class InputManager {
 
     const TRAPPED = new Set([
       "Space", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-      "KeyM", "KeyV", "KeyN", "KeyB",
+      "KeyM", "KeyV", "KeyN", "KeyB", "KeyP",
     ]);
     window.addEventListener("keydown", (e) => {
       if (e.repeat) return;
@@ -436,6 +436,7 @@ export class InputManager {
 
   consumeSpectateToggle()  { return this._consumeKey("KeyV", "_vLatched"); }
   consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }
+  consumeMuteToggle()      { return this._consumeKey("KeyP", "_pLatched"); }
   consumeSpectatePrev()    { return this._consumeKey("KeyB", "_bLatched"); }
 
   controller() {
