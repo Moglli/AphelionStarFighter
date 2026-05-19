@@ -71,6 +71,8 @@ export function drawHUD(ctx, game, viewW, viewH, input) {
   if (game.state === "menu") {
     if (input.menuScreen === "hangar") {
       input.hangar.draw(ctx, viewW, viewH);
+    } else if (input.menuScreen === "custom") {
+      input.customScreen.draw(ctx, viewW, viewH);
     } else if (input.startMenu) {
       input.startMenu.draw(ctx, viewW, viewH);
     }
@@ -87,6 +89,7 @@ export function drawHUD(ctx, game, viewW, viewH, input) {
   const player = game.ships.find((s) => s.isPlayer && !s.dead);
   if (player) {
     drawPlayerHUD(ctx, player, viewW, viewH, input.missileBtn);
+    input.fireBtn.draw(ctx);
   } else if (game.spectating) {
     drawSpectateOverlay(ctx, game, viewW, viewH);
   } else if (game.respawnTimer > 0 && game.mode !== "waves") {
@@ -97,12 +100,16 @@ export function drawHUD(ctx, game, viewW, viewH, input) {
     ctx.textAlign = "left";
   }
 
+  // On-screen spectate toggle + (when active) prev/next. Drawn during any
+  // playing state so touch users can enter/exit spectate without a keyboard.
+  if (!game.matchOver) input.spectatePanel.draw(ctx, game.spectating);
+
   if (game.matchOver) {
     drawMatchOverOverlay(ctx, game, viewW, viewH);
   }
 
   drawToasts(ctx, viewW, viewH);
-  drawMinimap(ctx, game, viewW, viewH);
+  drawMinimap(ctx, game, viewW, viewH, input);
 }
 
 function drawModeBanner(ctx, game, viewW) {
@@ -279,7 +286,7 @@ function drawSpectateOverlay(ctx, game, viewW, viewH) {
     ctx.fillText("No targets available", viewW / 2, viewH - 20);
   }
   ctx.fillStyle = "#cdf";
-  ctx.fillText("V: return to ship   ·   N / B: cycle target", viewW / 2, viewH - 6);
+  ctx.fillText("EXIT / PREV / NEXT  (keys: V, B, N)", viewW / 2, viewH - 6);
   ctx.textAlign = "left";
 }
 
@@ -320,6 +327,18 @@ function drawMinimap(ctx, game, viewW, viewH) {
   const mapW = rect.w, mapH = rect.h;
   const x = rect.x, y = rect.y;
   ctx.fillStyle = "rgba(0,0,0,0.45)";
+function drawMinimap(ctx, game, viewW, viewH, input) {
+  // Pinned to top-center between the two side strips. Avoids the FIRE /
+  // MISSILE stack at the bottom-right, the player HUD bars at the bottom,
+  // and any joystick activation zone (which all live in the lower half).
+  // Opaque background — gameplay shouldn't bleed through.
+  const mapW = 180, mapH = 128;
+  const x = viewW / 2 - mapW / 2;
+  const y = 90;
+  // Publish rect to InputManager so onDown can swallow taps in this area
+  // instead of letting them spin up a virtual joystick.
+  if (input) input.minimapRect = { x, y, w: mapW, h: mapH };
+  ctx.fillStyle = "#02030a";
   ctx.fillRect(x, y, mapW, mapH);
   ctx.strokeStyle = rally.pending ? "#fd6" : "#456";
   ctx.lineWidth = rally.pending ? 2 : 1;

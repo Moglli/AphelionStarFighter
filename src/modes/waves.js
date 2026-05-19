@@ -1,7 +1,9 @@
 /**
- * Waves mode — endless survival. The player has a thin ally fleet; the
- * hostile side has none at start, but waves of enemies spawn on a timer
- * with escalating composition. Match ends on player death (no respawn).
+ * Waves mode — endless survival. The player can bring a custom-built
+ * allied fleet (see CustomGameScreen → "TAKE INTO WAVES"); without one
+ * they fly solo. The hostile side has none at start, but waves of enemies
+ * spawn on a timer with escalating composition. Match ends on player
+ * death (no respawn).
  *
  * Wave N composition (cumulative):
  *   fighters    : 2 + N
@@ -22,15 +24,27 @@ import { events } from "../events.js";
 const WAVE_INTERVAL_MAX = 12.0;
 const ENEMY_REMAINING_THRESHOLD = 3;
 
+function rosterHasShips(r) {
+  if (!r) return false;
+  for (const k of Object.keys(r)) if ((r[k] | 0) > 0) return true;
+  return false;
+}
+
 export const wavesMode = {
   key: "waves",
   label: "Waves",
   tagline: "Endless survival — one life",
 
-  setup(game, { promotePlayer }) {
+  setup(game, { spawnRoster, promotePlayer }) {
     // Pick a random hostile race so the silhouettes vary.
     game.hostileRace = RACE_KEYS[Math.floor(Math.random() * RACE_KEYS.length)];
-    // Spawn the player ship only — no ally fleet, no starting hostiles.
+    // If the player brought a custom-built fleet, spawn it as the allied
+    // side first so promotePlayer can slot the player into one of those
+    // hulls instead of creating a lone ship.
+    const cr = game.customRoster;
+    if (cr && rosterHasShips(cr.blue)) {
+      spawnRoster(game, { blue: cr.blue }, { onlySides: ["blue"] });
+    }
     promotePlayer(game, game.playerKlass);
     game.modeState = {
       wave: 0,

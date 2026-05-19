@@ -54,7 +54,7 @@ export const CLASSES = {
       range: 1500,
       ttl: 5.0,
       turnRate: 2.6,
-      hp: 1,
+      hp: 4,
       radius: 4,
       acquireRange: 1800,
     },
@@ -99,7 +99,7 @@ export const CLASSES = {
       range: 1700,
       ttl: 7.0,
       turnRate: 1.7,
-      hp: 3,
+      hp: 8,
       radius: 7,
       acquireRange: 2000,
       colors: { blue: "#9cf", red: "#fa6" },
@@ -114,7 +114,7 @@ export const CLASSES = {
     maxSpeed: 150,
     accel: 220,
     drag: 0.99,
-    turnRate: 1.0,
+    turnRate: 0.55,
     radius: 54,
     color: "#bdf",
     firingMode: "forward",
@@ -133,14 +133,14 @@ export const CLASSES = {
     },
     shield: { max: 90, regen: 8, regenDelay: 4.0 },
     armor: { max: 100, wearRate: 0.55 },
-    // Heavy PD screen — frigates' primary contribution to a fleet is
-    // killing inbound missiles and harassing fighters.
+    // Light PD screen — frigates carry just enough to swat a missile
+    // here and there. Capital fire still has to be dealt with manually.
     pdCannons: {
-      count: 4,
-      damage: 6,
-      cooldown: 0.26,
+      count: 2,
+      damage: 3,
+      cooldown: 0.5,
       projectileSpeed: 980,
-      range: 380,
+      range: 340,
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -154,7 +154,7 @@ export const CLASSES = {
       range: 1300,
       ttl: 5.5,
       turnRate: 2.2,
-      hp: 2,
+      hp: 6,
       radius: 5,
       acquireRange: 1600,
       colors: { blue: "#cef", red: "#fc8" },
@@ -169,7 +169,7 @@ export const CLASSES = {
     maxSpeed: 80,
     accel: 130,
     drag: 0.992,
-    turnRate: 0.4,
+    turnRate: 0.22,
     radius: 90,
     color: "#aaf",
     firingMode: "forward",
@@ -189,11 +189,11 @@ export const CLASSES = {
     shield: { max: 260, regen: 14, regenDelay: 5.0 },
     armor: { max: 280, wearRate: 0.5 },
     pdCannons: {
-      count: 4,
-      damage: 6,
-      cooldown: 0.25,
+      count: 2,
+      damage: 3,
+      cooldown: 0.5,
       projectileSpeed: 1000,
-      range: 420,
+      range: 380,
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -207,7 +207,7 @@ export const CLASSES = {
       range: 2000,
       ttl: 9.0,
       turnRate: 1.4,
-      hp: 5,
+      hp: 12,
       radius: 10,
       acquireRange: 2200,
       colors: { blue: "#3df", red: "#f4a" },
@@ -219,11 +219,11 @@ export const CLASSES = {
     name: "Battleship",
     role: "Dreadnought",
     hp: 1100,
-    maxSpeed: 35,
+    maxSpeed: 70,
     accel: 50,
     drag: 0.994,
-    turnRate: 0.15,
-    radius: 156,
+    turnRate: 0.11,
+    radius: 210,
     color: "#88f",
     firingMode: "broadside",
     // ±arc (radians) around each side perpendicular within which broadside
@@ -244,11 +244,11 @@ export const CLASSES = {
     shield: { max: 600, regen: 22, regenDelay: 5.5 },
     armor: { max: 650, wearRate: 0.45 },
     pdCannons: {
-      count: 6,
-      damage: 7,
-      cooldown: 0.22,
+      count: 3,
+      damage: 4,
+      cooldown: 0.45,
       projectileSpeed: 1000,
-      range: 460,
+      range: 420,
       projectileRadius: 3,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -260,7 +260,7 @@ export const CLASSES = {
       range: 2200,
       ttl: 7.5,
       turnRate: 1.9,
-      hp: 3,
+      hp: 8,
       radius: 7,
       acquireRange: 2400,
       colors: { blue: "#fff", red: "#fc8" },
@@ -284,19 +284,19 @@ export const CLASSES = {
     maxSpeed: 45,
     accel: 60,
     drag: 0.994,
-    turnRate: 0.18,
-    radius: 180,         // largest hull
+    turnRate: 0.10,
+    radius: 180,
     color: "#9bf",
     // "none" = no primary weapon. The carrier defends with PD only.
     firingMode: "none",
     shield: { max: 550, regen: 20, regenDelay: 6.0 },
     armor: { max: 600, wearRate: 0.45 },
     pdCannons: {
-      count: 8,          // densest PD wall in the fleet
-      damage: 7,
-      cooldown: 0.22,
+      count: 4,
+      damage: 4,
+      cooldown: 0.40,
       projectileSpeed: 1000,
-      range: 480,
+      range: 440,
       projectileRadius: 3,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -315,7 +315,15 @@ export const CLASSES = {
 };
 
 // Side color palette: each ship tints its class color with side accent.
+// `blue` is always the player's side; the remaining sides are hostiles
+// chosen by the FACTIONS selector on the main menu (2 / 3 / 4).
 export const SIDES = {
-  blue: { primary: "#5cf", accent: "#28a", name: "Allied" },
-  red:  { primary: "#f76", accent: "#a33", name: "Hostile" },
+  blue:   { primary: "#5cf", accent: "#28a", name: "Allied" },
+  red:    { primary: "#f76", accent: "#a33", name: "Hostile" },
+  green:  { primary: "#7f9", accent: "#393", name: "Verdant" },
+  yellow: { primary: "#fd5", accent: "#a82", name: "Aurum" },
 };
+
+// Ordering used to assign sides as factions count up — blue first
+// (player), then the AI sides in turn.
+export const SIDE_ORDER = ["blue", "red", "green", "yellow"];

@@ -73,9 +73,9 @@ export const RACES = {
       missilePods: { count: 3 },
     },
     battleship: {
-      hp: 1500, maxSpeed: 28,
+      hp: 1500, maxSpeed: 56,
       shield: { max: 750 }, armor: { max: 850, wearRate: 0.4 },
-      pdCannons: { count: 8 },
+      pdCannons: { count: 5 },
     },
     carrier: {
       hp: 1500, maxSpeed: 35,

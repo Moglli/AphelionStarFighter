@@ -15,6 +15,10 @@ import { minimapHit, minimapToWorld } from "./hud.js";
 
 const DEADZONE = 0.15;
 
+function pointInRect(x, y, r) {
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+
 export class VirtualStick {
   constructor({ side, color }) {
     this.side = side; // "left" or "right"
@@ -74,17 +78,18 @@ export class VirtualStick {
   }
 }
 
-// On-screen missile button (top-right). Touch-friendly. Mouse also works.
+// On-screen MISSILE button — single-tap to launch, cooldown gated.
+// Sits just above the FIRE button on the right thumb stack.
 export class MissileButton {
   constructor() {
     this.pointerId = null;
     this.pressed = false;
     this.justPressed = false;
-    this.rect = { x: 0, y: 0, w: 90, h: 60 };
+    this.rect = { x: 0, y: 0, w: 96, h: 58 };
   }
   layout(viewW, viewH) {
     this.rect.x = viewW - this.rect.w - 18;
-    this.rect.y = viewH - this.rect.h - 70;
+    this.rect.y = viewH - this.rect.h - 210;
   }
   hit(x, y) {
     const r = this.rect;
@@ -114,7 +119,6 @@ export class MissileButton {
     ctx.lineWidth = 2;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
     if (!ready) {
-      // cooldown shade — top portion filled.
       ctx.fillStyle = "rgba(180,80,80,0.35)";
       ctx.fillRect(r.x, r.y, r.w, r.h * cooldownFrac);
     }
@@ -129,6 +133,120 @@ export class MissileButton {
   }
 }
 
+// On-screen FIRE button — hold-to-fire primary cannons. Drawn larger than
+// MISSILE and placed in the bottom-right corner for thumb reach.
+export class FireButton {
+  constructor() {
+    this.pointerId = null;
+    this.pressed = false;
+    this.rect = { x: 0, y: 0, w: 110, h: 110 };
+  }
+  layout(viewW, viewH) {
+    this.rect.x = viewW - this.rect.w - 12;
+    this.rect.y = viewH - this.rect.h - 90;
+  }
+  hit(x, y) {
+    const r = this.rect;
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+  start(pointerId) {
+    this.pointerId = pointerId;
+    this.pressed = true;
+  }
+  end() {
+    this.pointerId = null;
+    this.pressed = false;
+  }
+  draw(ctx) {
+    const r = this.rect;
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    const radius = Math.min(r.w, r.h) / 2 - 4;
+    ctx.save();
+    ctx.globalAlpha = this.pressed ? 0.95 : 0.8;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = this.pressed ? "rgba(200,60,60,0.55)" : "rgba(60,20,20,0.55)";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = this.pressed ? "#fa6" : "#f96";
+    ctx.stroke();
+    ctx.fillStyle = "#fed";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("FIRE", cx, cy + 6);
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+}
+
+// On-screen SPECTATE controls — toggle button always visible during a
+// match; PREV/NEXT only hit-active while spectating. Edge-triggered so a
+// single tap maps to a single state change.
+export class SpectatePanel {
+  constructor() {
+    this.toggleRect = { x: 0, y: 0, w: 110, h: 32 };
+    this.prevRect = { x: 0, y: 0, w: 80, h: 44 };
+    this.nextRect = { x: 0, y: 0, w: 80, h: 44 };
+    this._toggleEdge = false;
+    this._prevEdge = false;
+    this._nextEdge = false;
+  }
+  layout(viewW, viewH) {
+    this.toggleRect.x = viewW / 2 - this.toggleRect.w / 2;
+    this.toggleRect.y = 50;
+    this.prevRect.x = 16;
+    this.prevRect.y = viewH - 52;
+    this.nextRect.x = viewW - this.nextRect.w - 16;
+    this.nextRect.y = viewH - 52;
+  }
+  // Returns the kind of hit so onDown knows whether to swallow the click.
+  hit(x, y, spectating) {
+    if (this._inside(this.toggleRect, x, y)) { this._toggleEdge = true; return "toggle"; }
+    if (spectating) {
+      if (this._inside(this.prevRect, x, y)) { this._prevEdge = true; return "prev"; }
+      if (this._inside(this.nextRect, x, y)) { this._nextEdge = true; return "next"; }
+    }
+    return null;
+  }
+  _inside(r, x, y) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+  consumeToggle() { const e = this._toggleEdge; this._toggleEdge = false; return e; }
+  consumePrev()   { const e = this._prevEdge;   this._prevEdge = false;   return e; }
+  consumeNext()   { const e = this._nextEdge;   this._nextEdge = false;   return e; }
+
+  draw(ctx, spectating) {
+    const t = this.toggleRect;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = spectating ? "rgba(60,30,90,0.7)" : "rgba(20,40,60,0.7)";
+    ctx.fillRect(t.x, t.y, t.w, t.h);
+    ctx.strokeStyle = spectating ? "#c9f" : "#7df";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(t.x, t.y, t.w, t.h);
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(spectating ? "EXIT SPECTATE" : "SPECTATE", t.x + t.w / 2, t.y + t.h / 2 + 5);
+
+    if (spectating) {
+      for (const [r, label] of [[this.prevRect, "◀ PREV"], [this.nextRect, "NEXT ▶"]]) {
+        ctx.fillStyle = "rgba(20,40,60,0.75)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = "#7df";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.fillStyle = "#cef";
+        ctx.font = "bold 14px system-ui, sans-serif";
+        ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 5);
+      }
+    }
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+}
+
 // Pre-match menu: lets the player pick a game mode, ship class, allied
 // race, and map size before the world spawns. Selections persist via
 // SaveStore so re-opening the menu restores the last pick.
@@ -137,20 +255,47 @@ export class MissileButton {
 // toggles its row's selection; START emits the chosen options bundle.
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
 
+// Fleet-size multipliers — scale every roster entry up or down so the
+// player can ask for "a few fighters" or "an absolute swarm".
+export const FLEET_OPTIONS = [
+  { key: "small",  label: "Small",  mul: 0.5 },
+  { key: "medium", label: "Medium", mul: 1.0 },
+  { key: "large",  label: "Large",  mul: 2.0 },
+  { key: "huge",   label: "Huge",   mul: 3.5 },
+];
+
+// Faction count — number of competing AI sides (including the player).
+const FACTION_OPTIONS = [
+  { key: 2, label: "2 — Duel" },
+  { key: 3, label: "3 — Triad" },
+  { key: 4, label: "4 — Free-for-all" },
+];
+
 export class StartMenu {
   constructor() {
     this.modeRects = [];
     this.classRects = [];
     this.sizeRects = [];
     this.raceRects = [];
+    this.fleetRects = [];
+    this.factionRects = [];
     this.startRect = null;
     const sel = saveStore.get().menuSelection;
     this.selectedMode = MODES[sel.mode] ? sel.mode : "arena";
     this.selectedKlass = CLASSES[sel.klass] ? sel.klass : "fighter";
     this.selectedSize = sel.mapSize || "medium";
     this.selectedRace = RACES[sel.race] ? sel.race : "terran";
+    this.selectedFleet = FLEET_OPTIONS.find(o => o.key === sel.fleetMul) ? sel.fleetMul : "medium";
+    this.selectedFactions = [2, 3, 4].includes(sel.factions) ? sel.factions : 2;
     this.justStarted = null;
     this.hangarRequested = false;
+    this.customRequested = false;
+  }
+
+  consumeCustomRequest() {
+    const r = this.customRequested;
+    this.customRequested = false;
+    return r;
   }
 
   layout(viewW, viewH) {
@@ -210,18 +355,45 @@ export class StartMenu {
       y: raceY, w: raceBtnW, h: chipH,
     }));
 
-    // START button + HANGAR button (sits to the left of START).
+    // Fleet-size row.
+    const fleetOpts = FLEET_OPTIONS;
+    const fn = fleetOpts.length;
+    const fleetBtnW = Math.min(130, (viewW - 60) / fn - gapX);
+    const fleetRowW = fn * fleetBtnW + (fn - 1) * gapX;
+    const fleetY = raceY + chipH + rowGap + 16;
+    const fleetStartX = (viewW - fleetRowW) / 2;
+    this.fleetRects = fleetOpts.map((o, i) => ({
+      key: o.key, label: o.label, mul: o.mul,
+      x: fleetStartX + i * (fleetBtnW + gapX),
+      y: fleetY, w: fleetBtnW, h: chipH,
+    }));
+
+    // Factions row.
+    const factOpts = FACTION_OPTIONS;
+    const fan = factOpts.length;
+    const factBtnW = Math.min(170, (viewW - 60) / fan - gapX);
+    const factRowW = fan * factBtnW + (fan - 1) * gapX;
+    const factY = fleetY + chipH + rowGap + 16;
+    const factStartX = (viewW - factRowW) / 2;
+    this.factionRects = factOpts.map((o, i) => ({
+      key: o.key, label: o.label,
+      x: factStartX + i * (factBtnW + gapX),
+      y: factY, w: factBtnW, h: chipH,
+    }));
+
+    // Bottom button row: HANGAR | START | CUSTOM. Sized so the whole
+    // row stays centered under the chip stack on any viewport.
     const startW = 220, startH = 56;
-    const startY = raceY + chipH + 40;
-    this.startRect = {
-      x: (viewW - startW) / 2,
-      y: startY,
-      w: startW, h: startH,
-    };
-    this.hangarRect = {
-      x: this.startRect.x - 150 - 16,
-      y: startY,
-      w: 150, h: startH,
+    const sideBtnW = 150;
+    const gap = 16;
+    const totalW = sideBtnW + gap + startW + gap + sideBtnW;
+    const startY = factY + chipH + 36;
+    const rowX = (viewW - totalW) / 2;
+    this.hangarRect = { x: rowX, y: startY, w: sideBtnW, h: startH };
+    this.startRect = { x: rowX + sideBtnW + gap, y: startY, w: startW, h: startH };
+    this.customRect = {
+      x: rowX + sideBtnW + gap + startW + gap,
+      y: startY, w: sideBtnW, h: startH,
     };
   }
 
@@ -271,8 +443,29 @@ export class StartMenu {
         return;
       }
     }
+    for (const r of this.fleetRects) {
+      if (this._hit(r, x, y)) {
+        this.selectedFleet = r.key;
+        events.emit("uiClick", { source: "menu" });
+        this._persist();
+        return;
+      }
+    }
+    for (const r of this.factionRects) {
+      if (this._hit(r, x, y)) {
+        this.selectedFactions = r.key;
+        events.emit("uiClick", { source: "menu" });
+        this._persist();
+        return;
+      }
+    }
     if (this.hangarRect && this._hit(this.hangarRect, x, y)) {
       this.hangarRequested = true;
+      events.emit("uiClick", { source: "menu" });
+      return;
+    }
+    if (this.customRect && this._hit(this.customRect, x, y)) {
+      this.customRequested = true;
       events.emit("uiClick", { source: "menu" });
       return;
     }
@@ -292,6 +485,8 @@ export class StartMenu {
       data.menuSelection.klass = this.selectedKlass;
       data.menuSelection.race = this.selectedRace;
       data.menuSelection.mapSize = this.selectedSize;
+      data.menuSelection.fleetMul = this.selectedFleet;
+      data.menuSelection.factions = this.selectedFactions;
     });
   }
 
@@ -302,12 +497,16 @@ export class StartMenu {
   _emitStart() {
     const size = this.sizeRects.find((r) => r.key === this.selectedSize)
               || this.sizeRects[0];
+    const fleet = this.fleetRects.find((r) => r.key === this.selectedFleet)
+               || this.fleetRects[1];
     this.justStarted = {
       mode: this.selectedMode,
       klass: this.selectedKlass,
       race: this.selectedRace,
       mapW: size.mapW,
       mapH: size.mapH,
+      fleetMul: fleet.mul,
+      factions: this.selectedFactions,
     };
   }
 
@@ -362,6 +561,24 @@ export class StartMenu {
         r.label, race.tagline || "");
     }
 
+    // Fleet-size row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("FLEET SIZE", viewW / 2, this.fleetRects[0].y - 12);
+    for (const r of this.fleetRects) {
+      this._drawChip(ctx, r, r.key === this.selectedFleet,
+        r.label, `${r.mul}x`);
+    }
+
+    // Factions row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("FACTIONS", viewW / 2, this.factionRects[0].y - 12);
+    for (const r of this.factionRects) {
+      this._drawChip(ctx, r, r.key === this.selectedFactions,
+        String(r.key), r.label.split(" — ")[1] || "");
+    }
+
     // HANGAR button.
     const h = this.hangarRect;
     ctx.fillStyle = "rgba(40,60,100,0.85)";
@@ -372,6 +589,17 @@ export class StartMenu {
     ctx.fillStyle = "#cef";
     ctx.font = "bold 18px system-ui, sans-serif";
     ctx.fillText("HANGAR", h.x + h.w / 2, h.y + h.h / 2 + 6);
+
+    // CUSTOM button.
+    const cu = this.customRect;
+    ctx.fillStyle = "rgba(80,40,100,0.85)";
+    ctx.fillRect(cu.x, cu.y, cu.w, cu.h);
+    ctx.strokeStyle = "#c9f";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cu.x, cu.y, cu.w, cu.h);
+    ctx.fillStyle = "#ecf";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("CUSTOM", cu.x + cu.w / 2, cu.y + cu.h / 2 + 6);
 
     // START button.
     const s = this.startRect;
@@ -443,18 +671,290 @@ export class StartMenu {
   }
 }
 
+// Custom game roster builder. Two columns of class steppers (Allied
+// left, Hostile right), a hostile-race chip row, BACK + START at the
+// bottom. State mirrors saveStore.customRoster — every adjustment
+// persists so the player's last fleet build is preserved between runs.
+const CUSTOM_CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+const CUSTOM_PER_CLASS_CAP = 60;
+
+export class CustomGameScreen {
+  constructor() {
+    const data = saveStore.get();
+    const cr = data.customRoster;
+    this.roster = {
+      blue: { ...cr.blue },
+      red:  { ...cr.red },
+    };
+    this.hostileRace = RACES[cr.hostileRace] ? cr.hostileRace : "terran";
+    this.backRequested = false;
+    this.justStarted = null;
+    this.rowRects = []; // { side, klass, minus, plus }
+    this.raceRects = [];
+    this.backRect = null;
+    this.startRect = null;
+  }
+
+  consumeBackRequest() {
+    const b = this.backRequested;
+    this.backRequested = false;
+    return b;
+  }
+  consumeStart() {
+    const s = this.justStarted;
+    this.justStarted = null;
+    return s;
+  }
+
+  layout(viewW, viewH) {
+    const panelW = Math.min(900, viewW - 40);
+    const panelX = (viewW - panelW) / 2;
+    const colW = (panelW - 40) / 2;
+    const top = 24;
+
+    this.backRect  = { x: panelX, y: top, w: 110, h: 40 };
+    // Two launch buttons stacked along the top-right: custom (versus a
+    // mirrored hostile fleet) vs. waves (carry only the allied fleet
+    // into endless-survival).
+    const launchW = 180, launchGap = 8;
+    this.startRect = {
+      x: panelX + panelW - launchW, y: top, w: launchW, h: 40,
+    };
+    this.startWavesRect = {
+      x: panelX + panelW - launchW * 2 - launchGap, y: top, w: launchW, h: 40,
+    };
+
+    const headerY = top + 64;          // "ALLIED FLEET" / "HOSTILE FLEET" labels
+    const firstRowY = headerY + 28;
+    const rowH = 40;
+    const rowGap = 4;
+    this.rowRects = [];
+    for (const side of ["blue", "red"]) {
+      const colX = side === "blue" ? panelX + 20 : panelX + 20 + colW + 20;
+      for (let i = 0; i < CUSTOM_CLASS_ORDER.length; i++) {
+        const klass = CUSTOM_CLASS_ORDER[i];
+        const y = firstRowY + i * (rowH + rowGap);
+        this.rowRects.push({
+          side, klass, y, h: rowH,
+          x: colX, w: colW - 40,
+          labelX: colX + 12,
+          minus: { x: colX + colW - 40 - 96, y, w: 36, h: rowH },
+          countX: colX + colW - 40 - 50,
+          plus:  { x: colX + colW - 40 - 36, y, w: 36, h: rowH },
+        });
+      }
+    }
+
+    const racesY = firstRowY + (rowH + rowGap) * CUSTOM_CLASS_ORDER.length + 32;
+    const raceKeys = RACE_KEYS;
+    const rn = raceKeys.length;
+    const raceBtnW = Math.min(160, (panelW - 40) / rn - 12);
+    const raceRowW = rn * raceBtnW + (rn - 1) * 12;
+    const raceStartX = panelX + (panelW - raceRowW) / 2;
+    this.raceRects = raceKeys.map((k, i) => ({
+      key: k,
+      x: raceStartX + i * (raceBtnW + 12),
+      y: racesY, w: raceBtnW, h: 44,
+    }));
+
+    this._panelX = panelX;
+    this._panelW = panelW;
+    this._headerY = headerY;
+    this._racesY = racesY;
+  }
+
+  click(x, y) {
+    if (this._hit(this.backRect, x, y)) {
+      this.backRequested = true;
+      events.emit("uiClick", { source: "menu" });
+      return;
+    }
+    if (this._hit(this.startRect, x, y)) {
+      this._persist();
+      this.justStarted = {
+        intoMode: "custom",
+        blue: { ...this.roster.blue },
+        red: { ...this.roster.red },
+        hostileRace: this.hostileRace,
+      };
+      events.emit("uiClick", { source: "menu" });
+      return;
+    }
+    if (this.startWavesRect && this._hit(this.startWavesRect, x, y)) {
+      // Take the allied build into Waves. Only the blue roster matters
+      // here; hostiles come from the wave spawner.
+      this._persist();
+      this.justStarted = {
+        intoMode: "waves",
+        blue: { ...this.roster.blue },
+        red: {},
+        hostileRace: this.hostileRace,
+      };
+      events.emit("uiClick", { source: "menu" });
+      return;
+    }
+    for (const r of this.rowRects) {
+      if (this._hit(r.minus, x, y)) {
+        this._step(r.side, r.klass, -1);
+        events.emit("uiClick", { source: "menu" });
+        return;
+      }
+      if (this._hit(r.plus, x, y)) {
+        this._step(r.side, r.klass, +1);
+        events.emit("uiClick", { source: "menu" });
+        return;
+      }
+    }
+    for (const r of this.raceRects) {
+      if (this._hit(r, x, y)) {
+        this.hostileRace = r.key;
+        this._persist();
+        events.emit("uiClick", { source: "menu" });
+        return;
+      }
+    }
+  }
+
+  _step(side, klass, delta) {
+    const cur = this.roster[side][klass] || 0;
+    this.roster[side][klass] = Math.max(0, Math.min(CUSTOM_PER_CLASS_CAP, cur + delta));
+    this._persist();
+  }
+
+  _persist() {
+    saveStore.update((d) => {
+      d.customRoster.blue = { ...this.roster.blue };
+      d.customRoster.red = { ...this.roster.red };
+      d.customRoster.hostileRace = this.hostileRace;
+    });
+  }
+
+  _hit(r, x, y) {
+    return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  draw(ctx, viewW, viewH) {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.78)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    // Title.
+    ctx.fillStyle = "#ecf";
+    ctx.textAlign = "center";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.fillText("CUSTOM GAME", viewW / 2, this.backRect.y + 28);
+
+    this._drawSquareButton(ctx, this.backRect, "← BACK", "#7df", "rgba(20,40,60,0.85)");
+    if (this.startWavesRect) {
+      this._drawSquareButton(ctx, this.startWavesRect, "TAKE INTO WAVES",
+                              "#fb6", "rgba(120,70,30,0.9)");
+    }
+    this._drawSquareButton(ctx, this.startRect, "START MATCH", "#9f8", "rgba(60,140,90,0.9)");
+
+    // Column headers.
+    const colW = (this._panelW - 40) / 2;
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.textAlign = "center";
+    ctx.fillText("ALLIED FLEET",  this._panelX + 20 + colW / 2, this._headerY + 14);
+    ctx.fillStyle = "#fb6";
+    ctx.fillText("HOSTILE FLEET", this._panelX + 20 + colW + 20 + colW / 2, this._headerY + 14);
+
+    // Per-class stepper rows.
+    for (const r of this.rowRects) {
+      const count = this.roster[r.side][r.klass] || 0;
+      // Row background.
+      ctx.fillStyle = "rgba(20,30,50,0.7)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = r.side === "blue" ? "#345" : "#522";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      // Class name.
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(CLASSES[r.klass].name, r.labelX, r.y + r.h / 2 + 5);
+      // Count (centered between the buttons).
+      ctx.fillStyle = count > 0 ? "#fff" : "#566";
+      ctx.font = "bold 16px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(String(count), r.countX, r.y + r.h / 2 + 6);
+      // Steppers.
+      this._drawStepperButton(ctx, r.minus, "−");
+      this._drawStepperButton(ctx, r.plus, "+");
+    }
+
+    // Hostile-race chip row.
+    ctx.fillStyle = "#fb6";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("HOSTILE RACE", viewW / 2, this._racesY - 10);
+    for (const r of this.raceRects) {
+      const selected = r.key === this.hostileRace;
+      ctx.fillStyle = selected ? "rgba(140,60,40,0.95)" : "rgba(40,20,20,0.85)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = selected ? "#fff" : "#a55";
+      ctx.lineWidth = selected ? 3 : 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = "#fed";
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.fillText(RACES[r.key].name, r.x + r.w / 2, r.y + r.h / 2 - 1);
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillStyle = "#fc8";
+      ctx.fillText(RACES[r.key].tagline || "", r.x + r.w / 2, r.y + r.h / 2 + 13);
+    }
+
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
+  _drawSquareButton(ctx, r, label, stroke, fill) {
+    ctx.fillStyle = fill;
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 5);
+  }
+
+  _drawStepperButton(ctx, r, glyph) {
+    ctx.fillStyle = "rgba(20,40,60,0.95)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = "#7df";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(glyph, r.x + r.w / 2, r.y + r.h / 2 + 7);
+  }
+}
+
 export class InputManager {
   constructor(canvas) {
     this.canvas = canvas;
     this.left = new VirtualStick({ side: "left", color: "#5cf" });
     this.right = new VirtualStick({ side: "right", color: "#f76" });
     this.missileBtn = new MissileButton();
+    this.fireBtn = new FireButton();
+    this.spectatePanel = new SpectatePanel();
     this.startMenu = new StartMenu();
+    // Set from main.js each frame so the spectate panel knows which of its
+    // sub-buttons (toggle vs prev/next) should be hit-active.
+    this.spectating = false;
     this.hangar = new Hangar();
+    this.customScreen = new CustomGameScreen();
     // Which pre-match panel is active. "menu" → start menu; "hangar" →
-    // hangar profile screen. Toggled by HANGAR / BACK buttons.
+    // hangar profile screen; "custom" → custom-game roster builder.
+    // Toggled by HANGAR / CUSTOM / BACK buttons.
     this.menuScreen = "menu";
     this.menuActive = false;
+    // Read-only display rects published by the HUD. Taps inside are
+    // swallowed so they don't fire joysticks or weapons.
+    this.minimapRect = null;
 
     this.keys = new Set();
     this.mouse = { x: 0, y: 0 };
@@ -476,8 +976,12 @@ export class InputManager {
     canvas.addEventListener("pointermove", (e) => this.onMove(e), opts);
     canvas.addEventListener("pointerup", (e) => this.onUp(e), opts);
     canvas.addEventListener("pointercancel", (e) => this.onUp(e), opts);
-    canvas.addEventListener("pointerenter", () => { this.mouseInside = true; });
-    canvas.addEventListener("pointerleave", () => { this.mouseInside = false; });
+    canvas.addEventListener("pointerenter", (e) => {
+      if (e.pointerType !== "touch") this.mouseInside = true;
+    });
+    canvas.addEventListener("pointerleave", (e) => {
+      if (e.pointerType !== "touch") this.mouseInside = false;
+    });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.style.touchAction = "none";
 
@@ -501,14 +1005,22 @@ export class InputManager {
 
   layoutOverlays(viewW, viewH) {
     this.missileBtn.layout(viewW, viewH);
+    this.fireBtn.layout(viewW, viewH);
+    this.spectatePanel.layout(viewW, viewH);
     this.startMenu.layout(viewW, viewH);
     this.hangar.layout(viewW, viewH);
+    this.customScreen.layout(viewW, viewH);
   }
 
   onDown(e) {
     e.preventDefault();
     const { x, y } = this.pos(e);
-    this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+    // Track the cursor only for real pointers — touch taps on buttons or
+    // joystick zones would otherwise pollute mouseAim and rotate the
+    // player toward whatever was just tapped (e.g. the FIRE button).
+    if (e.pointerType !== "touch") {
+      this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+    }
 
     // Pre-match panels: route the click to whichever screen is active
     // and swallow everything else. Screen toggle handled below.
@@ -516,21 +1028,41 @@ export class InputManager {
       if (this.menuScreen === "hangar") {
         this.hangar.click(x, y);
         if (this.hangar.consumeBackRequest()) this.menuScreen = "menu";
+      } else if (this.menuScreen === "custom") {
+        this.customScreen.click(x, y);
+        if (this.customScreen.consumeBackRequest()) this.menuScreen = "menu";
       } else {
         this.startMenu.click(x, y);
         if (this.startMenu.consumeHangarRequest()) {
           // Re-layout in case the daily-claim chip needs to appear.
           this.hangar.layout(this.canvas.clientWidth, this.canvas.clientHeight);
           this.menuScreen = "hangar";
+        } else if (this.startMenu.consumeCustomRequest()) {
+          this.customScreen.layout(this.canvas.clientWidth, this.canvas.clientHeight);
+          this.menuScreen = "custom";
         }
       }
       return;
     }
 
+    // Read-only HUD elements consume taps so nothing else (joystick,
+    // weapon) reacts to them.
+    if (this.minimapRect && pointInRect(x, y, this.minimapRect)) return;
+    // Spectate panel — toggle button is always there during play, and the
+    // prev/next sub-buttons are only hit-active while already spectating.
+    if (this.spectatePanel.hit(x, y, this.spectating)) {
+      return;
+    }
     // Missile button hit-test first — works for both touch and mouse.
     if (this.missileBtn.hit(x, y)) {
-      this.canvas.setPointerCapture(e.pointerId);
       this.missileBtn.start(e.pointerId);
+      try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
+      return;
+    }
+    // Fire button: hold-to-fire primary cannons.
+    if (this.fireBtn.hit(x, y)) {
+      this.fireBtn.start(e.pointerId);
+      try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
       return;
     }
 
@@ -547,7 +1079,7 @@ export class InputManager {
     }
 
     if (e.pointerType === "touch") {
-      this.canvas.setPointerCapture(e.pointerId);
+      try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
       const w = this.canvas.clientWidth;
       if (this.left.claims(x, w) && this.left.pointerId === null) {
         this.left.start(e.pointerId, x, y);
@@ -565,7 +1097,9 @@ export class InputManager {
   }
   onMove(e) {
     const { x, y } = this.pos(e);
-    this.mouse.x = x; this.mouse.y = y;
+    if (e.pointerType !== "touch") {
+      this.mouse.x = x; this.mouse.y = y;
+    }
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
   }
@@ -573,6 +1107,7 @@ export class InputManager {
     if (this.left.pointerId === e.pointerId) this.left.end();
     else if (this.right.pointerId === e.pointerId) this.right.end();
     if (this.missileBtn.pointerId === e.pointerId) this.missileBtn.end();
+    if (this.fireBtn.pointerId === e.pointerId) this.fireBtn.end();
     if (e.pointerType !== "touch") {
       if (e.button === 2) this.mouseRightDown = false;
       else this.mouseDown = false;
@@ -606,9 +1141,15 @@ export class InputManager {
     return keyEdge || rightEdge || btnEdge;
   }
 
-  consumeSpectateToggle()  { return this._consumeKey("KeyV", "_vLatched"); }
-  consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }
-  consumeSpectatePrev()    { return this._consumeKey("KeyB", "_bLatched"); }
+  consumeSpectateToggle()  {
+    return this._consumeKey("KeyV", "_vLatched") || this.spectatePanel.consumeToggle();
+  }
+  consumeSpectateNext()    {
+    return this._consumeKey("KeyN", "_nLatched") || this.spectatePanel.consumeNext();
+  }
+  consumeSpectatePrev()    {
+    return this._consumeKey("KeyB", "_bLatched") || this.spectatePanel.consumePrev();
+  }
 
   controller() {
     const touchThrust = this.left.value;
@@ -635,14 +1176,19 @@ export class InputManager {
 
     const thrust = kLen > 0 ? kbThrust : (touchHasThrust ? touchThrust : { x: 0, y: 0 });
 
+    // Aim priority: right stick → mouse → keyboard direction → left stick.
+    // The left-stick fallback is what makes touch fighters turn — without
+    // it, the player's heading is locked because fighter velocity is bound
+    // to heading (see ship.js updateShip) and thrust is otherwise ignored.
     let aim;
     if (touchAimLen > 0) aim = touchAim;
     else if (mouseAim) aim = mouseAim;
     else if (kLen > 0) aim = kbThrust;
+    else if (touchHasThrust) aim = touchThrust;
     else aim = null;
 
     const firing = this.keys.has("Enter") || this.keys.has("Space")
-                || this.mouseDown || touchAimLen > 0;
+                || this.mouseDown || this.fireBtn.pressed;
 
     return { thrust, aim, firing };
   }
