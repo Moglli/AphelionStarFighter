@@ -5,6 +5,10 @@
 import { MAP_SIZES } from "./arena.js";
 import { RACES, RACE_KEYS } from "./races.js";
 import { UPGRADES, UPGRADE_KEYS, MAX_MISSION, nextCost } from "./campaign.js";
+import {
+  MAX_ENERGY, COST_PER_GAME, PACKAGES,
+  canSpend, timeUntilNext, formatDuration,
+} from "./energy.js";
 
 const DEADZONE = 0.15;
 
@@ -148,11 +152,23 @@ export class StartMenu {
     // Campaign state ref + click callback wired by main.js.
     this.campaign = null;
     this.onPurchase = null;
+    // Energy state ref + IAP callback wired by main.js.
+    this.energy = null;
+    this.onEnergyPurchase = null;
+    this.showRefill = false;        // package overlay visibility
+    this.refillRects = [];          // per-package click rects
+    this.refillCloseRect = null;
+    this.energyBarRect = null;      // clickable "refill" area in the header
   }
 
   setCampaign(state, onPurchase) {
     this.campaign = state;
     this.onPurchase = onPurchase;
+  }
+
+  setEnergy(state, onPurchase) {
+    this.energy = state;
+    this.onEnergyPurchase = onPurchase;
   }
 
   layout(viewW, viewH) {
@@ -231,9 +247,55 @@ export class StartMenu {
       y: nextY,
       w: startW, h: startH,
     };
+
+    // Energy header — clickable strip at the very top of the menu.
+    // Sits above the title in screen space.
+    const ebW = 360, ebH = 38;
+    this.energyBarRect = {
+      x: (viewW - ebW) / 2,
+      y: titleY - 60,
+      w: ebW, h: ebH,
+    };
+
+    // Refill overlay (package picker). Always laid out so the click
+    // hit-test works the moment the overlay opens — `showRefill`
+    // gates draw + click.
+    const pkgW = 220, pkgH = 110, pkgGap = 14;
+    const totalW = PACKAGES.length * pkgW + (PACKAGES.length - 1) * pkgGap;
+    const pkgY = viewH / 2 - pkgH / 2;
+    const pkgStartX = (viewW - totalW) / 2;
+    this.refillRects = PACKAGES.map((p, i) => ({
+      id: p.id,
+      x: pkgStartX + i * (pkgW + pkgGap),
+      y: pkgY,
+      w: pkgW, h: pkgH,
+    }));
+    this.refillCloseRect = {
+      x: viewW / 2 - 50,
+      y: pkgY + pkgH + 24,
+      w: 100, h: 36,
+    };
   }
 
   click(x, y) {
+    // Refill overlay grabs all clicks while open.
+    if (this.showRefill) {
+      for (const r of this.refillRects) {
+        if (this._hit(r, x, y)) {
+          if (this.onEnergyPurchase) this.onEnergyPurchase(r.id);
+          this.showRefill = false;
+          return true;
+        }
+      }
+      // Close button OR clicking outside the overlay dismisses it.
+      this.showRefill = false;
+      return true;
+    }
+    // Energy bar opens the refill overlay.
+    if (this.energyBarRect && this._hit(this.energyBarRect, x, y)) {
+      this.showRefill = true;
+      return true;
+    }
     for (const r of this.sizeRects) {
       if (this._hit(r, x, y)) { this.selectedSize = r.key; return true; }
     }
@@ -257,6 +319,12 @@ export class StartMenu {
       }
     }
     if (this.startRect && this._hit(this.startRect, x, y)) {
+      // Out-of-energy clicks pop the refill overlay instead of starting
+      // a match. Standard F2P funnel: friction → purchase prompt.
+      if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
+        this.showRefill = true;
+        return true;
+      }
       this._emitStart();
       return true;
     }
@@ -287,6 +355,11 @@ export class StartMenu {
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(0, 0, viewW, viewH);
+
+    // Energy header — clickable strip showing current tank and the
+    // refill countdown when below cap. Doubles as the entry point to
+    // the purchase overlay.
+    if (this.energyBarRect) this._drawEnergyHeader(ctx);
 
     ctx.fillStyle = "#cef";
     ctx.textAlign = "center";
@@ -335,23 +408,127 @@ export class StartMenu {
     }
 
     const s = this.startRect;
-    ctx.fillStyle = "rgba(60,140,90,0.85)";
-    ctx.fillRect(s.x, s.y, s.w, s.h);
-    ctx.strokeStyle = "#9f8";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(s.x, s.y, s.w, s.h);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 22px system-ui, sans-serif";
-    let label = "START";
-    if (this.selectedMode === "campaign" && this.campaign) {
-      label = this.campaign.completed
-        ? "FREE SKIRMISH"
-        : `START MISSION ${this.campaign.mission}`;
+    const outOfEnergy = this.energy && !canSpend(this.energy, COST_PER_GAME);
+    if (outOfEnergy) {
+      ctx.fillStyle = "rgba(60,40,40,0.85)";
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.strokeStyle = "#c66";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = "#fcc";
+      ctx.font = "bold 18px system-ui, sans-serif";
+      ctx.fillText("OUT OF ENERGY", s.x + s.w / 2, s.y + s.h / 2 - 2);
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillStyle = "#fa8";
+      ctx.fillText("Tap to refill", s.x + s.w / 2, s.y + s.h / 2 + 16);
+    } else {
+      ctx.fillStyle = "rgba(60,140,90,0.85)";
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.strokeStyle = "#9f8";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 22px system-ui, sans-serif";
+      let label = "START";
+      if (this.selectedMode === "campaign" && this.campaign) {
+        label = this.campaign.completed
+          ? "FREE SKIRMISH"
+          : `START MISSION ${this.campaign.mission}`;
+      }
+      ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
     }
-    ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
+
+    // Refill overlay renders last so it sits on top of everything.
+    if (this.showRefill) this._drawRefillOverlay(ctx, viewW, viewH);
 
     ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  _drawEnergyHeader(ctx) {
+    const r = this.energyBarRect;
+    const e = this.energy;
+    const cur = e ? e.current : MAX_ENERGY;
+    const full = cur >= MAX_ENERGY;
+    const empty = cur <= 0;
+
+    ctx.fillStyle = empty ? "rgba(70,30,30,0.85)" : "rgba(20,40,55,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = empty ? "#f86" : (full ? "#9fc" : "#7df");
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+    // Left: ⚡ + count
+    ctx.textAlign = "left";
+    ctx.fillStyle = empty ? "#f86" : "#fe8";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("ENERGY", r.x + 12, r.y + 24);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText(`${cur}/${MAX_ENERGY}`, r.x + 90, r.y + 24);
+
+    // Middle: regen countdown.
+    if (!full && e) {
+      ctx.fillStyle = "#9bd";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const next = timeUntilNext(e);
+      ctx.fillText(`Next +1 in ${formatDuration(next)}`, r.x + r.w / 2, r.y + 23);
+    }
+
+    // Right: refill button hint.
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fe8";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("+ REFILL", r.x + r.w - 12, r.y + 24);
+    ctx.textAlign = "left";
+  }
+
+  _drawRefillOverlay(ctx, viewW, viewH) {
+    // Scrim.
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.fillText("REFUEL ENERGY", viewW / 2, this.refillRects[0].y - 30);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("Get back in the cockpit instantly",
+      viewW / 2, this.refillRects[0].y - 12);
+
+    for (let i = 0; i < this.refillRects.length; i++) {
+      const rr = this.refillRects[i];
+      const pkg = PACKAGES[i];
+      ctx.fillStyle = "rgba(30,60,100,0.95)";
+      ctx.fillRect(rr.x, rr.y, rr.w, rr.h);
+      ctx.strokeStyle = "#9cf";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rr.x, rr.y, rr.w, rr.h);
+
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 18px system-ui, sans-serif";
+      ctx.fillText(pkg.label, rr.x + rr.w / 2, rr.y + 28);
+      ctx.fillStyle = "#fe8";
+      ctx.font = "bold 32px system-ui, sans-serif";
+      ctx.fillText(`+${pkg.energy}`, rr.x + rr.w / 2, rr.y + 68);
+      ctx.fillStyle = "#9f8";
+      ctx.font = "bold 16px system-ui, sans-serif";
+      ctx.fillText(pkg.price, rr.x + rr.w / 2, rr.y + 95);
+    }
+
+    // Close button.
+    const cr = this.refillCloseRect;
+    ctx.fillStyle = "rgba(60,40,40,0.85)";
+    ctx.fillRect(cr.x, cr.y, cr.w, cr.h);
+    ctx.strokeStyle = "#c66";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cr.x, cr.y, cr.w, cr.h);
+    ctx.fillStyle = "#fcc";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText("CLOSE", cr.x + cr.w / 2, cr.y + cr.h / 2 + 5);
+    ctx.textAlign = "left";
   }
 
   _drawUpgrade(ctx, r) {

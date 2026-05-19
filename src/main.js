@@ -15,6 +15,9 @@ import {
   buildPlayerUpgrade, purchaseUpgrade, recordVictory,
 } from "./campaign.js";
 import { resolveSpec } from "./races.js";
+import {
+  loadEnergy, regenTick, spendEnergy, purchase as purchaseEnergy,
+} from "./energy.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -33,6 +36,11 @@ let musicWasPlaying = false; // tracks state for start/stop edge detection
 // purchase / victory callbacks below and re-save themselves.
 const campaign = loadCampaign();
 input.startMenu.setCampaign(campaign, (key) => purchaseUpgrade(campaign, key));
+
+// Energy / stamina state — gates how many matches can be played per
+// real-time window. PASSIVE regen ticks each frame via regenTick().
+const energy = loadEnergy();
+input.startMenu.setEnergy(energy, (packId) => purchaseEnergy(energy, packId));
 // Edge-detect the match-over transition so we credit a campaign
 // victory exactly once even though matchOver stays true until the
 // player taps to leave.
@@ -71,9 +79,17 @@ function frame(now) {
   // intercept clicks before forwarding them to gameplay controls.
   input.menuActive = game.state === "menu";
 
+  // Passive energy regen every frame. Idempotent; cheap.
+  regenTick(energy);
+
   if (game.state === "menu") {
     const choice = input.startMenu.consumeStart();
-    if (choice) {
+    // Energy gate: deduct exactly here. The menu already filtered
+    // clicks via canSpend, so a failure path is defensive only —
+    // re-open the refill overlay and skip the start.
+    if (choice && !spendEnergy(energy)) {
+      input.startMenu.showRefill = true;
+    } else if (choice) {
       if (choice.mode === "campaign" && !campaign.completed) {
         // Campaign mission: roster + map are mission-defined, player
         // ship gets the upgrade specOverride.
