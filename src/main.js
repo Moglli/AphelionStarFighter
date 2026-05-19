@@ -24,6 +24,8 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const input = new InputManager(canvas);
 const game = createGame();
+// Rally taps on the minimap need to read game.ships at click time.
+input._gameRef = game;
 window.game = game; // for console smoke-testing
 
 let viewW = 0, viewH = 0;
