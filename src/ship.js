@@ -93,7 +93,7 @@ const HULLS = {
   },
 };
 
-function getHull(race, klass) {
+export function getHull(race, klass) {
   return (HULLS[race] && HULLS[race][klass]) || HULLS.terran[klass];
 }
 
