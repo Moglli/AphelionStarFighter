@@ -1,0 +1,202 @@
+# CLAUDE.md — Session notes for Aphelion Star Fighter
+
+This file records context for future Claude (or human) sessions: what
+the project is, where things live, and what's been changed recently.
+**When you make non-trivial changes in a session, append a new entry to
+the Changelog at the bottom so the next session can pick up the
+narrative.**
+
+---
+
+## Project at a glance
+
+- **Aphelion Star Fighter** — 2D canvas space combat. The repo plans
+  to ship to iOS/Android via Capacitor.
+- **Stack**: Vite + vanilla JS (ES modules) + Capacitor. No
+  TypeScript, no framework. Rendering is plain `CanvasRenderingContext2D`.
+- **Entry points**:
+  - `index.html` → loads `src/main.js`.
+  - `src/main.js` — sets up canvas, fixed-timestep loop, draw order.
+  - `src/game.js` — match lifecycle, damage rules, per-tick update.
+- **Tooling**:
+  - `npm run dev` — Vite dev server.
+  - `npm run build` — production build → `dist/`.
+  - `npm run cap:sync` — build + sync to native platforms.
+
+## Module layout (`src/`)
+
+| File | Role |
+|---|---|
+| `main.js` | RAF loop, canvas/camera, draw order. |
+| `game.js` | `createGame`/`startGame`/`update`/`restart`, damage resolution, score, match-end logic. |
+| `ship.js` | `createShip`, `updateShip` (movement + weapons), `drawShip`. Hull polygons + visual extras live here. |
+| `ai.js` | Per-ship AI: target selection, throttle, fire decisions. |
+| `projectile.js` | Cannon + missile entities, including homing missile logic. |
+| `wreckage.js` | Persistent map litter — destroyed-ship hulks + impact debris. |
+| `arena.js` | Arena bounds + starfield + map size presets. |
+| `classes.js` | Base per-class ship specs + `SIDES` color palette. |
+| `races.js` | Per-race overrides + rosters. `resolveSpec(race, klass)` deep-merges. |
+| `input.js` | Touch/mouse/keyboard input, on-screen joysticks, start menu, hangar entry. |
+| `hud.js` | In-game HUD (minimap, score, beams). |
+| `audio.js` | Web Audio synth + event subscribers. |
+| `events.js` | Tiny pub/sub bus shared across the game. |
+| `save.js` | Versioned localStorage SaveStore (schema-migrated). |
+| `cosmetics.js`, `hangar.js`, `progression.js` | Meta-progression + cosmetics. |
+| `modes/{arena,waves,daily}.js` | Mode hooks: `setup`, `tick`, `checkEnd`. |
+| `modes/index.js` | Mode registry. |
+| `types.js` | JSDoc typedefs (no runtime exports). |
+| `vec.js` | Tiny 2D vector helpers. |
+
+## Key conventions
+
+- **No framework.** Plain ES modules, exported functions, no classes
+  unless there's clear lifecycle (e.g. `SaveStore`, `EventBus`,
+  `StartMenu`, `InputManager`).
+- **Comments**: the codebase favors `//` block comments above
+  non-obvious logic, explaining *why* (gameplay intent, math
+  reasoning, perf concerns) rather than *what*.
+- **Event bus**: gameplay code in `game.js`/`ship.js` emits domain
+  events (`weaponFired`, `hit`, `shipDestroyed`, etc). `audio.js`,
+  `progression.js`, and others subscribe. Don't reach across modules
+  directly — emit/subscribe.
+- **Save schema**: `save.js` has `CURRENT_SCHEMA_VERSION` and a
+  `MIGRATIONS` registry. `mergeWithDefaults` deep-merges so
+  *additive* fields to `menuSelection` / `settings` / etc. don't
+  need an explicit migration step. Bumping the version is only
+  needed when the *shape* changes incompatibly.
+- **Damage layers**: shield → armor (capitals only) → hull. Implemented
+  in `applyDamage` in `game.js`. Missiles bypass shields. Lasers and
+  fighter cannons cost only 50% from the shield bank. Armor wears at
+  `spec.armor.wearRate`.
+- **Fixed timestep**: `main.js` accumulates real time and steps
+  `update(game, 1/60)` until the accumulator drains. Don't sleep, poll
+  `performance.now()`, or assume `dt` varies wildly.
+- **Coordinate space**: world is in pixels; arena bounds set by
+  `setArenaSize`. Camera follows player (or spectate target) and is
+  scaled by `ZOOM` (0.5) in `main.js`.
+- **Hull polygons**: defined in `src/ship.js` as `HULLS[race][klass]`,
+  vertex coords in unit space scaled by `spec.radius` at draw time.
+  `getHull(race, klass)` is exported so `wreckage.js` can reuse them.
+- **Ship state mutability**: `ship.controller` is updated each frame
+  from input/AI; the rest of the ship is mutated by `updateShip`.
+  Avoid stashing extra state on ships unless it has a clear owner.
+
+## Render order (main.js draw)
+
+1. Arena background + starfield.
+2. Camera transform applied.
+3. Arena bounds.
+4. **Wrecks** (under live ships).
+5. Live ships.
+6. **Debris** (on top of ships).
+7. Projectiles.
+8. Beams (HUD module).
+9. Restore transform; HUD; virtual sticks.
+
+## Things to know before changing rendering
+
+- All world-space draws happen inside the camera transform applied in
+  `main.js#draw`. HUD draws after `ctx.restore()` so screen-space
+  layout is unaffected by camera scale.
+- `drawShip` applies its own `ctx.save/translate/rotate/restore` so
+  per-ship sub-draws can use ship-local coords directly.
+- `getHull(race, klass)` returns unit-space polygon vertices in
+  `[[x, y], ...]` form, ranges roughly `[-1, 1]`. Multiply by
+  `ship.spec.radius` to scale to world units.
+
+## Subsystem cheat sheet
+
+- **Carrier replenishment**: every `spec.replenish.fighter` and
+  `spec.replenish.bomber` seconds, the carrier launches a new escort.
+- **PD turrets**: ring of N positions on the hull (see
+  `pdTurretOffset`); each picks: missile → bomber → fighter → nearest.
+- **Pack AI**: `game.packs` is rebuilt each tick from ships with a
+  matching `packId`. Each pack picks a target by role
+  (`hunt-fighter`, `strike-capital`, `skirmish-frigate`), with bombers
+  pulling rank over the role preference.
+
+---
+
+## Changelog
+
+Newest entries first. When you make changes, add a section with date,
+a one-line summary, file pointers, and any non-obvious decisions.
+
+### 2026-05-19 — Ship visuals, opponent picker, persistent wreckage
+
+**What changed**
+
+1. **Persistent map litter** — destroyed ships now leave a charred,
+   fractured hull on the map that drifts and spins to rest. Damaging
+   hits (to armor or hull, not shield) chip small debris fragments
+   off the impact point. Both kinds persist for the remainder of the
+   match.
+
+2. **Opponent picker for arena mode** — start menu has a new OPPONENT
+   row: Random (legacy behavior) + the four races. Waves/Daily ignore
+   the choice (they pick their own hostiles), and the row renders
+   muted in those modes.
+
+3. **Ship visual enhancements** — engine plumes, race-accent spine
+   stripes, cockpit/bridge markers (per class), faint panel lines,
+   and HP-driven scorch marks. Plumes pulse per-ship with a phase
+   tied to `ship.id` so a swarm doesn't strobe in lockstep, and they
+   scale with speed so stopped capitals don't blast exhaust.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/wreckage.js` *(new)* | `createWreck`, `createDebrisBurst`, update + draw, hull-chunk splitter, MAX caps. |
+| `src/ship.js` | Exported `getHull`. Rewrote `drawShip` to add engine plumes, panel lines, spine, cockpit/bridge tower, battle scars. Added `ENGINE_PORTS` and `COCKPIT` tables and helper functions. Imported `RACES` for accent colors. |
+| `src/game.js` | Added `game.wrecks` and `game.debris` arrays (cleared in `startGame`/`restart`). `applyDamage` now sheds debris on hull/armor hits; `handleShipDestroyed` pushes a wreck + outward debris shower. Per-tick `updateWreck`/`updateDebris`. Added `game.opponentRace` from `opts.opponent`. |
+| `src/main.js` | Draws wrecks under ships, debris over ships. |
+| `src/modes/arena.js` | `setup` honors `game.opponentRace`; falls back to random. |
+| `src/input.js` | Added OPPONENT chip row + `selectedOpponent` state + persist/emit. Tightened menu inter-row spacing so the extra row still fits in a 600px-tall viewport. `_drawChip` gained a `dim` parameter for the disabled state. |
+| `src/save.js` | `menuSelection.opponent: "random"` added to defaults. `mergeWithDefaults` already deep-merges menuSelection, so no schema bump needed. |
+
+**Design decisions / gotchas**
+
+- **Wreckage caps**: 160 wrecks, 500 debris. On overflow, oldest are
+  dropped (`array.splice(0, ...)`). Don't try to age them out by
+  time — the user explicitly wants persistence.
+- **Hull-chunk splitter** in `wreckage.js` shares the centroid as a
+  fan apex. Adjacent chunks share their shared edge so the union of
+  pieces (before they drift) exactly reproduces the original hull
+  silhouette. The last chunk wraps `poly[V % V] === poly[0]` so the
+  silhouette closes.
+- **`SIDES.blue.primary === "#5cf"`** (3-hex shorthand). `darken()`
+  in `wreckage.js` handles both 3- and 6-hex forms; do not assume
+  6-hex when reading side palette colors.
+- **Engine plume tint** is keyed off `ship.side`, not race — so
+  team identity reads at a glance even if races mix on a team in
+  the future.
+- **Battle scars** use a deterministic hash of `ship.id` so positions
+  are stable frame-to-frame without storing scar state on the ship.
+- **Menu layout math**: each row gap is `chipH + rowGap + 8` = 74 px.
+  Total menu height from title → start-button bottom is ~494 px.
+  `titleY` clamps at 48 so a 600-tall viewport still fits.
+- **Save migrations**: `mergeWithDefaults` adds missing keys to
+  `menuSelection`/`settings`/etc., so new additive fields don't need
+  a schema bump. Reserve the version bump for structural changes.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # opens Vite dev server
+```
+
+In-game:
+- Pick arena mode, pick any opponent race, START.
+- Shoot a fighter: small fragments chip off, hull disintegrates into
+  2 chunks on death and drifts.
+- Shoot a capital: 3–4 chunks split apart on death; many more
+  fragments shower out.
+- Take damage on your own hull: scorch marks accumulate.
+- Try waves/daily: OPPONENT row should be muted and unclickable.
+
+---
+
+<!-- Append new dated sections above this line. Keep entries terse. -->

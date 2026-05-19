@@ -1,5 +1,5 @@
 import { SIDES } from "./classes.js";
-import { resolveSpec } from "./races.js";
+import { resolveSpec, RACES } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
 import { events } from "./events.js";
@@ -687,6 +687,176 @@ function updateHeavyLaser(ship, world) {
 // ---------------------------------------------------------------------------
 // Rendering.
 // ---------------------------------------------------------------------------
+
+// Per-class engine port positions in unit hull space. Each port emits a
+// thrust plume that flickers slightly per frame; together they give a
+// sense of which way the ship is facing at a glance.
+const ENGINE_PORTS = {
+  fighter:    [[-0.65, 0.45], [-0.65, -0.45]],
+  bomber:     [[-0.78, 0.45], [-0.78, -0.45], [-0.6, 0]],
+  frigate:    [[-0.88, 0.45], [-0.88, -0.45], [-0.85, 0]],
+  cruiser:    [[-0.95, 0.55], [-0.95, -0.55], [-0.92, 0.2], [-0.92, -0.2]],
+  battleship: [[-0.95, 0.55], [-0.95, -0.55], [-0.95, 0.25], [-0.95, -0.25], [-0.93, 0]],
+  carrier:    [[-0.95, 0.3], [-0.95, -0.3], [-0.92, 0.12], [-0.92, -0.12]],
+};
+
+// Cockpit or bridge marker per class. Small ships get a front canopy;
+// capitals get an aft bridge tower. Coords are in unit hull space.
+const COCKPIT = {
+  fighter:    { x:  0.30, y: 0, r: 0.16, shape: "round" },
+  bomber:     { x:  0.20, y: 0, r: 0.18, shape: "round" },
+  frigate:    { x: -0.20, y: 0, w: 0.30, h: 0.30, shape: "tower" },
+  cruiser:    { x: -0.30, y: 0, w: 0.40, h: 0.40, shape: "tower" },
+  battleship: { x: -0.10, y: 0, w: 0.45, h: 0.50, shape: "tower" },
+  carrier:    { x: -0.55, y: 0, w: 0.35, h: 0.40, shape: "tower" },
+};
+
+// Trace the hull silhouette into the current path (no fill/stroke).
+function tracedHull(ctx, poly, r) {
+  ctx.beginPath();
+  ctx.moveTo(poly[0][0] * r, poly[0][1] * r);
+  for (let i = 1; i < poly.length; i++) {
+    ctx.lineTo(poly[i][0] * r, poly[i][1] * r);
+  }
+  ctx.closePath();
+}
+
+// Engine plumes — drawn before the hull so the hull's rear edge crisply
+// occludes the front of the plume. Plume length and brightness scale
+// with current speed so dead-stopped capitals don't blast exhaust.
+function drawEnginePlume(ctx, ship) {
+  const ports = ENGINE_PORTS[ship.klass];
+  if (!ports) return;
+  const r = ship.spec.radius;
+  const speed = Math.hypot(ship.vel.x, ship.vel.y);
+  const speedFrac = ship.spec.maxSpeed > 0 ? Math.min(1, speed / ship.spec.maxSpeed) : 0;
+  if (speedFrac < 0.05) return;
+  // Each ship flickers with its own phase so a swarm doesn't pulse in lockstep.
+  const flicker = 0.85 + 0.15 * Math.sin(performance.now() * 0.012 + ship.id * 0.7);
+  // Allied ships burn cool blue; hostile burn red — same hue as the side tint.
+  const baseColor = ship.side === "blue" ? [120, 220, 255] : [255, 150, 100];
+  const len = r * (0.5 + 0.7 * speedFrac) * flicker;
+  const halfThick = Math.max(2, r * 0.08);
+
+  ctx.save();
+  ctx.translate(ship.pos.x, ship.pos.y);
+  ctx.rotate(ship.heading);
+  for (const [px, py] of ports) {
+    const x = px * r;
+    const y = py * r;
+    // Outer halo: large soft fade.
+    const grad = ctx.createLinearGradient(x, y, x - len, y);
+    grad.addColorStop(0, `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},0.7)`);
+    grad.addColorStop(1, `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x, y - halfThick);
+    ctx.lineTo(x - len, y);
+    ctx.lineTo(x, y + halfThick);
+    ctx.closePath();
+    ctx.fill();
+    // Bright inner core.
+    ctx.fillStyle = `rgba(255,255,255,${(0.55 * flicker).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y - halfThick * 0.5);
+    ctx.lineTo(x - len * 0.55, y);
+    ctx.lineTo(x, y + halfThick * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Faint panel lines + race-accent spine. Caller must set up the hull
+// clip path so strokes don't leak past the silhouette.
+function drawHullDetails(ctx, ship, raceAccent) {
+  const r = ship.spec.radius;
+  // Panel lines: 1 transverse stripe for fighters/bombers, 2 for capitals.
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = 1;
+  const transverseX = (ship.klass === "fighter" || ship.klass === "bomber")
+    ? [-0.15]
+    : [-0.4, 0.1, 0.5];
+  for (const tx of transverseX) {
+    ctx.beginPath();
+    ctx.moveTo(tx * r, -r);
+    ctx.lineTo(tx * r,  r);
+    ctx.stroke();
+  }
+  // Race-accent spine: thin colored line down the centerline, gives a
+  // strong visual cue for race ID even when zoomed out.
+  ctx.strokeStyle = raceAccent;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.9, 0);
+  ctx.lineTo( r * 0.9, 0);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// Cockpit canopy (small ships) or bridge tower (capitals). Race accent
+// color so all four races are individually identifiable.
+function drawCockpit(ctx, ship, raceAccent) {
+  const cfg = COCKPIT[ship.klass];
+  if (!cfg) return;
+  const r = ship.spec.radius;
+  ctx.save();
+  if (cfg.shape === "round") {
+    // Dark socket + bright glass canopy on top.
+    ctx.fillStyle = "rgba(10,15,25,0.85)";
+    ctx.beginPath();
+    ctx.arc(cfg.x * r, cfg.y * r, cfg.r * r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = raceAccent;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.arc(cfg.x * r, cfg.y * r, cfg.r * r * 0.65, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  } else {
+    // Rectangular bridge tower with a lit window stripe.
+    const hw = cfg.w * 0.5 * r;
+    const hh = cfg.h * 0.5 * r;
+    ctx.fillStyle = "rgba(15,20,30,0.9)";
+    ctx.fillRect(cfg.x * r - hw, cfg.y * r - hh, cfg.w * r, cfg.h * r);
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cfg.x * r - hw, cfg.y * r - hh, cfg.w * r, cfg.h * r);
+    // Window band — race-accent slit.
+    ctx.fillStyle = raceAccent;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(cfg.x * r - hw + 1, cfg.y * r - hh * 0.25, cfg.w * r - 2, hh * 0.4);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+// Deterministic scorch marks that fade in as the hull takes damage.
+// Positions seeded from ship.id so a given ship's scars are stable
+// across frames even though we don't carry per-ship state for them.
+function drawBattleScars(ctx, ship) {
+  const dmgFrac = 1 - (ship.hp / ship.hpMax);
+  if (dmgFrac <= 0.25) return;
+  const r = ship.spec.radius;
+  const maxMarks = ship.klass === "fighter" || ship.klass === "bomber" ? 3 : 7;
+  const count = Math.min(maxMarks, Math.floor(dmgFrac * maxMarks * 1.5));
+  ctx.fillStyle = "rgba(8,10,16,0.7)";
+  for (let i = 0; i < count; i++) {
+    // Cheap deterministic hash from (ship.id, i).
+    const h1 = Math.sin(ship.id * 12.9898 + i * 78.233) * 43758.5453;
+    const h2 = Math.sin(ship.id * 39.346  + i * 11.135) * 24634.6345;
+    const u = h1 - Math.floor(h1);
+    const v = h2 - Math.floor(h2);
+    const sx = (u * 1.6 - 0.8) * r;
+    const sy = (v * 1.4 - 0.7) * r;
+    const size = 1.5 + ((u + v) % 1) * 2.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 export function drawShip(ctx, ship) {
   const s = ship.spec;
   // Cosmetic override for the player ship: equipped hull-skin tint
@@ -694,6 +864,12 @@ export function drawShip(ctx, ship) {
   // carries `ship.cosmetics`; everyone else falls through to side default.
   const tint = (ship.cosmetics && ship.cosmetics.hullTint)
     || SIDES[ship.side].primary;
+  const raceAccent = (RACES[ship.race] && RACES[ship.race].accent) || tint;
+
+  // Engine plumes are drawn first so the hull occludes their forward
+  // edge and the exhaust appears to flow from behind the ship.
+  drawEnginePlume(ctx, ship);
+
   ctx.save();
   ctx.translate(ship.pos.x, ship.pos.y);
   ctx.rotate(ship.heading);
@@ -704,14 +880,22 @@ export function drawShip(ctx, ship) {
 
   // Hull silhouette — looked up per (race, klass).
   const poly = getHull(ship.race, ship.klass);
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0] * s.radius, poly[0][1] * s.radius);
-  for (let i = 1; i < poly.length; i++) {
-    ctx.lineTo(poly[i][0] * s.radius, poly[i][1] * s.radius);
-  }
-  ctx.closePath();
+  tracedHull(ctx, poly, s.radius);
   ctx.fill();
   ctx.stroke();
+
+  // Interior detail layers — panel lines, spine, battle scars. All
+  // clipped to the hull so strokes don't bleed past the silhouette.
+  ctx.save();
+  tracedHull(ctx, poly, s.radius);
+  ctx.clip();
+  drawHullDetails(ctx, ship, raceAccent);
+  drawBattleScars(ctx, ship);
+  ctx.restore();
+
+  // Cockpit / bridge marker — drawn on top of the hull, unclipped, so
+  // tower silhouettes can protrude slightly past the hull edge.
+  drawCockpit(ctx, ship, raceAccent);
 
   // Carrier flight-deck stripe — a thin line down the centerline.
   if (ship.klass === "carrier") {
