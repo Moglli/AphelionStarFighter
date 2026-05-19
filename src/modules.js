@@ -80,10 +80,13 @@ export function worldToLocal(ship, wx, wy) {
   return { x: dx * c - dy * s, y: dx * s + dy * c };
 }
 
-// Module's world-space center (offset rotated by ship.heading).
+// Module's world-space center (offset rotated by ship.heading). Returns
+// null only if the module doesn't exist on this ship — disabled modules
+// still have a position so VFX spawners can keep emitting smoke / fire
+// from the crater.
 export function moduleWorldPos(ship, name) {
   const m = ship.moduleByName && ship.moduleByName[name];
-  if (!m || m.disabled) return null;
+  if (!m) return null;
   const R = ship.spec.radius;
   const lx = m.offset.x * R;
   const ly = m.offset.y * R;

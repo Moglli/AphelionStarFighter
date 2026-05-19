@@ -8,6 +8,7 @@ import { drawProjectile } from "./projectile.js";
 import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
 import { prerenderSprites } from "./sprites.js";
+import { drawParticle } from "./particles.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -110,9 +111,19 @@ function draw() {
   ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
+  // Smoke particles render behind the hull layer so plumes look like
+  // they're trailing from the ship rather than painted on top of it.
+  if (game.particles) {
+    for (const p of game.particles) if (p.kind === "smoke") drawParticle(ctx, p);
+  }
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
+  // Sparks / fire / debris / shockwaves render on top of ships and beams
+  // so a freshly-killed module's explosion reads above the hull silhouette.
+  if (game.particles) {
+    for (const p of game.particles) if (p.kind !== "smoke") drawParticle(ctx, p);
+  }
 
   ctx.restore();
 

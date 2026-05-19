@@ -4,8 +4,11 @@ import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey, getStationDef } from "./races.js";
 import {
-  worldToLocal, findHitModuleLocal, findSplashModulesLocal,
+  worldToLocal, findHitModuleLocal, findSplashModulesLocal, moduleWorldPos,
 } from "./modules.js";
+import {
+  updateParticle, spawnHitSparks, spawnDestructionBurst, spawnContinuousSmoke,
+} from "./particles.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -32,6 +35,9 @@ export function createGame() {
     ships: [],
     projectiles: [],
     beams: [],
+    // Particle VFX (sparks, smoke, fire, debris, shockwaves) live in
+    // world space and tick alongside projectiles.
+    particles: [],
     arena: ARENA,
     starfield: createStarfield(),
     playerController: {
@@ -68,6 +74,7 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.ships = [];
   game.projectiles = [];
   game.beams = [];
+  game.particles = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -368,7 +375,7 @@ export function update(game, dt) {
       const r = ship.spec.radius + p.radius;
       if (dx * dx + dy * dy <= r * r) {
         const targets = computeModuleTargets(ship, p);
-        applyDamage(ship, p, targets);
+        applyDamage(ship, p, targets, game.particles);
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) ship.dead = true;
@@ -382,6 +389,14 @@ export function update(game, dt) {
 
   if (game.projectiles.length > 0) {
     game.projectiles = game.projectiles.filter((p) => !p.dead);
+  }
+
+  // Particle VFX: continuous smoke / fire from damaged + disabled modules,
+  // then tick existing particles.
+  emitContinuousModuleVFX(game, dt);
+  for (const p of game.particles) updateParticle(p, dt);
+  if (game.particles.length > 0) {
+    game.particles = game.particles.filter((p) => !p.dead);
   }
 
   // Player death + respawn (only when not spectating).
@@ -433,6 +448,7 @@ export function restart(game) {
   game.ships = [];
   game.projectiles = [];
   game.beams = [];
+  game.particles = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -451,6 +467,30 @@ export function restart(game) {
 //   a 100-damage hit erodes ~50 armor by default — so a thick plate
 //   "slowly deteriorates" rather than burning through in a single salvo.
 // ---------------------------------------------------------------------------
+// Continuous module-state VFX. Each frame, for every damaged-but-alive
+// module emit a thin smoke puff at a low rate, and for every disabled
+// module emit thick dark smoke + occasional fire at a higher rate. The
+// per-frame coin flip uses dt so the average rate is framerate-stable.
+function emitContinuousModuleVFX(game, dt) {
+  // Smoke rates per second.
+  const DISABLED_RATE = 12;
+  const DAMAGED_RATE = 3.5;
+  for (const s of game.ships) {
+    if (s.dead || !s.modules) continue;
+    for (const m of s.modules) {
+      let rate = 0;
+      if (m.disabled) rate = DISABLED_RATE;
+      else if (m.hp / m.hpMax < 0.5) rate = DAMAGED_RATE;
+      else continue;
+      // Poisson-style: probability = rate * dt of one emission this frame.
+      if (Math.random() < rate * dt) {
+        const wpos = moduleWorldPos(s, m.name);
+        if (wpos) spawnContinuousSmoke(game.particles, wpos.x, wpos.y, m.disabled);
+      }
+    }
+  }
+}
+
 // Decide which modules (if any) absorb a hit. Cannon/laser hits land on
 // at most one module — the closest disc that contains the impact. Missile
 // hits splash: the directly-hit module takes full damage and every other
@@ -472,7 +512,7 @@ function computeModuleTargets(ship, p) {
   return hit ? [{ module: hit, weight: 1.0 }] : null;
 }
 
-function applyDamage(ship, p, moduleTargets = null) {
+function applyDamage(ship, p, moduleTargets = null, particles = null) {
   let remaining = p.damage;
 
   // Step 1: Shield (unless missile, which bypasses).
@@ -517,12 +557,24 @@ function applyDamage(ship, p, moduleTargets = null) {
       const dmg = remaining * weight;
       module.hp -= dmg;
       module.flash = Math.min(1, module.flash + 0.6);
+      // VFX: hit sparks at the module's live world position.
+      if (particles) {
+        const wpos = moduleWorldPos(ship, module.name);
+        if (wpos) spawnHitSparks(particles, wpos.x, wpos.y, 4);
+      }
       if (module.hp <= 0) {
         module.disabled = true;
         module.hp = 0;
         // Killing a subsystem ruptures part of the central hull too —
         // strip enough modules and the ship dies of cumulative breaches.
         ship.hp -= module.hullPenalty;
+        if (particles) {
+          const wpos = moduleWorldPos(ship, module.name);
+          if (wpos) {
+            const moduleRadiusWorld = module.radius * ship.spec.radius;
+            spawnDestructionBurst(particles, wpos.x, wpos.y, moduleRadiusWorld);
+          }
+        }
       }
     }
     return;
