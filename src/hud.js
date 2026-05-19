@@ -205,9 +205,10 @@ function drawMinimap(ctx, game, viewW, viewH) {
   const mapW = 180, mapH = 135;
   const x = viewW - mapW - 16;
   const y = viewH - mapH - 16;
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillStyle = "#0a0e16";
   ctx.fillRect(x, y, mapW, mapH);
   ctx.strokeStyle = "#456";
+  ctx.lineWidth = 1.5;
   ctx.strokeRect(x, y, mapW, mapH);
 
   const sx = mapW / ARENA.width;

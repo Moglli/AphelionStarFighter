@@ -75,8 +75,10 @@ export class MissileButton {
     this.rect = { x: 0, y: 0, w: 90, h: 60 };
   }
   layout(viewW, viewH) {
+    // Sit above the minimap (which occupies the bottom-right 180x135
+    // area with a 16px margin) so the button never overlaps the map.
     this.rect.x = viewW - this.rect.w - 18;
-    this.rect.y = viewH - this.rect.h - 70;
+    this.rect.y = viewH - this.rect.h - 135 - 16 - 12;
   }
   hit(x, y) {
     const r = this.rect;
