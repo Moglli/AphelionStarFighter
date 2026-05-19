@@ -4,6 +4,7 @@
 
 import { MAP_SIZES } from "./arena.js";
 import { RACES, RACE_KEYS } from "./races.js";
+import { UPGRADES, UPGRADE_KEYS, MAX_MISSION, nextCost } from "./campaign.js";
 
 const DEADZONE = 0.15;
 
@@ -128,8 +129,9 @@ export class MissileButton {
 // explicit START button. Each chip toggles its row's selection; START
 // emits the chosen { mapW, mapH, race, mode } bundle.
 const MODE_OPTIONS = [
-  { key: "open",   label: "Open Battle",     tagline: "Wipe the enemy fleet" },
-  { key: "defend", label: "Defend Station", tagline: "Destroy enemy station" },
+  { key: "open",     label: "Open Battle",     tagline: "Wipe the enemy fleet" },
+  { key: "defend",   label: "Defend Station",  tagline: "Destroy enemy station" },
+  { key: "campaign", label: "Campaign",        tagline: "100-mission tour" },
 ];
 
 export class StartMenu {
@@ -137,11 +139,20 @@ export class StartMenu {
     this.sizeRects = [];
     this.modeRects = [];
     this.raceRects = [];
+    this.upgradeRects = [];
     this.startRect = null;
     this.selectedSize = "medium";
     this.selectedMode = "open";
     this.selectedRace = "terran";
     this.justStarted = null;
+    // Campaign state ref + click callback wired by main.js.
+    this.campaign = null;
+    this.onPurchase = null;
+  }
+
+  setCampaign(state, onPurchase) {
+    this.campaign = state;
+    this.onPurchase = onPurchase;
   }
 
   layout(viewW, viewH) {
@@ -188,28 +199,68 @@ export class StartMenu {
       y: raceY, w: raceBtnW, h: chipH,
     }));
 
+    // Campaign upgrade grid (only used when Campaign mode is selected).
+    // Two rows of three tiles below the race row.
+    let nextY = raceY + chipH + rowGap;
+    this.upgradeRects = [];
+    if (this.selectedMode === "campaign") {
+      const tileW = Math.min(220, (viewW - 60) / 3 - gapX);
+      const tileH = 56;
+      const cols = 3;
+      const totalRowW = cols * tileW + (cols - 1) * gapX;
+      const startX = (viewW - totalRowW) / 2;
+      nextY += 28; // header room ("Mission X/100  Credits: ...")
+      for (let i = 0; i < UPGRADE_KEYS.length; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        this.upgradeRects.push({
+          key: UPGRADE_KEYS[i],
+          x: startX + col * (tileW + gapX),
+          y: nextY + row * (tileH + 10),
+          w: tileW, h: tileH,
+        });
+      }
+      const rows = Math.ceil(UPGRADE_KEYS.length / cols);
+      nextY += rows * tileH + (rows - 1) * 10 + rowGap;
+    }
+
     // START button.
-    const startW = 220, startH = 56;
+    const startW = 260, startH = 56;
     this.startRect = {
       x: (viewW - startW) / 2,
-      y: raceY + chipH + rowGap,
+      y: nextY,
       w: startW, h: startH,
     };
   }
 
   click(x, y) {
     for (const r of this.sizeRects) {
-      if (this._hit(r, x, y)) { this.selectedSize = r.key; return; }
+      if (this._hit(r, x, y)) { this.selectedSize = r.key; return true; }
     }
     for (const r of this.modeRects) {
-      if (this._hit(r, x, y)) { this.selectedMode = r.key; return; }
+      if (this._hit(r, x, y)) {
+        const changed = this.selectedMode !== r.key;
+        this.selectedMode = r.key;
+        // Returning the "remeasure" flag lets the caller relayout so
+        // the campaign panel appears / disappears immediately.
+        if (changed) return "relayout";
+        return true;
+      }
     }
     for (const r of this.raceRects) {
-      if (this._hit(r, x, y)) { this.selectedRace = r.key; return; }
+      if (this._hit(r, x, y)) { this.selectedRace = r.key; return true; }
+    }
+    for (const r of this.upgradeRects) {
+      if (this._hit(r, x, y)) {
+        if (this.onPurchase) this.onPurchase(r.key);
+        return true;
+      }
     }
     if (this.startRect && this._hit(this.startRect, x, y)) {
       this._emitStart();
+      return true;
     }
+    return false;
   }
 
   _hit(r, x, y) {
@@ -267,6 +318,22 @@ export class StartMenu {
         r.label, race.tagline || "");
     }
 
+    // Campaign panel: progress header + upgrade tiles.
+    if (this.selectedMode === "campaign" && this.upgradeRects.length > 0) {
+      const camp = this.campaign;
+      const firstRect = this.upgradeRects[0];
+      const headerY = firstRect.y - 16;
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 16px system-ui, sans-serif";
+      const m = camp ? camp.mission : 1;
+      const money = camp ? camp.money : 0;
+      const status = camp && camp.completed
+        ? `CAMPAIGN COMPLETE — Free Skirmish`
+        : `MISSION ${m} / ${MAX_MISSION}`;
+      ctx.fillText(`${status}    Credits: ${money.toLocaleString()}`, viewW / 2, headerY);
+      for (const r of this.upgradeRects) this._drawUpgrade(ctx, r);
+    }
+
     const s = this.startRect;
     ctx.fillStyle = "rgba(60,140,90,0.85)";
     ctx.fillRect(s.x, s.y, s.w, s.h);
@@ -274,11 +341,56 @@ export class StartMenu {
     ctx.lineWidth = 3;
     ctx.strokeRect(s.x, s.y, s.w, s.h);
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 24px system-ui, sans-serif";
-    ctx.fillText("START", s.x + s.w / 2, s.y + s.h / 2 + 8);
+    ctx.font = "bold 22px system-ui, sans-serif";
+    let label = "START";
+    if (this.selectedMode === "campaign" && this.campaign) {
+      label = this.campaign.completed
+        ? "FREE SKIRMISH"
+        : `START MISSION ${this.campaign.mission}`;
+    }
+    ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
 
     ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  _drawUpgrade(ctx, r) {
+    const def = UPGRADES[r.key];
+    if (!def || !this.campaign) return;
+    const lvl = this.campaign.upgrades[r.key] || 0;
+    const maxed = lvl >= def.maxLevel;
+    const cost = maxed ? null : nextCost(this.campaign, r.key);
+    const afford = !maxed && this.campaign.money >= cost;
+
+    ctx.fillStyle = maxed ? "rgba(40,80,60,0.85)"
+                  : afford ? "rgba(30,60,100,0.92)"
+                           : "rgba(40,40,55,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = maxed ? "#7d9" : afford ? "#9cf" : "#566";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(def.name, r.x + 8, r.y + 16);
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.fillText(def.desc, r.x + 8, r.y + 30);
+
+    ctx.textAlign = "right";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`Lv ${lvl}/${def.maxLevel}`, r.x + r.w - 8, r.y + 16);
+    ctx.font = "12px system-ui, sans-serif";
+    if (maxed) {
+      ctx.fillStyle = "#9f8";
+      ctx.fillText("MAX", r.x + r.w - 8, r.y + 44);
+    } else {
+      ctx.fillStyle = afford ? "#fe8" : "#866";
+      ctx.fillText(`$${cost.toLocaleString()}`, r.x + r.w - 8, r.y + 44);
+    }
+    ctx.textAlign = "left";
   }
 
   _drawChip(ctx, r, selected, label, sublabel) {
@@ -361,9 +473,15 @@ export class InputManager {
     this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
 
     // Pre-match menu: route the click to size-selection and swallow
-    // everything else.
+    // everything else. A "relayout" return from click() means the user
+    // toggled the mode chip — re-layout so the campaign panel appears
+    // or disappears immediately under the cursor.
     if (this.menuActive) {
-      this.startMenu.click(x, y);
+      const result = this.startMenu.click(x, y);
+      if (result === "relayout") {
+        const rect = this.canvas.getBoundingClientRect();
+        this.startMenu.layout(rect.width, rect.height);
+      }
       return;
     }
 

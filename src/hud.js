@@ -55,15 +55,41 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   }
 
   if (game.matchOver) {
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(0, viewH / 2 - 80, viewW, 160);
+    const isCampaign = game.mode === "campaign";
+    const panelH = isCampaign ? 220 : 160;
+    ctx.fillStyle = "rgba(0,0,0,0.62)";
+    ctx.fillRect(0, viewH / 2 - panelH / 2, viewW, panelH);
     ctx.fillStyle = "#fff";
     ctx.font = "bold 42px system-ui, sans-serif";
     ctx.textAlign = "center";
-    const msg = game.winner === "blue" ? "ALLIED VICTORY" : "HOSTILE VICTORY";
-    ctx.fillText(msg, viewW / 2, viewH / 2);
+    let msg;
+    if (isCampaign) {
+      msg = game.winner === "blue" ? "MISSION COMPLETE" : "MISSION FAILED";
+    } else {
+      msg = game.winner === "blue" ? "ALLIED VICTORY" : "HOSTILE VICTORY";
+    }
+    ctx.fillText(msg, viewW / 2, viewH / 2 - (isCampaign ? 30 : 0));
+    if (isCampaign && game.campaign) {
+      ctx.font = "bold 22px system-ui, sans-serif";
+      if (game.winner === "blue") {
+        ctx.fillStyle = "#fe8";
+        ctx.fillText(`+${game.campaign.lastReward.toLocaleString()} credits`,
+          viewW / 2, viewH / 2 + 12);
+        ctx.fillStyle = "#cef";
+        ctx.font = "16px system-ui, sans-serif";
+        ctx.fillText(`Balance: $${game.campaign.totalMoney.toLocaleString()}`,
+          viewW / 2, viewH / 2 + 38);
+      } else {
+        ctx.fillStyle = "#fdb";
+        ctx.fillText("No reward — retry the mission", viewW / 2, viewH / 2 + 12);
+      }
+    }
+    ctx.fillStyle = "#fff";
     ctx.font = "18px system-ui, sans-serif";
-    ctx.fillText("Tap to restart", viewW / 2, viewH / 2 + 36);
+    const prompt = isCampaign
+      ? (game.winner === "blue" ? "Tap to return to hangar" : "Tap to retry")
+      : "Tap to restart";
+    ctx.fillText(prompt, viewW / 2, viewH / 2 + (isCampaign ? 78 : 36));
     ctx.textAlign = "left";
   }
 

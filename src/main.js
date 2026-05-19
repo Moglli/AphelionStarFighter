@@ -10,6 +10,11 @@ import { InputManager } from "./input.js";
 import { prerenderSprites } from "./sprites.js";
 import { drawParticle } from "./particles.js";
 import { GameAudio } from "./audio.js";
+import {
+  loadCampaign, saveCampaign, getMissionConfig,
+  buildPlayerUpgrade, purchaseUpgrade, recordVictory,
+} from "./campaign.js";
+import { resolveSpec } from "./races.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -22,6 +27,16 @@ const game = createGame();
 window.game = game; // for console smoke-testing
 const audio = new GameAudio();
 let musicWasPlaying = false; // tracks state for start/stop edge detection
+
+// Campaign state is loaded from localStorage on boot and kept in memory
+// so the menu can render mission progress + money. Mutations happen in
+// purchase / victory callbacks below and re-save themselves.
+const campaign = loadCampaign();
+input.startMenu.setCampaign(campaign, (key) => purchaseUpgrade(campaign, key));
+// Edge-detect the match-over transition so we credit a campaign
+// victory exactly once even though matchOver stays true until the
+// player taps to leave.
+let prevMatchOver = false;
 
 let viewW = 0, viewH = 0;
 function resize() {
@@ -59,7 +74,28 @@ function frame(now) {
   if (game.state === "menu") {
     const choice = input.startMenu.consumeStart();
     if (choice) {
-      startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode);
+      if (choice.mode === "campaign" && !campaign.completed) {
+        // Campaign mission: roster + map are mission-defined, player
+        // ship gets the upgrade specOverride.
+        const mc = getMissionConfig(campaign.mission, choice.race);
+        const baseSpec = resolveSpec(choice.race, "fighter");
+        const playerOverride = buildPlayerUpgrade(campaign, baseSpec);
+        startGame(game, mc.mapW, mc.mapH, choice.race, "campaign", {
+          enemies: mc.enemies,
+          allies: mc.allies,
+          playerOverride,
+        });
+        // Stash a reference + the staged reward so the match-over HUD
+        // can display it without re-deriving.
+        game.campaign.totalMoney = campaign.money;
+        game.campaign.lastReward = mc.reward;
+        game.campaign.missionNumber = mc.mission;
+      } else {
+        // Open / Defend, or Campaign-completed (falls through to a free
+        // skirmish at the player's chosen map size).
+        const mode = choice.mode === "campaign" ? "open" : choice.mode;
+        startGame(game, choice.mapW, choice.mapH, choice.race, mode);
+      }
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();
     }
@@ -82,6 +118,16 @@ function frame(now) {
       if (input.consumeSpectateNext()) cycleSpectate(game, +1);
       if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
     }
+
+    // Edge-trigger: match just ended this frame. Bank a campaign
+    // victory exactly once.
+    if (game.matchOver && !prevMatchOver) {
+      if (game.mode === "campaign" && game.winner === "blue" && game.campaign) {
+        recordVictory(campaign);
+        game.campaign.totalMoney = campaign.money;
+      }
+    }
+    prevMatchOver = game.matchOver;
 
     if (game.matchOver && input.consumeEnterPress()) {
       restart(game);

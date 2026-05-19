@@ -70,7 +70,13 @@ export function createGame() {
 // Called from main when the player picks map size + allied race + mode
 // on the start menu. Hostile race is rolled here so the enemy
 // composition is a surprise.
-export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open") {
+//
+// Campaign mode passes a `campaign` config: { enemies, allies, playerOverride }.
+// `enemies` and `allies` are roster maps that override the race-defined
+// counts so mission difficulty can scale independently of race. The
+// player ship is then promoted with `playerOverride` (a deepMerge-style
+// patch describing purchased upgrades).
+export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null) {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -84,15 +90,25 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.spectateTargetId = null;
   game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
   game.hostileRace = randomRaceKey();
-  game.mode = mode === "defend" ? "defend" : "open";
+  game.mode = mode === "defend" ? "defend" : (mode === "campaign" ? "campaign" : "open");
   game.state = "playing";
+  game.campaign = campaign || null;
+  game.playerSpecOverride = (campaign && campaign.playerOverride) || null;
+  game.kills = 0;
   spawnRoster(game);
 }
 
 function spawnRoster(game) {
   for (const side of ["blue", "red"]) {
     const race = side === "blue" ? game.alliedRace : game.hostileRace;
-    const roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
+    // Campaign mode overrides race-defined rosters with mission-defined
+    // counts so the difficulty curve drives composition, not race choice.
+    let roster;
+    if (game.campaign) {
+      roster = side === "blue" ? game.campaign.allies : game.campaign.enemies;
+    } else {
+      roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
+    }
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
     for (const [klass, count] of Object.entries(roster)) {
@@ -248,7 +264,11 @@ function spawnCarrierWithEscort(game, side, race, zone, count, facing) {
 }
 
 function promotePlayer(game) {
-  const candidate = game.ships.find(
+  // Campaign mode always builds a FRESH player ship so purchased
+  // upgrades (specOverride) apply cleanly. Reusing an existing
+  // ally fighter would keep the unupgraded race baseline.
+  const forceFresh = !!game.playerSpecOverride;
+  const candidate = forceFresh ? null : game.ships.find(
     (s) => s.side === "blue" && s.klass === "fighter" && !s.isPlayer && !s.dead,
   );
   if (!candidate) {
@@ -259,6 +279,7 @@ function promotePlayer(game) {
       pos: randomSpawnPos(ARENA.spawn.blue),
       heading: 0,
       controller: game.playerController,
+      specOverride: game.playerSpecOverride,
     });
     ship.isPlayer = true;
     game.ships.push(ship);
