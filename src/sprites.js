@@ -27,8 +27,8 @@ const PANEL_LINES = {
   battleship: 4, carrier: 5, station: 0,
 };
 export const ENGINES = {
-  fighter: 1, bomber: 2, frigate: 2, cruiser: 3,
-  battleship: 5, carrier: 6, station: 0,
+  fighter: 1, bomber: 1, frigate: 2, cruiser: 4,
+  battleship: 6, carrier: 4, station: 0,
 };
 export const ENGINE_X = {
   fighter: -0.6, bomber: -0.75, frigate: -0.85,
