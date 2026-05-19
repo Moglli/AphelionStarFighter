@@ -18,6 +18,17 @@ const FIGHTER_PACK_SIZE = 5;
 const BOMBER_PACK_SIZE = 2;
 const PACK_CLUSTER_RADIUS = 130;
 
+// Every escortable capital spawns with a tight fighter escort. Escorts
+// share a packId so the pack AI engages them as a wing centred on their
+// charge, and the pack target picker prioritises bombers so any bomber
+// threatening the capital gets swatted before it can deliver its payload.
+const ESCORT_SIZE = {
+  frigate: 5,
+  cruiser: 10,
+  battleship: 15,
+  carrier: 10,
+};
+
 const PACK_ROLES = [
   "hunt-fighter",
   "strike-capital",
@@ -82,7 +93,7 @@ export function createGame() {
 // counts so mission difficulty can scale independently of race. The
 // player ship is then promoted with `playerOverride` (a deepMerge-style
 // patch describing purchased upgrades).
-export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null) {
+export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null, fleetMul = 1) {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -102,6 +113,9 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.campaign = campaign || null;
   game.playerSpecOverride = (campaign && campaign.playerOverride) || null;
   game.kills = 0;
+  // Fleet-size multiplier from the menu. Clamped so a bad save / future
+  // typo can't push the fleet to a frame-melting size.
+  game.fleetMul = Math.max(0.25, Math.min(4, fleetMul));
   spawnRoster(game);
 }
 
@@ -118,16 +132,26 @@ function spawnRoster(game) {
     }
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
+    // Apply fleet-size multiplier. Campaign mode skips this (the
+    // mission's own counts win); free skirmish + Defend scale per the
+    // menu chip. Every non-zero class is guaranteed at least one ship
+    // so Small fleets don't accidentally drop a whole class.
+    const mul = game.campaign ? 1 : (game.fleetMul || 1);
     for (const [klass, count] of Object.entries(roster)) {
       if (count <= 0) continue;
+      const scaled = Math.max(1, Math.round(count * mul));
       if (klass === "fighter") {
-        spawnFighterPacks(game, side, race, zone, count, facing);
+        spawnFighterPacks(game, side, race, zone, scaled, facing);
       } else if (klass === "bomber") {
-        spawnBomberPairs(game, side, race, zone, count, facing);
-      } else if (klass === "carrier") {
-        spawnCarrierWithEscort(game, side, race, zone, count, facing);
+        spawnBomberPairs(game, side, race, zone, scaled, facing);
+      } else if (ESCORT_SIZE[klass]) {
+        // Frigates, cruisers, battleships, and carriers each spawn with
+        // a class-sized fighter escort attached to them.
+        for (let i = 0; i < scaled; i++) {
+          spawnCapitalWithEscort(game, klass, side, race, zone, facing);
+        }
       } else {
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i < scaled; i++) {
           const pos = randomSpawnPos(zone);
           const heading = facing + (Math.random() - 0.5) * 0.3;
           const ship = createShip({

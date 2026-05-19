@@ -92,7 +92,9 @@ function frame(now) {
     } else if (choice) {
       if (choice.mode === "campaign" && !campaign.completed) {
         // Campaign mission: roster + map are mission-defined, player
-        // ship gets the upgrade specOverride.
+        // ship gets the upgrade specOverride. Campaign rosters are
+        // hand-tuned for mission balance, so the fleet-size chip is
+        // ignored here.
         const mc = getMissionConfig(campaign.mission, choice.race);
         const baseSpec = resolveSpec(choice.race, "fighter");
         const playerOverride = buildPlayerUpgrade(campaign, baseSpec);
@@ -100,7 +102,7 @@ function frame(now) {
           enemies: mc.enemies,
           allies: mc.allies,
           playerOverride,
-        });
+        }, 1);
         // Stash a reference + the staged reward so the match-over HUD
         // can display it without re-deriving.
         game.campaign.totalMoney = campaign.money;
@@ -108,9 +110,10 @@ function frame(now) {
         game.campaign.missionNumber = mc.mission;
       } else {
         // Open / Defend, or Campaign-completed (falls through to a free
-        // skirmish at the player's chosen map size).
+        // skirmish at the player's chosen map size + fleet size).
         const mode = choice.mode === "campaign" ? "open" : choice.mode;
-        startGame(game, choice.mapW, choice.mapH, choice.race, mode);
+        startGame(game, choice.mapW, choice.mapH, choice.race, mode, null,
+                  choice.fleetMul);
       }
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();

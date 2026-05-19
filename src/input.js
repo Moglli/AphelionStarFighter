@@ -225,6 +225,17 @@ const MODE_OPTIONS = [
   { key: "campaign", label: "Campaign",        tagline: "100-mission tour" },
 ];
 
+// Fleet-size presets. `mul` is a multiplier applied to every per-class
+// count in spawnRoster (rounded, minimum 1 per non-zero class). "Huge"
+// roughly doubles a stock skirmish to the upper edge of what the
+// renderer handles smoothly on modest hardware.
+const FLEET_OPTIONS = [
+  { key: "small",  label: "Small",  mul: 0.5, tagline: "Skirmish — half fleet" },
+  { key: "medium", label: "Medium", mul: 1.0, tagline: "Standard" },
+  { key: "large",  label: "Large",  mul: 1.6, tagline: "Heavy battle" },
+  { key: "huge",   label: "Huge",   mul: 2.5, tagline: "Full clash" },
+];
+
 export class StartMenu {
   constructor() {
     this.sizeRects = [];
@@ -235,6 +246,8 @@ export class StartMenu {
     this.selectedSize = "medium";
     this.selectedMode = "open";
     this.selectedRace = "terran";
+    this.selectedFleet = "medium";
+    this.fleetRects = [];
     this.justStarted = null;
     // Campaign state ref + click callback wired by main.js.
     this.campaign = null;
@@ -302,9 +315,21 @@ export class StartMenu {
       y: raceY, w: raceBtnW, h: chipH,
     }));
 
+    // Fleet-size row (Small / Medium / Large / Huge).
+    const fn = FLEET_OPTIONS.length;
+    const fleetBtnW = Math.min(160, (viewW - 60) / fn - gapX);
+    const fleetRowW = fn * fleetBtnW + (fn - 1) * gapX;
+    const fleetY = raceY + chipH + rowGap;
+    const fleetStartX = (viewW - fleetRowW) / 2;
+    this.fleetRects = FLEET_OPTIONS.map((o, i) => ({
+      key: o.key, label: o.label, mul: o.mul, tagline: o.tagline,
+      x: fleetStartX + i * (fleetBtnW + gapX),
+      y: fleetY, w: fleetBtnW, h: chipH,
+    }));
+
     // Campaign upgrade grid (only used when Campaign mode is selected).
-    // Two rows of three tiles below the race row.
-    let nextY = raceY + chipH + rowGap;
+    // Two rows of three tiles below the fleet row.
+    let nextY = fleetY + chipH + rowGap;
     this.upgradeRects = [];
     if (this.selectedMode === "campaign") {
       const tileW = Math.min(220, (viewW - 60) / 3 - gapX);
@@ -399,6 +424,9 @@ export class StartMenu {
     for (const r of this.raceRects) {
       if (this._hit(r, x, y)) { this.selectedRace = r.key; return true; }
     }
+    for (const r of this.fleetRects) {
+      if (this._hit(r, x, y)) { this.selectedFleet = r.key; return true; }
+    }
     for (const r of this.upgradeRects) {
       if (this._hit(r, x, y)) {
         if (this.onPurchase) this.onPurchase(r.key);
@@ -425,10 +453,14 @@ export class StartMenu {
   _emitStart() {
     const size = this.sizeRects.find((r) => r.key === this.selectedSize)
               || this.sizeRects[0];
+    const fleet = this.fleetRects.find((r) => r.key === this.selectedFleet)
+               || this.fleetRects.find((r) => r.key === "medium")
+               || { mul: 1 };
     this.justStarted = {
       mapW: size.mapW, mapH: size.mapH,
       race: this.selectedRace,
       mode: this.selectedMode,
+      fleetMul: fleet.mul,
     };
   }
 
@@ -476,6 +508,16 @@ export class StartMenu {
       const race = RACES[r.key];
       this._drawChip(ctx, r, r.key === this.selectedRace,
         r.label, race.tagline || "");
+    }
+
+    if (this.fleetRects.length > 0) {
+      ctx.fillStyle = "#9bd";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText("FLEET SIZE", viewW / 2, this.fleetRects[0].y - 14);
+      for (const r of this.fleetRects) {
+        this._drawChip(ctx, r, r.key === this.selectedFleet,
+          r.label, r.tagline);
+      }
     }
 
     // Campaign panel: progress header + upgrade tiles.
