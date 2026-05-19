@@ -1,5 +1,7 @@
 import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
-import { createShip, updateShip, findHitSubsystem, resetSubsystems } from "./ship.js";
+import {
+  createShip, updateShip, findHitSubsystem, resetSubsystems, hasWorkingSubsystem,
+} from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
@@ -647,36 +649,55 @@ function spawnHitDebris(world, ship, hitPos, layer, amount) {
 }
 
 // ---------------------------------------------------------------------------
-// Beam ticking. Each beam applies its damage to the locked target on the
-// first frame it exists, then lingers as visual for `ttl` seconds.
+// Beam ticking. Heavy lasers are sustained beams: damage is spread over the
+// beam's full lifetime so dps = total / duration. Each tick we deal
+// (beam.dps * dt) to whatever target the beam is still locked onto, and
+// re-anchor the origin to the owner's current muzzle so the beam follows
+// the firing ship around. The beam dies early if the owner dies or loses
+// its laser subsystem mid-fire.
 // ---------------------------------------------------------------------------
 function applyAndAgeBeams(game, dt) {
   if (!game.beams || game.beams.length === 0) return;
   for (const beam of game.beams) {
-    if (!beam.applied) {
-      // Verify target is still alive + still in range. If not, beam misses.
-      const t = beam.target;
-      if (t && !t.dead) {
-        const dx = t.pos.x - beam.origin.x;
-        const dy = t.pos.y - beam.origin.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 <= beam.range * beam.range) {
-          const attacker = beam.ownerId != null
-            ? game.ships.find((s) => s.id === beam.ownerId)
-            : null;
-          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" }, attacker, game, { x: t.pos.x, y: t.pos.y });
-          if (t.hp <= 0) {
-            t.dead = true;
-            handleShipDestroyed(game, t, attacker);
-          }
-          beam.hit = { x: t.pos.x, y: t.pos.y };
-        } else {
+    // Re-anchor origin to the live owner so the beam tracks the firing
+    // ship's bow as it manoeuvres. If the owner is gone or has lost the
+    // laser subsystem since the beam started, kill the beam now.
+    const owner = beam.ownerId != null
+      ? game.ships.find((s) => s.id === beam.ownerId)
+      : null;
+    if (!owner || owner.dead || !hasWorkingSubsystem(owner, "laser")) {
+      beam.ttl = 0;
+      beam.hit = null;
+      continue;
+    }
+    const fwd = { x: Math.cos(owner.heading), y: Math.sin(owner.heading) };
+    beam.origin.x = owner.pos.x + fwd.x * owner.spec.radius * 0.9;
+    beam.origin.y = owner.pos.y + fwd.y * owner.spec.radius * 0.9;
+
+    const t = beam.target;
+    if (t && !t.dead) {
+      const dx = t.pos.x - beam.origin.x;
+      const dy = t.pos.y - beam.origin.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= beam.range * beam.range) {
+        const dmg = beam.dps * dt;
+        applyDamage(
+          t,
+          { damage: dmg, kind: "laser", fromKlass: "battleship" },
+          owner, game, { x: t.pos.x, y: t.pos.y },
+        );
+        if (t.hp <= 0) {
+          t.dead = true;
+          handleShipDestroyed(game, t, owner);
           beam.hit = null;
+        } else {
+          beam.hit = { x: t.pos.x, y: t.pos.y };
         }
       } else {
         beam.hit = null;
       }
-      beam.applied = true;
+    } else {
+      beam.hit = null;
     }
     beam.ttl -= dt;
   }

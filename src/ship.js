@@ -842,14 +842,18 @@ function updateHeavyLaser(ship, world) {
   if (!world.beams) world.beams = [];
   world.beams.push({
     origin,
-    target,       // the beam tracks the target while alive
+    target,                                  // beam re-acquires target each tick
     range: l.range,
+    // Damage budget for the whole beam, plus a per-second rate so the
+    // damage tick can stay frame-rate independent. dps × ttl ≈ damage.
     damage: l.damage,
+    dps: l.damage / l.beamDuration,
+    duration: l.beamDuration,
     ttl: l.beamDuration,
     color: l.beamColors[ship.side],
     side: ship.side,
     ownerId: ship.id,
-    applied: false,
+    hit: null,                               // updated each tick with current impact point
   });
   ship.laserCd = l.cooldown;
 }

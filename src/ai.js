@@ -75,6 +75,7 @@ export function updateAI(ship, world, dt) {
   // Carriers have their own passive routine — no target hunt, no orbit.
   if (ship.klass === "carrier") {
     carrierAI(ship, world);
+    applyBeamAvoidance(ship, world);
     return;
   }
 
@@ -109,6 +110,7 @@ export function updateAI(ship, world, dt) {
     c.aim = null;
     c.firing = false;
     c.firingMissile = false;
+    applyBeamAvoidance(ship, world);
     return;
   }
 
@@ -118,6 +120,95 @@ export function updateAI(ship, world, dt) {
     battleshipAI(ship, target, dt, world);
   } else {
     orbitAI(ship, target, dt, world);
+  }
+
+  // Overlay: dodge enemy heavy-laser beams. Runs after each class's
+  // normal steering so the avoidance vector wins in the danger window.
+  applyBeamAvoidance(ship, world);
+}
+
+// ---------------------------------------------------------------------------
+// Beam dodging. Heavy lasers are sustained for ~3 seconds; for that
+// window, the line from beam.origin to its tracked target is a hazard
+// corridor for any non-friendly ship. We compute a perpendicular escape
+// vector when the ship is inside the corridor, then blend it into the
+// existing controller — aim for aircraft (heading turns away), thrust
+// for capitals (sidestep).
+// ---------------------------------------------------------------------------
+const BEAM_DANGER_RADIUS = 280;
+
+function beamAvoidance(ship, beams) {
+  if (!beams || beams.length === 0) return null;
+  let ax = 0, ay = 0;
+  let highestUrgency = 0;
+  for (const beam of beams) {
+    if (beam.side === ship.side) continue;        // friendly beam — ignore
+    if (beam.ttl <= 0) continue;
+    if (!beam.target || beam.target.dead) continue;
+    const ox = beam.origin.x, oy = beam.origin.y;
+    const dx = beam.target.pos.x - ox;
+    const dy = beam.target.pos.y - oy;
+    const blen = Math.hypot(dx, dy);
+    if (blen < 1e-6) continue;
+    const bx = dx / blen, by = dy / blen;
+    // Project ship onto the beam line (axis through origin, direction (bx,by)).
+    const relX = ship.pos.x - ox;
+    const relY = ship.pos.y - oy;
+    const proj = relX * bx + relY * by;
+    // Outside the beam's longitudinal range? Not at risk.
+    const segLen = Math.min(beam.range, blen + 150);
+    if (proj < -50 || proj > segLen) continue;
+    const perpX = relX - proj * bx;
+    const perpY = relY - proj * by;
+    const perpDist = Math.hypot(perpX, perpY);
+    if (perpDist > BEAM_DANGER_RADIUS) continue;
+    // Closer to the line ⇒ stronger push. Multiply by remaining beam
+    // life so a beam about to time out gets less weight.
+    const lifeFrac = beam.duration > 0 ? (beam.ttl / beam.duration) : 1;
+    const urgency = (1 - perpDist / BEAM_DANGER_RADIUS) * (0.35 + 0.65 * lifeFrac);
+    if (urgency > highestUrgency) highestUrgency = urgency;
+    if (perpDist < 1e-3) {
+      // Sitting on the line — pick the perpendicular side deterministically.
+      const sign = (ship.id % 2 === 0) ? 1 : -1;
+      ax += -by * urgency * sign;
+      ay +=  bx * urgency * sign;
+    } else {
+      ax += (perpX / perpDist) * urgency;
+      ay += (perpY / perpDist) * urgency;
+    }
+  }
+  if (Math.abs(ax) < 1e-6 && Math.abs(ay) < 1e-6) return null;
+  const aLen = Math.hypot(ax, ay);
+  return { x: ax / aLen, y: ay / aLen, urgency: highestUrgency };
+}
+
+function applyBeamAvoidance(ship, world) {
+  if (!world || !world.beams) return;
+  const avoid = beamAvoidance(ship, world.beams);
+  if (!avoid) return;
+  const c = ship.controller;
+  const u = avoid.urgency;
+  // Aircraft (fighter, bomber) turn out of the beam by re-aiming. Strong
+  // urgency wholly overrides the previous aim; mild urgency blends.
+  if (ship.klass === "fighter" || ship.klass === "bomber") {
+    const w = 1.0 + 1.5 * u;
+    let ax = (c.aim && (c.aim.x || c.aim.y)) ? c.aim.x : 0;
+    let ay = (c.aim && (c.aim.x || c.aim.y)) ? c.aim.y : 0;
+    const aLen = Math.hypot(ax, ay) || 1;
+    ax /= aLen; ay /= aLen;
+    c.aim = { x: ax + avoid.x * w, y: ay + avoid.y * w };
+    // Stop dumping fire forward while we duck the beam.
+    if (u > 0.5) c.firing = false;
+  } else {
+    // Capitals add sidestep to their thrust vector. Weighted so even a
+    // strafing cruiser tilts away from the beam line.
+    const tx = (c.thrust && c.thrust.x) || 0;
+    const ty = (c.thrust && c.thrust.y) || 0;
+    const w = 1.2 + 1.8 * u;
+    const sx = tx + avoid.x * w;
+    const sy = ty + avoid.y * w;
+    const sLen = Math.hypot(sx, sy);
+    c.thrust = sLen > 1 ? { x: sx / sLen, y: sy / sLen } : { x: sx, y: sy };
   }
 }
 

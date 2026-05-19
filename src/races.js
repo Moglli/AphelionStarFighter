@@ -113,7 +113,7 @@ export const RACES = {
       hp: 950,
       shield: { max: 1100, regen: 40, regenDelay: 4 },
       armor: { max: 550 },
-      heavyLaser: { damage: 220, cooldown: 4.0, arc: Math.PI * 0.7 },
+      heavyLaser: { damage: 220, cooldown: 4.5, arc: Math.PI * 0.7 },
     },
     carrier: {
       hp: 1000,

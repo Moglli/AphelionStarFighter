@@ -266,12 +266,16 @@ export const CLASSES = {
       colors: { blue: "#fff", red: "#fc8" },
     },
     heavyLaser: {
+      // `damage` is the total dealt over a full beam lifetime; spread
+      // evenly across `beamDuration` seconds (so dps = damage /
+      // beamDuration). Cooldown is measured from fire-time, so the
+      // recovery window between beams is (cooldown - beamDuration).
       damage: 180,
       cooldown: 5.0,
       range: 2400,
       // Firing arc from the bow (radians, half-angle).
       arc: Math.PI * 0.55,
-      beamDuration: 0.45,
+      beamDuration: 3.0,
       beamColors: { blue: "#9ef", red: "#fc7" },
     },
     aiRange: 1000,

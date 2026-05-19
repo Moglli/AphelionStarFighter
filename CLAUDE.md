@@ -122,6 +122,79 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-19 — Heavy laser is now a 3-second sustained beam; AI dodges it
+
+**What changed**
+
+The battleship heavy laser used to apply its full damage instantly
+and linger for ~0.4 s as decoration. It is now a sustained beam:
+damage spreads evenly across 3 s (`dps = damage / beamDuration`),
+the beam re-anchors to the owner's bow each tick so it tracks the
+firing ship, and it dies early if the owner dies or loses its laser
+subsystem mid-fire. AI ships now compute a perpendicular escape
+vector when they wander into an enemy beam's danger corridor and
+blend it into their aim (aircraft) or thrust (capitals).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | Battleship `heavyLaser.beamDuration: 0.45 → 3.0`. Cooldown unchanged at 5.0 → recovery window between beams is 2 s. Comment added clarifying the dps formula. |
+| `src/races.js` | Voidsworn `heavyLaser.cooldown: 4.0 → 4.5` so the recovery window after a 3 s beam is still ~1.5 s (their dps is higher anyway). |
+| `src/ship.js` | `updateHeavyLaser` now writes `dps`, `duration`, and `hit: null` on the beam record; drops the `applied: false` flag. |
+| `src/game.js` | `applyAndAgeBeams` rewritten: every tick re-anchors the beam origin to the live owner's bow, deals `beam.dps * dt` damage if the target is in range, and kills the beam (`ttl = 0`) when the owner is dead or has lost its laser subsystem. Uses the existing `hasWorkingSubsystem` helper now imported from `ship.js`. |
+| `src/hud.js` | `drawBeams` reads `beam.duration` (not the old 0.45 magic constant) for its alpha curve and adds a small per-frame width jitter so the sustained beam reads as "live". |
+| `src/ai.js` | New `beamAvoidance(ship, beams)` + `applyBeamAvoidance(ship, world)` overlay. Called at the end of `updateAI` for every class (including carriers and idle ships with no target). Aircraft blend the escape vector into `c.aim` and stop firing while inside the danger window; capitals add it to `c.thrust` so they sidestep. |
+
+**Design decisions / gotchas**
+
+- **Continuous damage uses `applyDamage`**. Each tick the beam routes
+  through the same shield/armor/subsystem/hull pipeline as a single
+  cannon round; the subsystem step still works because `hitPos` is
+  the target's current position. This means a sustained beam slowly
+  bleeds the shield, then armor, then nodes, which feels right.
+- **Subsystem hits during a beam**. Because the impact point is the
+  target's centre, hits route through whichever node is closest to
+  the centre. That's almost always the engine on a fleeing target,
+  which is intentional — a 3-second beam on the engine is a clean
+  way to immobilise a capital.
+- **Beam dies on owner death OR laser-node kill**. Don't add new
+  paths that keep the beam alive past these conditions — the
+  player's main counter to a battleship's beam is destroying the
+  laser node mid-fire and they need to see the beam cut.
+- **`beam.side` is the OWNER's side**. The avoidance check skips
+  friendly beams via `beam.side === ship.side`. Don't switch this
+  to target side or you'll have allies dodging their own fleet's
+  beams.
+- **AI overrides on high urgency**. When a beam is about to clip an
+  aircraft, `firing` is force-cleared so the AI doesn't keep its
+  guns hot while breaking off — looks more decisive and prevents
+  it from re-acquiring the same beam-camped target.
+- **No path-prediction lookahead**. Avoidance uses current position
+  only. Capitals are slow enough that a one-frame lookahead doesn't
+  buy much, and aircraft turn fast enough to escape with a ramping
+  blend. Don't add motion-prediction without checking that AI ships
+  don't oscillate near beam edges.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # opens Vite dev server
+```
+
+In-game:
+- Pick **arena**, race **Terran**, opponent **Voidsworn**, fly as
+  **Battleship**. Their battleship will fire a sustained white-blue
+  beam at you. It should last ~3 s and track you across the field.
+- Watch friendly fighters near a Voidsworn beam: they should turn
+  away from the beam line and skip firing while crossing it.
+- Disable the enemy battleship's laser node (bow cross glyph): the
+  beam should cut out immediately if you destroy it mid-fire.
+- Park a friendly cruiser broadside-on to the beam line: it should
+  drift sideways out of the corridor on its own.
+
 ### 2026-05-19 — Destructible subsystem nodes (gun / engine / missile / laser)
 
 **What changed**
