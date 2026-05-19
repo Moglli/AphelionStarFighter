@@ -4,6 +4,12 @@
 
 import { MAP_SIZES } from "./arena.js";
 import { RACES, RACE_KEYS } from "./races.js";
+import { CLASSES } from "./classes.js";
+import { MODES, MODE_KEYS } from "./modes/index.js";
+import { saveStore } from "./save.js";
+import { events } from "./events.js";
+import { todaySeed } from "./modes/daily.js";
+import { Hangar } from "./hangar.js";
 
 const DEADZONE = 0.15;
 
@@ -121,31 +127,67 @@ export class MissileButton {
   }
 }
 
-// Pre-match menu: lets the player pick a map size and an Allied race
-// before the world spawns. Layout is two rows of chips plus an explicit
-// START button. Each chip toggles its row's selection; START emits the
-// chosen { mapW, mapH, race } bundle.
+// Pre-match menu: lets the player pick a game mode, ship class, allied
+// race, and map size before the world spawns. Selections persist via
+// SaveStore so re-opening the menu restores the last pick.
+//
+// Layout: four rows of chips plus an explicit START button. Each chip
+// toggles its row's selection; START emits the chosen options bundle.
+const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+
 export class StartMenu {
   constructor() {
+    this.modeRects = [];
+    this.classRects = [];
     this.sizeRects = [];
     this.raceRects = [];
     this.startRect = null;
-    this.selectedSize = "medium"; // default key
-    this.selectedRace = "terran"; // default key
-    this.justStarted = null;      // populated on START click; consumed by main
+    const sel = saveStore.get().menuSelection;
+    this.selectedMode = MODES[sel.mode] ? sel.mode : "arena";
+    this.selectedKlass = CLASSES[sel.klass] ? sel.klass : "fighter";
+    this.selectedSize = sel.mapSize || "medium";
+    this.selectedRace = RACES[sel.race] ? sel.race : "terran";
+    this.justStarted = null;
+    this.hangarRequested = false;
   }
 
   layout(viewW, viewH) {
-    const chipH = 64;
-    const gapX = 14;
-    const titleY = viewH / 2 - 170;
+    const chipH = 50;
+    const gapX = 12;
+    const rowGap = 22;
+    const titleY = Math.max(60, viewH / 2 - 260);
+
+    // Mode row.
+    const modeKeys = MODE_KEYS;
+    const mn = modeKeys.length;
+    const modeBtnW = Math.min(160, (viewW - 60) / mn - gapX);
+    const modeRowW = mn * modeBtnW + (mn - 1) * gapX;
+    const modeY = titleY + 80;
+    const modeStartX = (viewW - modeRowW) / 2;
+    this.modeRects = modeKeys.map((k, i) => ({
+      key: k, label: MODES[k].label, sub: MODES[k].tagline || "",
+      x: modeStartX + i * (modeBtnW + gapX),
+      y: modeY, w: modeBtnW, h: chipH,
+    }));
+
+    // Class row.
+    const cn = CLASS_ORDER.length;
+    const classBtnW = Math.min(110, (viewW - 40) / cn - gapX);
+    const classRowW = cn * classBtnW + (cn - 1) * gapX;
+    const classY = modeY + chipH + rowGap + 16;
+    const classStartX = (viewW - classRowW) / 2;
+    this.classRects = CLASS_ORDER.map((k, i) => ({
+      key: k, label: CLASSES[k].name,
+      x: classStartX + i * (classBtnW + gapX),
+      y: classY, w: classBtnW, h: chipH,
+    }));
 
     // Size row.
     const sizeOpts = MAP_SIZES;
     const sn = sizeOpts.length;
-    const sizeBtnW = Math.min(180, (viewW - 80) / sn - gapX);
+    const sizeBtnW = Math.min(160, (viewW - 80) / sn - gapX);
     const sizeRowW = sn * sizeBtnW + (sn - 1) * gapX;
-    const sizeY = titleY + 80;
+    const sizeY = classY + chipH + rowGap + 16;
     const sizeStartX = (viewW - sizeRowW) / 2;
     this.sizeRects = sizeOpts.map((o, i) => ({
       key: o.key, label: o.label, mapW: o.mapW, mapH: o.mapH,
@@ -156,9 +198,9 @@ export class StartMenu {
     // Race row.
     const raceKeys = RACE_KEYS;
     const rn = raceKeys.length;
-    const raceBtnW = Math.min(150, (viewW - 60) / rn - gapX);
+    const raceBtnW = Math.min(130, (viewW - 60) / rn - gapX);
     const raceRowW = rn * raceBtnW + (rn - 1) * gapX;
-    const raceY = sizeY + chipH + 60;
+    const raceY = sizeY + chipH + rowGap + 16;
     const raceStartX = (viewW - raceRowW) / 2;
     this.raceRects = raceKeys.map((k, i) => ({
       key: k, label: RACES[k].name,
@@ -166,25 +208,89 @@ export class StartMenu {
       y: raceY, w: raceBtnW, h: chipH,
     }));
 
-    // START button.
+    // START button + HANGAR button (sits to the left of START).
     const startW = 220, startH = 56;
+    const startY = raceY + chipH + 40;
     this.startRect = {
       x: (viewW - startW) / 2,
-      y: raceY + chipH + 50,
+      y: startY,
       w: startW, h: startH,
+    };
+    this.hangarRect = {
+      x: this.startRect.x - 150 - 16,
+      y: startY,
+      w: 150, h: startH,
     };
   }
 
+  consumeHangarRequest() {
+    const r = this.hangarRequested;
+    this.hangarRequested = false;
+    return r;
+  }
+
+  /** True when daily mode is selected and the player already played today. */
+  dailyLocked() {
+    if (this.selectedMode !== "daily") return false;
+    const d = saveStore.get().daily;
+    return d.lastSeed === todaySeed();
+  }
+
   click(x, y) {
+    for (const r of this.modeRects) {
+      if (this._hit(r, x, y)) {
+        this.selectedMode = r.key;
+        events.emit("uiClick", { source: "menu" });
+        this._persist();
+        return;
+      }
+    }
+    for (const r of this.classRects) {
+      if (this._hit(r, x, y)) {
+        this.selectedKlass = r.key;
+        events.emit("uiClick", { source: "menu" });
+        this._persist();
+        return;
+      }
+    }
     for (const r of this.sizeRects) {
-      if (this._hit(r, x, y)) { this.selectedSize = r.key; return; }
+      if (this._hit(r, x, y)) {
+        this.selectedSize = r.key;
+        events.emit("uiClick", { source: "menu" });
+        this._persist();
+        return;
+      }
     }
     for (const r of this.raceRects) {
-      if (this._hit(r, x, y)) { this.selectedRace = r.key; return; }
+      if (this._hit(r, x, y)) {
+        this.selectedRace = r.key;
+        events.emit("uiClick", { source: "menu" });
+        this._persist();
+        return;
+      }
+    }
+    if (this.hangarRect && this._hit(this.hangarRect, x, y)) {
+      this.hangarRequested = true;
+      events.emit("uiClick", { source: "menu" });
+      return;
     }
     if (this.startRect && this._hit(this.startRect, x, y)) {
+      if (this.dailyLocked()) {
+        events.emit("uiClick", { source: "menu" });
+        return;
+      }
+      events.emit("uiClick", { source: "menu" });
       this._emitStart();
     }
+  }
+
+  _persist() {
+    saveStore.update((data) => {
+      data.menuSelection.mode = this.selectedMode;
+      data.menuSelection.klass = this.selectedKlass;
+      data.menuSelection.race = this.selectedRace;
+      data.menuSelection.mapSize = this.selectedSize;
+    });
   }
 
   _hit(r, x, y) {
@@ -194,7 +300,13 @@ export class StartMenu {
   _emitStart() {
     const size = this.sizeRects.find((r) => r.key === this.selectedSize)
               || this.sizeRects[0];
-    this.justStarted = { mapW: size.mapW, mapH: size.mapH, race: this.selectedRace };
+    this.justStarted = {
+      mode: this.selectedMode,
+      klass: this.selectedKlass,
+      race: this.selectedRace,
+      mapW: size.mapW,
+      mapH: size.mapH,
+    };
   }
 
   consumeStart() {
@@ -210,13 +322,29 @@ export class StartMenu {
 
     ctx.fillStyle = "#cef";
     ctx.textAlign = "center";
-    ctx.font = "bold 36px system-ui, sans-serif";
-    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 180);
+    ctx.font = "bold 32px system-ui, sans-serif";
+    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, this.modeRects[0].y - 36);
+
+    // Mode row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("MODE", viewW / 2, this.modeRects[0].y - 12);
+    for (const r of this.modeRects) {
+      this._drawChip(ctx, r, r.key === this.selectedMode, r.label, r.sub);
+    }
+
+    // Class row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("YOUR SHIP", viewW / 2, this.classRects[0].y - 12);
+    for (const r of this.classRects) {
+      this._drawChip(ctx, r, r.key === this.selectedKlass, r.label, CLASSES[r.key].role);
+    }
 
     // Size row.
     ctx.fillStyle = "#9bd";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("MAP SIZE", viewW / 2, this.sizeRects[0].y - 14);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("MAP SIZE", viewW / 2, this.sizeRects[0].y - 12);
     for (const r of this.sizeRects) {
       this._drawChip(ctx, r, r.key === this.selectedSize,
         r.label, `${r.mapW} × ${r.mapH}`);
@@ -224,27 +352,76 @@ export class StartMenu {
 
     // Race row.
     ctx.fillStyle = "#9bd";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("ALLIED RACE", viewW / 2, this.raceRects[0].y - 14);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("ALLIED RACE", viewW / 2, this.raceRects[0].y - 12);
     for (const r of this.raceRects) {
       const race = RACES[r.key];
       this._drawChip(ctx, r, r.key === this.selectedRace,
         r.label, race.tagline || "");
     }
 
+    // HANGAR button.
+    const h = this.hangarRect;
+    ctx.fillStyle = "rgba(40,60,100,0.85)";
+    ctx.fillRect(h.x, h.y, h.w, h.h);
+    ctx.strokeStyle = "#7df";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(h.x, h.y, h.w, h.h);
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("HANGAR", h.x + h.w / 2, h.y + h.h / 2 + 6);
+
     // START button.
     const s = this.startRect;
-    ctx.fillStyle = "rgba(60,140,90,0.85)";
+    const locked = this.dailyLocked();
+    ctx.fillStyle = locked ? "rgba(60,60,80,0.85)" : "rgba(60,140,90,0.85)";
     ctx.fillRect(s.x, s.y, s.w, s.h);
-    ctx.strokeStyle = "#9f8";
+    ctx.strokeStyle = locked ? "#778" : "#9f8";
     ctx.lineWidth = 3;
     ctx.strokeRect(s.x, s.y, s.w, s.h);
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 24px system-ui, sans-serif";
-    ctx.fillText("START", s.x + s.w / 2, s.y + s.h / 2 + 8);
+    ctx.font = "bold 22px system-ui, sans-serif";
+    if (locked) {
+      ctx.fillText("DAILY DONE", s.x + s.w / 2, s.y + s.h / 2 + 2);
+      ctx.font = "11px system-ui, sans-serif";
+      const d = saveStore.get().daily;
+      ctx.fillText(`Score ${d.lastScore} · back tomorrow`, s.x + s.w / 2, s.y + s.h / 2 + 18);
+    } else {
+      ctx.fillText("START", s.x + s.w / 2, s.y + s.h / 2 + 8);
+    }
+
+    // Profile strip — pinned top-right above the chips.
+    this._drawProfileStrip(ctx, viewW);
 
     ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  _drawProfileStrip(ctx, viewW) {
+    const data = saveStore.get();
+    const pad = 18;
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fd6";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText(`${data.softCurrency}`, viewW - pad, pad + 18);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText("CREDITS", viewW - pad, pad + 32);
+
+    ctx.fillStyle = "#b6f";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText(`${data.hardCurrency}`, viewW - pad - 110, pad + 18);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText("APHELIUM", viewW - pad - 110, pad + 32);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText(`LV ${data.level}`, pad, pad + 18);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText(`XP ${data.xp}`, pad, pad + 32);
   }
 
   _drawChip(ctx, r, selected, label, sublabel) {
@@ -254,12 +431,12 @@ export class StartMenu {
     ctx.lineWidth = selected ? 3 : 2;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
     ctx.fillStyle = "#cef";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 2);
+    ctx.font = "bold 15px system-ui, sans-serif";
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 1);
     if (sublabel) {
-      ctx.font = "11px system-ui, sans-serif";
+      ctx.font = "10px system-ui, sans-serif";
       ctx.fillStyle = "#9bd";
-      ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 16);
+      ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 14);
     }
   }
 }
@@ -271,6 +448,10 @@ export class InputManager {
     this.right = new VirtualStick({ side: "right", color: "#f76" });
     this.missileBtn = new MissileButton();
     this.startMenu = new StartMenu();
+    this.hangar = new Hangar();
+    // Which pre-match panel is active. "menu" → start menu; "hangar" →
+    // hangar profile screen. Toggled by HANGAR / BACK buttons.
+    this.menuScreen = "menu";
     this.menuActive = false;
 
     this.keys = new Set();
@@ -319,6 +500,7 @@ export class InputManager {
   layoutOverlays(viewW, viewH) {
     this.missileBtn.layout(viewW, viewH);
     this.startMenu.layout(viewW, viewH);
+    this.hangar.layout(viewW, viewH);
   }
 
   onDown(e) {
@@ -326,10 +508,20 @@ export class InputManager {
     const { x, y } = this.pos(e);
     this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
 
-    // Pre-match menu: route the click to size-selection and swallow
-    // everything else.
+    // Pre-match panels: route the click to whichever screen is active
+    // and swallow everything else. Screen toggle handled below.
     if (this.menuActive) {
-      this.startMenu.click(x, y);
+      if (this.menuScreen === "hangar") {
+        this.hangar.click(x, y);
+        if (this.hangar.consumeBackRequest()) this.menuScreen = "menu";
+      } else {
+        this.startMenu.click(x, y);
+        if (this.startMenu.consumeHangarRequest()) {
+          // Re-layout in case the daily-claim chip needs to appear.
+          this.hangar.layout(this.canvas.clientWidth, this.canvas.clientHeight);
+          this.menuScreen = "hangar";
+        }
+      }
       return;
     }
 

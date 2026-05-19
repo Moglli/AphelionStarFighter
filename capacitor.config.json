@@ -1,0 +1,21 @@
+{
+  "appId": "com.aphelion.starfighter",
+  "appName": "Aphelion Star Fighter",
+  "webDir": "dist",
+  "backgroundColor": "#02030aff",
+  "ios": {
+    "contentInset": "always",
+    "limitsNavigationsToAppBoundDomains": true
+  },
+  "android": {
+    "backgroundColor": "#02030aff",
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1000,
+      "backgroundColor": "#02030a",
+      "showSpinner": false
+    }
+  }
+}

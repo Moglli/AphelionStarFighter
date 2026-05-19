@@ -2,8 +2,60 @@ import { CLASSES, SIDES } from "./classes.js";
 import { ARENA, MAP_SIZES } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
 import { RACES } from "./races.js";
+import { MODES } from "./modes/index.js";
+import { saveStore } from "./save.js";
+import { progression } from "./progression.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+
+// Toast queue: progression emits text labels for XP / credit awards;
+// the HUD picks them up here and decays each over TOAST_LIFETIME seconds.
+const TOAST_LIFETIME = 2.6;
+const toasts = [];
+let lastToastDrainMs = performance.now();
+
+function drainAndAgeToasts() {
+  const now = performance.now();
+  const dt = (now - lastToastDrainMs) / 1000;
+  lastToastDrainMs = now;
+  for (const t of toasts) t.age += dt;
+  // Drop expired.
+  while (toasts.length > 0 && toasts[0].age >= TOAST_LIFETIME) toasts.shift();
+  // Pull new awards.
+  const fresh = progression.consumeRecentRewards();
+  for (const r of fresh) toasts.push({ text: r.text, kind: r.kind, age: 0 });
+  // Cap the visible stack at 6.
+  while (toasts.length > 6) toasts.shift();
+}
+
+const TOAST_COLORS = {
+  xp:      "#7df",
+  credits: "#fd6",
+  premium: "#b6f",
+  win:     "#9f8",
+  levelup: "#fff",
+};
+
+function drawToasts(ctx, viewW, viewH) {
+  drainAndAgeToasts();
+  if (toasts.length === 0) return;
+  ctx.save();
+  ctx.textAlign = "right";
+  const x = viewW - 16;
+  let y = viewH * 0.32;
+  for (const t of toasts) {
+    const a = Math.max(0, 1 - t.age / TOAST_LIFETIME);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(x - 320, y - 18, 320, 26);
+    ctx.fillStyle = TOAST_COLORS[t.kind] || "#cef";
+    ctx.font = t.kind === "levelup" ? "bold 16px system-ui, sans-serif" : "bold 13px system-ui, sans-serif";
+    ctx.fillText(t.text, x - 8, y);
+    y += 30;
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
 
 function countBySide(ships) {
   const out = {
@@ -14,9 +66,13 @@ function countBySide(ships) {
   return out;
 }
 
-export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
+export function drawHUD(ctx, game, viewW, viewH, input) {
   if (game.state === "menu") {
-    if (startMenu) startMenu.draw(ctx, viewW, viewH);
+    if (input.menuScreen === "hangar") {
+      input.hangar.draw(ctx, viewW, viewH);
+    } else if (input.startMenu) {
+      input.startMenu.draw(ctx, viewW, viewH);
+    }
     return;
   }
 
@@ -25,12 +81,14 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   drawSideStrip(ctx, counts.blue, "blue", game.alliedRace, 16, 16, "left");
   drawSideStrip(ctx, counts.red,  "red",  game.hostileRace, viewW - 16, 16, "right");
 
+  drawModeBanner(ctx, game, viewW);
+
   const player = game.ships.find((s) => s.isPlayer && !s.dead);
   if (player) {
-    drawPlayerHUD(ctx, player, viewW, viewH, missileBtn);
+    drawPlayerHUD(ctx, player, viewW, viewH, input.missileBtn);
   } else if (game.spectating) {
     drawSpectateOverlay(ctx, game, viewW, viewH);
-  } else if (game.respawnTimer > 0) {
+  } else if (game.respawnTimer > 0 && game.mode !== "waves") {
     ctx.fillStyle = "#fff";
     ctx.font = "bold 28px system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -39,19 +97,61 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   }
 
   if (game.matchOver) {
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(0, viewH / 2 - 80, viewW, 160);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 42px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    const msg = game.winner === "blue" ? "ALLIED VICTORY" : "HOSTILE VICTORY";
-    ctx.fillText(msg, viewW / 2, viewH / 2);
-    ctx.font = "18px system-ui, sans-serif";
-    ctx.fillText("Tap to restart", viewW / 2, viewH / 2 + 36);
-    ctx.textAlign = "left";
+    drawMatchOverOverlay(ctx, game, viewW, viewH);
   }
 
+  drawToasts(ctx, viewW, viewH);
   drawMinimap(ctx, game, viewW, viewH);
+}
+
+function drawModeBanner(ctx, game, viewW) {
+  const mode = MODES[game.mode];
+  if (!mode) return;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#9bd";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.fillText(mode.label.toUpperCase(), viewW / 2, 18);
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillStyle = "#cef";
+  let line = `Score ${game.score}  ·  Kills ${game.kills}`;
+  if (game.mode === "waves" && game.modeState) {
+    line = `Wave ${game.modeState.wave}  ·  ${line}`;
+  }
+  ctx.fillText(line, viewW / 2, 36);
+  ctx.textAlign = "left";
+  ctx.restore();
+}
+
+function drawMatchOverOverlay(ctx, game, viewW, viewH) {
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillRect(0, viewH / 2 - 110, viewW, 220);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 42px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  let title;
+  if (game.mode === "waves") {
+    title = `WAVE ${game.modeState ? game.modeState.survivedWaves : 0} SURVIVED`;
+  } else if (game.mode === "daily") {
+    title = game.winner === "blue" ? "DAILY CLEARED" : "DAILY FAILED";
+  } else {
+    title = game.winner === "blue" ? "ALLIED VICTORY" : "HOSTILE VICTORY";
+  }
+  ctx.fillText(title, viewW / 2, viewH / 2 - 30);
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.fillStyle = "#cef";
+  ctx.fillText(`Score ${game.score}  ·  Kills ${game.kills}`, viewW / 2, viewH / 2);
+  const best = saveStore.get().bestScores;
+  if (game.mode === "arena" || game.mode === "waves") {
+    const b = best[game.mode];
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(`Best: ${b}`, viewW / 2, viewH / 2 + 22);
+  }
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.fillStyle = "#fff";
+  ctx.fillText("Tap to return to menu", viewW / 2, viewH / 2 + 60);
+  ctx.textAlign = "left";
 }
 
 function drawSideStrip(ctx, counts, side, race, anchorX, anchorY, align) {

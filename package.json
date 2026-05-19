@@ -1,0 +1,26 @@
+{
+  "name": "aphelion-star-fighter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Aphelion Star Fighter — canvas2D space combat, packaged for mobile via Capacitor.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && cap sync",
+    "cap:open:ios": "cap open ios",
+    "cap:open:android": "cap open android",
+    "cap:run:ios": "npm run build && cap run ios",
+    "cap:run:android": "npm run build && cap run android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "vite": "^5.4.10"
+  }
+}

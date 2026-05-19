@@ -3,6 +3,11 @@ import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
+import { events } from "./events.js";
+import { MODES, DEFAULT_MODE } from "./modes/index.js";
+import { saveStore } from "./save.js";
+import { audio } from "./audio.js";
+import { resolveCosmetic } from "./cosmetics.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -42,21 +47,43 @@ export function createGame() {
     winner: null,
     spectating: false,
     spectateTargetId: null,
-    // Lifecycle: "menu" before the player picks a map size, "playing"
-    // once a match is in progress.
+    // Lifecycle: "menu" before the player picks options, "playing" during
+    // a match.
     state: "menu",
-    // Per-side race selection. Allied is picked from the start menu;
-    // Hostile is rolled at match start.
+    // Mode + selections, replaced when startGame is called.
+    mode: DEFAULT_MODE,
+    playerKlass: "fighter",
     alliedRace: "terran",
     hostileRace: "terran",
+    // Match scoring + mode-specific state. Modes own `modeState`.
+    score: 0,
+    kills: 0,
+    elapsed: 0,
+    modeState: null,
+    // Pack lookup, rebuilt each tick.
+    packs: new Map(),
   };
   return game;
 }
 
-// Called from main when the player picks map size + allied race on the
-// start menu. Hostile race is rolled here so the enemy composition is a
-// surprise.
-export function startGame(game, mapW, mapH, alliedRace = "terran") {
+/**
+ * Begin a match.
+ *
+ * @param {object} game
+ * @param {{
+ *   mode?: import("./types.js").GameMode,
+ *   mapW?: number,
+ *   mapH?: number,
+ *   race?: import("./types.js").RaceId,
+ *   klass?: import("./types.js").ShipId,
+ * }} opts
+ */
+export function startGame(game, opts = {}) {
+  const modeKey = opts.mode && MODES[opts.mode] ? opts.mode : DEFAULT_MODE;
+  const mode = MODES[modeKey];
+  const mapW = opts.mapW != null ? opts.mapW : 7000;
+  const mapH = opts.mapH != null ? opts.mapH : 5000;
+
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -67,11 +94,32 @@ export function startGame(game, mapW, mapH, alliedRace = "terran") {
   game.winner = null;
   game.spectating = false;
   game.spectateTargetId = null;
-  game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
-  game.hostileRace = randomRaceKey();
+  game.alliedRace = RACES[opts.race] ? opts.race : "terran";
+  game.playerKlass = opts.klass || "fighter";
+  game.mode = modeKey;
+  game.score = 0;
+  game.kills = 0;
+  game.elapsed = 0;
+  game.modeState = null;
   game.state = "playing";
-  spawnRoster(game);
+
+  // Let the mode pick the hostile race and stage initial spawns. Falls
+  // back to the legacy arena setup if the mode hook is absent.
+  if (mode && typeof mode.setup === "function") {
+    mode.setup(game, { spawnRoster, promotePlayer });
+  } else {
+    game.hostileRace = randomRaceKey();
+    spawnRoster(game);
+  }
+
+  // Lazy-start the ambient music drone — fades in over 3s. Browsers
+  // require a user gesture to start audio; the gesture that opened the
+  // start menu satisfies it.
+  audio.musicStart();
 }
+
+// Re-exported for modes that want to compose roster/promote behavior.
+export { spawnRoster, promotePlayer };
 
 function spawnRoster(game) {
   for (const side of ["blue", "red"]) {
@@ -198,13 +246,17 @@ function spawnCarrierWithEscort(game, side, race, zone, count, facing) {
   }
 }
 
-function promotePlayer(game) {
+function promotePlayer(game, klass) {
+  const want = klass || game.playerKlass || "fighter";
+  // Prefer an existing friendly ship of the requested class so the
+  // player slots into the spawned roster instead of duplicating.
   const candidate = game.ships.find(
-    (s) => s.side === "blue" && s.klass === "fighter" && !s.isPlayer && !s.dead,
+    (s) => s.side === "blue" && s.klass === want && !s.isPlayer && !s.dead,
   );
+  let ship;
   if (!candidate) {
-    const ship = createShip({
-      klass: "fighter",
+    ship = createShip({
+      klass: want,
       race: game.alliedRace,
       side: "blue",
       pos: randomSpawnPos(ARENA.spawn.blue),
@@ -213,23 +265,31 @@ function promotePlayer(game) {
     });
     ship.isPlayer = true;
     game.ships.push(ship);
-    return ship;
+  } else {
+    candidate.controller = game.playerController;
+    candidate.isPlayer = true;
+    candidate.pos = randomSpawnPos(ARENA.spawn.blue);
+    candidate.vel = { x: 0, y: 0 };
+    candidate.hp = candidate.hpMax;
+    candidate.shield = candidate.shieldMax;
+    if (candidate.armorMax > 0) candidate.armor = candidate.armorMax;
+    candidate.shieldHitTimer = 999;
+    candidate.heading = 0;
+    candidate.missileCd = 0;
+    if (candidate.spec.weapon && candidate.spec.weapon.capacity) {
+      candidate.weaponAmmo = candidate.spec.weapon.capacity;
+      candidate.weaponReloading = false;
+      candidate.weaponReloadTimer = 0;
+    }
+    ship = candidate;
   }
-  candidate.controller = game.playerController;
-  candidate.isPlayer = true;
-  candidate.pos = randomSpawnPos(ARENA.spawn.blue);
-  candidate.vel = { x: 0, y: 0 };
-  candidate.hp = candidate.hpMax;
-  candidate.shield = candidate.shieldMax;
-  candidate.shieldHitTimer = 999;
-  candidate.heading = 0;
-  candidate.missileCd = 0;
-  if (candidate.spec.weapon && candidate.spec.weapon.capacity) {
-    candidate.weaponAmmo = candidate.spec.weapon.capacity;
-    candidate.weaponReloading = false;
-    candidate.weaponReloadTimer = 0;
-  }
-  return candidate;
+  // Apply equipped cosmetics. Renderer reads ship.cosmetics on draw.
+  const equipped = saveStore.get().equippedCosmetics;
+  const hullSkin = resolveCosmetic(equipped.hullSkin);
+  ship.cosmetics = {
+    hullTint: hullSkin && hullSkin.tint ? hullSkin.tint : null,
+  };
+  return ship;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +341,15 @@ export function getSpectateTarget(game) {
 export function update(game, dt) {
   if (game.state !== "playing") return;
 
+  if (!game.matchOver) game.elapsed += dt;
+  // Mode-specific per-tick logic (e.g. spawning new waves). Runs before
+  // ship AI so any newly-spawned ships still tick this frame. Suppressed
+  // once the match is decided so post-game freeze-frame stays still.
+  const mode = MODES[game.mode];
+  if (!game.matchOver && mode && typeof mode.tick === "function") {
+    mode.tick(game, dt);
+  }
+
   game.packs = computePacks(game.ships);
 
   for (const ship of game.ships) {
@@ -327,10 +396,16 @@ export function update(game, dt) {
       const dy = ship.pos.y - p.pos.y;
       const r = ship.spec.radius + p.radius;
       if (dx * dx + dy * dy <= r * r) {
-        applyDamage(ship, p);
+        const attacker = p.ownerId != null
+          ? game.ships.find((s) => s.id === p.ownerId)
+          : null;
+        applyDamage(ship, p, attacker);
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
-        if (ship.hp <= 0) ship.dead = true;
+        if (ship.hp <= 0) {
+          ship.dead = true;
+          handleShipDestroyed(game, ship, attacker);
+        }
         break;
       }
     }
@@ -369,11 +444,50 @@ export function update(game, dt) {
   }
 
   if (!game.matchOver) {
-    const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
-    const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
-    if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
-    else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
+    const winner = mode && typeof mode.checkEnd === "function"
+      ? mode.checkEnd(game)
+      : defaultArenaCheckEnd(game);
+    if (winner) {
+      game.matchOver = true;
+      game.winner = winner;
+      events.emit("matchEnded", {
+        mode: game.mode,
+        winner,
+        durationSeconds: game.elapsed,
+        score: game.score,
+      });
+      persistMatchResult(game);
+    }
   }
+}
+
+function defaultArenaCheckEnd(game) {
+  const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
+  const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
+  if (!redAlive) return "blue";
+  if (!blueAlive) return "red";
+  return null;
+}
+
+function persistMatchResult(game) {
+  saveStore.update((data) => {
+    if (game.winner === "blue") data.stats.wins += 1;
+    else data.stats.losses += 1;
+    data.stats.kills += game.kills;
+    data.stats.playtimeSeconds += game.elapsed;
+    if (game.mode === "arena" && game.score > data.bestScores.arena) {
+      data.bestScores.arena = game.score;
+    }
+    if (game.mode === "waves" && game.score > data.bestScores.waves) {
+      data.bestScores.waves = game.score;
+    }
+    if (game.mode === "daily" && game.modeState && game.modeState.seed) {
+      data.daily.lastSeed = game.modeState.seed;
+      data.daily.lastScore = game.score;
+      data.daily.lastResult = game.winner === "blue" ? "win" : "loss";
+    }
+  });
+  saveStore.flush();
 }
 
 // Return to the start menu. The user picks a (possibly new) map size and
@@ -388,6 +502,10 @@ export function restart(game) {
   game.spectating = false;
   game.spectateTargetId = null;
   game.state = "menu";
+  game.score = 0;
+  game.kills = 0;
+  game.elapsed = 0;
+  game.modeState = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -400,8 +518,9 @@ export function restart(game) {
 //   a 100-damage hit erodes ~50 armor by default — so a thick plate
 //   "slowly deteriorates" rather than burning through in a single salvo.
 // ---------------------------------------------------------------------------
-function applyDamage(ship, p) {
+function applyDamage(ship, p, attacker = null) {
   let remaining = p.damage;
+  const byPlayer = !!(attacker && attacker.isPlayer);
 
   // Step 1: Shield (unless missile, which bypasses).
   if (p.kind !== "missile" && ship.shieldMax > 0 && ship.shield > 0) {
@@ -413,13 +532,17 @@ function applyDamage(ship, p) {
     const shieldCost = remaining * shieldMul;
     if (shieldCost <= ship.shield) {
       ship.shield -= shieldCost;
+      events.emit("hit", { ship, layer: "shield", amount: remaining, byPlayer });
       return; // shield ate the whole hit
     }
     // Shield breaks; convert remaining capacity back into incoming damage.
     const dmgAbsorbed = ship.shield / shieldMul;
     ship.shield = 0;
     remaining = remaining - dmgAbsorbed;
-    if (remaining <= 0) return;
+    if (remaining <= 0) {
+      events.emit("hit", { ship, layer: "shield", amount: dmgAbsorbed, byPlayer });
+      return;
+    }
   }
 
   // Step 2: Armor (capitals). Wear at a reduced rate so plates last.
@@ -429,17 +552,22 @@ function applyDamage(ship, p) {
     const armorWear = remaining * wearRate;
     if (armorWear <= ship.armor) {
       ship.armor -= armorWear;
+      events.emit("hit", { ship, layer: "armor", amount: remaining, byPlayer });
       return; // armor ate the whole hit
     }
     // Armor strips; convert remaining capacity back into incoming damage.
     const dmgAbsorbed = ship.armor / wearRate;
     ship.armor = 0;
     remaining = remaining - dmgAbsorbed;
-    if (remaining <= 0) return;
+    if (remaining <= 0) {
+      events.emit("hit", { ship, layer: "armor", amount: dmgAbsorbed, byPlayer });
+      return;
+    }
   }
 
   // Step 3: Hull.
   ship.hp -= remaining;
+  events.emit("hit", { ship, layer: "hull", amount: remaining, byPlayer });
 }
 
 // ---------------------------------------------------------------------------
@@ -457,8 +585,14 @@ function applyAndAgeBeams(game, dt) {
         const dy = t.pos.y - beam.origin.y;
         const d2 = dx * dx + dy * dy;
         if (d2 <= beam.range * beam.range) {
-          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" });
-          if (t.hp <= 0) t.dead = true;
+          const attacker = beam.ownerId != null
+            ? game.ships.find((s) => s.id === beam.ownerId)
+            : null;
+          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" }, attacker);
+          if (t.hp <= 0) {
+            t.dead = true;
+            handleShipDestroyed(game, t, attacker);
+          }
           beam.hit = { x: t.pos.x, y: t.pos.y };
         } else {
           beam.hit = null;
@@ -471,6 +605,27 @@ function applyAndAgeBeams(game, dt) {
     beam.ttl -= dt;
   }
   game.beams = game.beams.filter((b) => b.ttl > 0);
+}
+
+// Per-class score weights. Tuned roughly to combat threat: capitals are
+// worth multiples of a fighter kill. Used by both arena and waves modes.
+const SCORE_PER_KILL = {
+  fighter: 10,
+  bomber: 20,
+  frigate: 40,
+  cruiser: 80,
+  battleship: 160,
+  carrier: 200,
+};
+
+function handleShipDestroyed(game, ship, killer) {
+  const byPlayer = !!(killer && killer.isPlayer);
+  events.emit("shipDestroyed", { ship, killer, byPlayer });
+  if (ship.isPlayer) events.emit("playerDestroyed", { ship });
+  if (byPlayer && ship.side !== "blue") {
+    game.kills += 1;
+    game.score += SCORE_PER_KILL[ship.klass] || 10;
+  }
 }
 
 // ---------------------------------------------------------------------------
