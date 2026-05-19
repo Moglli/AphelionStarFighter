@@ -129,7 +129,8 @@ const SUBSYSTEM_LAYOUTS = {
   ],
   cruiser: [
     { kind: "engine",  x: -0.80, y:  0.00, r: 0.30, hpFrac: 0.35 },
-    { kind: "gun",     x:  0.55, y:  0.00, r: 0.25, hpFrac: 0.25 },
+    // Bow laser turret replaces the old forward gun.
+    { kind: "laser",   x:  0.65, y:  0.00, r: 0.22, hpFrac: 0.25 },
     { kind: "missile", x: -0.20, y:  0.55, r: 0.22, hpFrac: 0.20 },
     { kind: "missile", x: -0.20, y: -0.55, r: 0.22, hpFrac: 0.20 },
   ],
@@ -268,6 +269,9 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     pdCooldowns: spec.pdCannons ? new Array(spec.pdCannons.count).fill(0) : null,
     // Missile pod cooldowns.
     podCooldowns: spec.missilePods ? new Array(spec.missilePods.count).fill(0) : null,
+    // Siege missile cooldowns (one entry per launcher). Same plumbing as
+    // podCooldowns but for the cruiser's single heavy mass-driver.
+    siegeCooldowns: spec.siegeMissile ? new Array(spec.siegeMissile.count).fill(0) : null,
     // Heavy laser cooldown.
     laserCd: 0,
     // Cannon magazine (only used when spec.weapon.capacity is set).
@@ -413,6 +417,11 @@ export function updateShip(ship, dt, world) {
       ship.podCooldowns[i] = Math.max(0, ship.podCooldowns[i] - dt);
     }
   }
+  if (ship.siegeCooldowns) {
+    for (let i = 0; i < ship.siegeCooldowns.length; i++) {
+      ship.siegeCooldowns[i] = Math.max(0, ship.siegeCooldowns[i] - dt);
+    }
+  }
 
   // Fighter missile launch (player or AI). One-shot — flag is always cleared
   // after evaluation so a press while cooling isn't queued indefinitely.
@@ -431,6 +440,7 @@ export function updateShip(ship, dt, world) {
   // partial defence); missile pods + heavy laser are.
   if (s.pdCannons) updatePDFire(ship, world);
   if (s.missilePods && missileOk) updateMissilePodFire(ship, world);
+  if (s.siegeMissile && missileOk) updateSiegeMissileFire(ship, world);
   if (s.heavyLaser && laserOk) updateHeavyLaser(ship, world);
   if (s.replenish) updateReplenishment(ship, dt, world);
 
@@ -730,7 +740,7 @@ function updateMissilePodFire(ship, world) {
     const launchHeading = lerpAngle(outward, toT, 0.4);
 
     const colors = pods.colors || { blue: "#fff", red: "#fc8" };
-    world.projectiles.push(createMissile({
+    const missile = createMissile({
       pos: origin,
       heading: launchHeading,
       damage: pods.damage,
@@ -745,7 +755,12 @@ function updateMissilePodFire(ship, world) {
       fromKlass: ship.klass,
       acquireRange: pods.acquireRange,
       initialTarget: target,
-    }));
+    });
+    // Tag cluster behaviour onto the missile so updateProjectile can
+    // bloom it into children on approach. Other classes' pods leave
+    // this undefined and behave as plain torpedoes.
+    if (pods.cluster) missile.cluster = pods.cluster;
+    world.projectiles.push(missile);
     ship.podCooldowns[i] = pods.cooldown;
     events.emit("weaponFired", { ship, kind: "missile" });
   }
@@ -756,6 +771,44 @@ function lerpAngle(a, b, t) {
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return a + d * t;
+}
+
+// ---------------------------------------------------------------------------
+// Siege missile launcher — the cruiser's heavy single-mass warhead.
+// Fires from the bow on its own (long) cooldown, gated on the missile
+// subsystem. Tough HP and big radius so PD has to spend a salvo on it.
+// ---------------------------------------------------------------------------
+function updateSiegeMissileFire(ship, world) {
+  const sm = ship.spec.siegeMissile;
+  for (let i = 0; i < ship.siegeCooldowns.length; i++) {
+    if (ship.siegeCooldowns[i] > 0) continue;
+    const target = pickPodTarget(ship, world, sm.acquireRange);
+    if (!target) continue;
+    const fwd = V.fromAngle(ship.heading);
+    const origin = {
+      x: ship.pos.x + fwd.x * (ship.spec.radius + 8),
+      y: ship.pos.y + fwd.y * (ship.spec.radius + 8),
+    };
+    const colors = sm.colors || { blue: "#fff", red: "#fc8" };
+    world.projectiles.push(createMissile({
+      pos: origin,
+      heading: ship.heading,
+      damage: sm.damage,
+      ttl: sm.ttl,
+      radius: sm.radius,
+      color: colors[ship.side],
+      side: ship.side,
+      ownerId: ship.id,
+      speed: sm.projectileSpeed,
+      turnRate: sm.turnRate,
+      hp: sm.hp,
+      fromKlass: ship.klass,
+      acquireRange: sm.acquireRange,
+      initialTarget: target,
+    }));
+    ship.siegeCooldowns[i] = sm.cooldown;
+    events.emit("weaponFired", { ship, kind: "missile" });
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -268,6 +268,10 @@ function bigShipDanger(ship, ships) {
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
     if (other.klass === "fighter") continue;
+    // Some capitals (cruisers, carriers) carry no primary weapon —
+    // their danger is from missiles / laser handled elsewhere, so
+    // skip them here rather than crashing on a missing weapon spec.
+    if (!other.spec.weapon) continue;
     const range = other.spec.weapon.range;
     const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
@@ -522,13 +526,19 @@ function orbitAI(ship, target, dt, world) {
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
     c.firing = true;
-  } else {
+  } else if (s.weapon) {
     const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
     c.aim = leadVec;
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     const aimNorm = V.norm(leadVec);
     const aligned = V.dot(fwd, aimNorm);
     c.firing = dist <= s.weapon.range && aligned > 0.9;
+  } else {
+    // No primary cannon (artillery cruiser). Just face the target so
+    // bow-mount weapons (heavy laser, missile pods, siege missile)
+    // align on it. Missile / laser fire is handled inside updateShip.
+    c.aim = { x: rel.x, y: rel.y };
+    c.firing = false;
   }
 
   c.firingMissile = false;

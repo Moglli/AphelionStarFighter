@@ -122,6 +122,93 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-19 — Cruiser refit: long-range artillery (cluster + siege missiles + laser)
+
+**What changed**
+
+The cruiser is no longer a "strike cruiser" with heavy forward guns.
+It is now a long-range artillery platform: no primary cannon, three
+new weapon systems, and an expanded engagement range.
+
+- **Cluster missiles** (×2 pods): each missile flies out long-range
+  and, on approach to its target (within `cluster.bloomDistance`),
+  splits into 5 smaller homing warheads that fan out by
+  `cluster.childSpread` rad and all home back onto the parent's
+  target. Children are hp 1 — PD picks some off, but spreading them
+  forces multiple intercepts.
+- **Siege missile** (×1 launcher): a single, slow, high-mass warhead.
+  240 damage, 18 s cooldown, hp 10 so PD has to commit a salvo.
+  Devastates unarmored hulls; armor's `wearRate` blunts it a lot
+  against capitals.
+- **Single-mount heavy laser**: same machinery as the battleship's
+  beam, scaled down — 90 dmg over 2 s, 1700 range, 40% arc.
+- **Engagement range bumped**: `aiOrbit: 1500` (was 880) so cruisers
+  sit far back as artillery rather than knife-fighting.
+- **firingMode**: `"none"` (was `"forward"`) — no primary gun. The
+  `weapon` spec field is gone entirely.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | Cruiser block rewritten: dropped `weapon`, dropped `firingMode: "forward"`, added `siegeMissile`, added `missilePods.cluster`, added `heavyLaser`. Comments updated. |
+| `src/races.js` | Reavers' cruiser override no longer touches `weapon` (it didn't exist anymore) — replaced with `missilePods.cooldown/damage` and `siegeMissile.cooldown/damage` overrides so they keep their aggressive-artillery profile. Hegemony's `missilePods.count: 3` and Voidsworn's overrides still merge cleanly. |
+| `src/projectile.js` | `updateMissile` now checks `m.cluster` first and calls new `spawnClusterChildren(parent, target, world)` to fan out N missiles toward the same target. Children inherit `parent.fromKlass` but not `.cluster` so they don't bloom again. |
+| `src/ship.js` | `createShip` adds `siegeCooldowns` (parallel to `podCooldowns`). `updateShip` ticks them, gates `updateSiegeMissileFire` on `missileOk`. New `updateSiegeMissileFire(ship, world)` launches a single bow missile per cooldown cycle. `updateMissilePodFire` now stamps the spec's `cluster` config onto each launched missile. Cruiser `SUBSYSTEM_LAYOUTS` entry drops the `gun` node and adds a `laser` node at the bow. |
+| `src/ai.js` | `bigShipDanger` skips ships with no `spec.weapon` (cruisers + carriers) instead of crashing. `orbitAI` adds an `else if (s.weapon)` branch + a no-weapon fallback that just faces the target so missile / laser arcs align on it. |
+
+**Design decisions / gotchas**
+
+- **Cluster missile damage budget**: `missilePods.damage` is per
+  CHILD warhead now (was per missile). 5 × 30 = 150 if all hit. PD
+  / evasion reduces that, so cluster is balanced against single
+  torpedoes by being harder to fully intercept.
+- **Children home on the parent's target.** Not on independent
+  targets — that would dilute damage. Spread is purely spatial
+  (different headings) so they cover area against a moving target
+  and force PD to engage multiple incoming tracks.
+- **Children don't carry `.cluster`.** Only missiles spawned by
+  `updateMissilePodFire` get tagged. If you ever want recursive
+  cluster (children of children), set it explicitly inside
+  `spawnClusterChildren` — but probably don't.
+- **Siege missile is its own subsystem state path** (`siegeCooldowns`,
+  `updateSiegeMissileFire`). It shares the `"missile"` subsystem
+  gate with the cluster pods — destroy any one of the cruiser's
+  missile nodes and BOTH systems are affected proportionally
+  (only when all missile nodes are dead do they both stop).
+- **`s.weapon` may be undefined.** Carriers always lacked it; the
+  cruiser now also lacks it. AI code that touches `s.weapon.x`
+  must guard. The two places that did (`bigShipDanger`,
+  `orbitAI`) are fixed; the broadside path in `updateShip` still
+  branches on `firingMode === "broadside"` so cruisers skip both
+  forward and broadside paths.
+- **Reavers' override removed `weapon`** because the cluster /
+  siege override pattern is now the canonical way to differentiate
+  races' cruiser fits. Don't reintroduce a `weapon` override unless
+  you also flip `firingMode` back.
+- **AI orbit at 1500**: feels right at current map sizes
+  (4500–11000 px wide). If you shrink maps, cruisers may sit
+  outside the play area unless this is dialled down.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # opens Vite dev server
+```
+
+In-game:
+- Arena vs **Hegemony** (their cruisers get a 3rd cluster pod).
+  Watch the cruiser line: they should hang well back and rain
+  cluster missiles that visibly fan out into 5 smaller warheads
+  as they near their target.
+- Get hit by a siege missile in a fighter: should one-shot. Get
+  hit by one in a heavily-armored battleship: armor wear should
+  soak most of it.
+- Destroy a cruiser's bow laser node: the cruiser stops firing
+  its beam but keeps launching missiles.
+
 ### 2026-05-19 — Heavy laser is now a 3-second sustained beam; AI dodges it
 
 **What changed**
