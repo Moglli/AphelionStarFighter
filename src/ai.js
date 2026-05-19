@@ -358,6 +358,44 @@ function tailDanger(ship, ships) {
 // ---------------------------------------------------------------------------
 // Fighter behaviour.
 // ---------------------------------------------------------------------------
+// Wall-avoidance steering. Heading-locked classes (fighter / bomber)
+// can't strafe away from a wall they've drifted into — the boundary
+// clamp in ship.js just zeroes the velocity component pushing into
+// the wall, so they end up sliding along it ("hugging") until the AI
+// happens to point them somewhere else.
+//
+// Returns a normalised vector pointing back toward the centre of the
+// arena, weighted by proximity to each wall, or null when the ship
+// has plenty of clearance. The caller blends this into c.aim so the
+// nose actively turns away from the wall.
+function wallAvoidance(ship, bounds) {
+  if (!bounds) return null;
+  const s = ship.spec;
+  // Engage well before the ship reaches the clamp distance so the
+  // slow turn rate has time to bring the nose around. A fighter
+  // moving 380 px/s with a ~3 rad/s turn rate clears ~125 px during
+  // a 90-degree pivot; pad to ~3x ship.radius so the avoidance
+  // overlap region is generous.
+  const pad = Math.max(180, s.radius * 6);
+  let nx = 0, ny = 0;
+  // Each wall contributes a vector pointing inward with magnitude
+  // proportional to how close we are. Closer = stronger pull.
+  const dxMin = ship.pos.x - bounds.minX;
+  const dxMax = bounds.maxX - ship.pos.x;
+  const dyMin = ship.pos.y - bounds.minY;
+  const dyMax = bounds.maxY - ship.pos.y;
+  if (dxMin < pad) nx += (pad - dxMin) / pad;       // push +x (right)
+  if (dxMax < pad) nx -= (pad - dxMax) / pad;       // push -x (left)
+  if (dyMin < pad) ny += (pad - dyMin) / pad;       // push +y (down)
+  if (dyMax < pad) ny -= (pad - dyMax) / pad;       // push -y (up)
+  const len = Math.hypot(nx, ny);
+  if (len < 0.05) return null;
+  // Return a steering vector whose magnitude reflects the worst-case
+  // proximity so flybyAI can scale the blend weight to match how
+  // pinned the ship is.
+  return { x: nx / len, y: ny / len, strength: Math.min(1, len) };
+}
+
 function flybyAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
@@ -434,7 +472,8 @@ function flybyAI(ship, target, dt, world) {
   const cohesion = packCohesion(ship, pack);
   const danger = bigShipDanger(ship, world ? world.ships : []);
   const tail = tailDanger(ship, world ? world.ships : []);
-  if (cohesion || danger || tail) {
+  const wall = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
+  if (cohesion || danger || tail || wall) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.35; ay += cohesion.y * 0.35; }
@@ -443,6 +482,14 @@ function flybyAI(ship, target, dt, world) {
     // sharp commit to actually get out of the kill zone in time.
     if (danger)   { ax += danger.x   * 1.95; ay += danger.y   * 1.95; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
+    // Wall avoidance dominates when the ship is close to a boundary.
+    // Strength is the worst-case proximity (0..1); we scale it up so
+    // a pinned fighter snaps the nose inward instead of sliding along.
+    if (wall)     {
+      const w = 2.2 * wall.strength;
+      ax += wall.x * w;
+      ay += wall.y * w;
+    }
     c.aim = { x: ax, y: ay };
     // Suppress firing when avoiding heavy fire. Bombers' missile pods
     // auto-fire elsewhere — they keep delivering payload while running.
@@ -526,12 +573,20 @@ function bomberStandoffAI(ship, target, dt, world) {
   const cohesion = packCohesion(ship, pack);
   const danger = bigShipDanger(ship, world ? world.ships : []);
   const tail = tailDanger(ship, world ? world.ships : []);
-  if (cohesion || danger || tail) {
+  const wall = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
+  if (cohesion || danger || tail || wall) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.30; ay += cohesion.y * 0.30; }
     if (danger)   { ax += danger.x   * 2.20; ay += danger.y   * 2.20; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
+    // Bombers turn slow + are precious, so push wall avoidance even
+    // harder than fighters.
+    if (wall)     {
+      const w = 2.6 * wall.strength;
+      ax += wall.x * w;
+      ay += wall.y * w;
+    }
     c.aim = { x: ax, y: ay };
     if (danger) c.firing = false;
   }
