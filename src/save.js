@@ -37,7 +37,21 @@ const DEFAULT_SAVE = Object.freeze({
   entitlements: [],
   battlePass: null,
   lastLoginEpochMs: null,
-  lastDailySeed: null,
+  daily: {
+    lastSeed: null,
+    lastScore: 0,
+    lastResult: null,
+  },
+  bestScores: {
+    arena: 0,
+    waves: 0,
+  },
+  menuSelection: {
+    mode: "arena",
+    klass: "fighter",
+    race: "terran",
+    mapSize: "medium",
+  },
   settings: {
     musicVolume: 0.6,
     sfxVolume: 0.8,
@@ -84,6 +98,9 @@ function mergeWithDefaults(loaded) {
     ...loaded,
     stats: { ...base.stats, ...(loaded.stats || {}) },
     equippedCosmetics: { ...base.equippedCosmetics, ...(loaded.equippedCosmetics || {}) },
+    daily: { ...base.daily, ...(loaded.daily || {}) },
+    bestScores: { ...base.bestScores, ...(loaded.bestScores || {}) },
+    menuSelection: { ...base.menuSelection, ...(loaded.menuSelection || {}) },
     settings: { ...base.settings, ...(loaded.settings || {}) },
   };
 }

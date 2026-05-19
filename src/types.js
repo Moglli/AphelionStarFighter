@@ -34,6 +34,32 @@
  */
 
 /**
+ * @typedef {"arena"|"waves"|"daily"} GameMode
+ * @typedef {"small"|"medium"|"large"} MapSizeKey
+ */
+
+/**
+ * @typedef {Object} DailyState
+ * @property {string|null} lastSeed       ISO date of last attempt (e.g. "2026-05-19")
+ * @property {number}      lastScore
+ * @property {"win"|"loss"|null} lastResult
+ */
+
+/**
+ * @typedef {Object} BestScores
+ * @property {number} arena
+ * @property {number} waves
+ */
+
+/**
+ * @typedef {Object} MenuSelection
+ * @property {GameMode}    mode
+ * @property {ShipId}      klass
+ * @property {RaceId}      race
+ * @property {MapSizeKey}  mapSize
+ */
+
+/**
  * @typedef {Object} SaveData
  * @property {number} schemaVersion
  * @property {number} xp
@@ -48,7 +74,9 @@
  * @property {EntitlementId[]} entitlements  mirrored from RevenueCat on launch
  * @property {BattlePassState|null} battlePass
  * @property {number|null} lastLoginEpochMs
- * @property {string|null} lastDailySeed
+ * @property {DailyState} daily
+ * @property {BestScores} bestScores
+ * @property {MenuSelection} menuSelection  last picked start-menu state
  * @property {Object} settings
  * @property {number} settings.musicVolume
  * @property {number} settings.sfxVolume
@@ -56,15 +84,24 @@
  */
 
 /**
+ * @typedef {"cannon"|"broadside"|"missile"|"laser"} WeaponSoundKind
+ * @typedef {"shield"|"armor"|"hull"} HitLayer
+ */
+
+/**
  * @typedef {Object} EventPayloads
- * @property {{ ship: object, killer: object|null }} enemyKilled
- * @property {{ ship: object, killer: object|null }} playerKilled
+ * @property {{ ship: object, kind: WeaponSoundKind }} weaponFired
+ * @property {{ ship: object, killer: object|null, byPlayer: boolean }} shipDestroyed
+ * @property {{ ship: object }} playerDestroyed
+ * @property {{ ship: object, layer: HitLayer, amount: number, byPlayer: boolean }} hit
  * @property {{ amount: number, source: object, target: object }} damageDealt
- * @property {{ mode: string, durationSeconds: number, score: number }} matchWon
- * @property {{ mode: string, durationSeconds: number }} matchLost
+ * @property {{ mode: GameMode, winner: "blue"|"red", durationSeconds: number, score: number }} matchEnded
+ * @property {{ wave: number, spawnCount: number }} waveStarted
+ * @property {{ wave: number }} waveCleared
  * @property {{ missionId: string }} missionComplete
  * @property {{ amount: number, source: string }} xpAwarded
  * @property {{ tier: number, premium: boolean }} battlePassTierReached
+ * @property {{ source: "menu"|"hud" }} uiClick
  */
 
 export {};

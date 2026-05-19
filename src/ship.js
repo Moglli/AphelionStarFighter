@@ -2,6 +2,7 @@ import { SIDES } from "./classes.js";
 import { resolveSpec } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
+import { events } from "./events.js";
 
 let nextId = 1;
 
@@ -317,6 +318,7 @@ function launchReplacement(carrier, world, klass) {
 // Forward fire (fighters, frigates, cruisers).
 // ---------------------------------------------------------------------------
 function fireForward(ship, world) {
+  events.emit("weaponFired", { ship, kind: "cannon" });
   const w = ship.spec.weapon;
   const muzzles = w.muzzles || 1;
   const muzzleSpread = w.muzzleSpread || 0;
@@ -389,6 +391,7 @@ function updateBroadsideFire(ship, world) {
 }
 
 function emitBroadside(ship, world, sideVec, fwd) {
+  events.emit("weaponFired", { ship, kind: "broadside" });
   const w = ship.spec.weapon;
   const muzzles = w.muzzles || 1;
   const muzzleSpread = w.muzzleSpread || 0;
@@ -574,6 +577,7 @@ function updateMissilePodFire(ship, world) {
       initialTarget: target,
     }));
     ship.podCooldowns[i] = pods.cooldown;
+    events.emit("weaponFired", { ship, kind: "missile" });
   }
 }
 
@@ -588,6 +592,7 @@ function lerpAngle(a, b, t) {
 // Fighter missile launcher (one-shot, manual or AI).
 // ---------------------------------------------------------------------------
 function fireFighterMissile(ship, world) {
+  events.emit("weaponFired", { ship, kind: "missile" });
   const m = ship.spec.missile;
   // Find a target: nearest enemy within acquireRange. AI doesn't bother
   // firing without one; player can fire anyway (acquireRange wide enough).
@@ -657,6 +662,7 @@ function updateHeavyLaser(ship, world) {
   const l = ship.spec.heavyLaser;
   const target = pickLaserTarget(ship, world);
   if (!target) return;
+  events.emit("weaponFired", { ship, kind: "laser" });
 
   const fwd = V.fromAngle(ship.heading);
   const origin = {

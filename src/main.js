@@ -9,12 +9,14 @@ import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
 import { saveStore } from "./save.js";
 import { events } from "./events.js";
+import { audio } from "./audio.js";
 
-// Touch the foundation modules so they're initialized on startup. Save data
-// is now loaded into memory before the first frame; later phases will read
-// from saveStore.get() and emit gameplay events via the bus.
+// Touch the foundation modules so they're initialized on startup. Save
+// data is loaded into memory before the first frame; audio subscribes to
+// events at construction.
 void saveStore;
 void events;
+void audio;
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -57,7 +59,7 @@ function frame(now) {
 
   if (game.state === "menu") {
     const choice = input.startMenu.consumeStart();
-    if (choice) startGame(game, choice.mapW, choice.mapH, choice.race);
+    if (choice) startGame(game, choice);
   } else {
     // Player input → controller.
     const ctrl = input.controller();
