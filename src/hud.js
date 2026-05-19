@@ -5,6 +5,22 @@ import { RACES } from "./races.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
 
+// Friendly labels for module names that appear in the target panel.
+const MODULE_LABELS = {
+  laser:            "Heavy Laser",
+  "missile-fwd":    "Missile Bay Fwd",
+  "missile-aft":    "Missile Bay Aft",
+  "broadside-port": "Broadside Port",
+  "broadside-stbd": "Broadside Stbd",
+  "pd-bow":         "PD Bow",
+  "pd-stern":       "PD Stern",
+  hangar:           "Hangar",
+  "pd-port":        "PD Port",
+  "pd-stbd":        "PD Stbd",
+  "torpedo-bay":    "Torpedo Bay",
+  "pd-cluster":     "PD Cluster",
+};
+
 function countBySide(ships) {
   const out = {
     blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0, station: 0 },
@@ -50,6 +66,9 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
     ctx.fillText("Tap to restart", viewW / 2, viewH / 2 + 36);
     ctx.textAlign = "left";
   }
+
+  const focusTarget = pickFocusTarget(game);
+  if (focusTarget) drawTargetPanel(ctx, focusTarget, viewW, viewH);
 
   drawMinimap(ctx, game, viewW, viewH);
 }
@@ -249,4 +268,113 @@ function endPoint(beam) {
     return { x: beam.origin.x + (dx / d) * r, y: beam.origin.y + (dy / d) * r };
   }
   return { x: beam.origin.x + beam.range, y: beam.origin.y };
+}
+
+// ---------------------------------------------------------------------------
+// Locked-target panel: picks the most relevant enemy capital to surface
+// and renders its hull / armor / per-module status. When the player is
+// alive the focus is the nearest enemy capital (with modules); when
+// spectating, the spectated ship if it carries any modules.
+// ---------------------------------------------------------------------------
+function pickFocusTarget(game) {
+  if (game.spectating) {
+    const t = getSpectateTarget(game);
+    if (t && !t.dead && t.modules) return t;
+  }
+  const player = game.ships.find((s) => s.isPlayer && !s.dead);
+  if (!player) return null;
+  let best = null, bestD2 = Infinity;
+  for (const s of game.ships) {
+    if (s.dead || s.side === player.side) continue;
+    if (!s.modules || s.modules.length === 0) continue;
+    const dx = s.pos.x - player.pos.x;
+    const dy = s.pos.y - player.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { best = s; bestD2 = d2; }
+  }
+  return best;
+}
+
+function drawTargetPanel(ctx, ship, viewW, viewH) {
+  const rowH = 16;
+  const headerH = 64;
+  const padX = 12, padY = 10;
+  const moduleRows = ship.modules.length;
+  const panelW = 280;
+  const panelH = headerH + moduleRows * rowH + padY * 2;
+  const x = 16;
+  const y = viewH - panelH - 16;
+
+  ctx.fillStyle = "rgba(8,12,20,0.78)";
+  ctx.fillRect(x, y, panelW, panelH);
+  ctx.strokeStyle = SIDES[ship.side].primary;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, panelW, panelH);
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = SIDES[ship.side].primary;
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.fillText("TARGET", x + padX, y + padY + 11);
+
+  // Header: race + class name.
+  const raceName = (RACES[ship.race] && RACES[ship.race].name) || "Unknown";
+  const klassName = (CLASSES[ship.klass] && CLASSES[ship.klass].name) || ship.klass;
+  ctx.fillStyle = "#cdf";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.fillText(`${raceName} ${klassName}`, x + padX, y + padY + 29);
+
+  // Hull bar.
+  drawStatBar(ctx, x + padX, y + padY + 38, panelW - padX * 2, 6,
+    ship.hp / ship.hpMax, "#400", "#4f6");
+  // Armor bar (if any).
+  if (ship.armorMax > 0) {
+    drawStatBar(ctx, x + padX, y + padY + 47, panelW - padX * 2, 5,
+      ship.armor / ship.armorMax, "#321", "#c93");
+  }
+
+  // Per-module rows.
+  ctx.font = "12px system-ui, sans-serif";
+  const rowsY = y + padY + headerH - 6;
+  for (let i = 0; i < ship.modules.length; i++) {
+    const m = ship.modules[i];
+    const ry = rowsY + i * rowH;
+    const label = MODULE_LABELS[m.name] || m.name;
+
+    if (m.disabled) {
+      ctx.fillStyle = "#a55";
+      ctx.fillText(label, x + padX, ry + 11);
+      ctx.textAlign = "right";
+      ctx.fillText("DESTROYED", x + panelW - padX, ry + 11);
+      ctx.textAlign = "left";
+    } else {
+      const frac = m.hp / m.hpMax;
+      ctx.fillStyle = "#cef";
+      ctx.fillText(label, x + padX, ry + 11);
+      // Bar on the right half of the row.
+      const barW = 110;
+      const barX = x + panelW - padX - barW;
+      const barY = ry + 3;
+      drawStatBar(ctx, barX, barY, barW, 7, frac, "#222", moduleBarColor(frac));
+      // Flash highlight.
+      if (m.flash > 0) {
+        ctx.strokeStyle = `rgba(255,255,255,${(m.flash * 0.8).toFixed(2)})`;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX - 1, barY - 1, barW + 2, 9);
+      }
+    }
+  }
+}
+
+function moduleBarColor(frac) {
+  if (frac > 0.66) return "#4f8";
+  if (frac > 0.33) return "#fc6";
+  return "#f64";
+}
+
+function drawStatBar(ctx, x, y, w, h, frac, bgColor, fgColor) {
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(x, y, w, h);
+  const clamped = Math.max(0, Math.min(1, frac));
+  ctx.fillStyle = fgColor;
+  ctx.fillRect(x, y, w * clamped, h);
 }
