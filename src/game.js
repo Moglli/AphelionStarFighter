@@ -1,5 +1,5 @@
 import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
-import { createShip, updateShip } from "./ship.js";
+import { createShip, updateShip, findHitSubsystem, resetSubsystems } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
@@ -296,6 +296,9 @@ function promotePlayer(game, klass) {
       candidate.weaponReloading = false;
       candidate.weaponReloadTimer = 0;
     }
+    // Subsystems were probably battered during the previous ownership;
+    // restore them so the player isn't punished for a respawn handoff.
+    resetSubsystems(candidate);
     ship = candidate;
   }
   // Apply equipped cosmetics. Renderer reads ship.cosmetics on draw.
@@ -593,7 +596,35 @@ function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
     }
   }
 
-  // Step 3: Hull.
+  // Step 3: Subsystem (if the hit point lands on a node). The node soaks
+  // incoming damage up to its remaining HP; overflow falls through to
+  // hull. Destroying a node fires `subsystemDestroyed` so audio /
+  // gameplay listeners can react, and dusts a small debris shower so
+  // the destruction reads visually.
+  if (hitPos && ship.subsystems && ship.subsystems.length > 0) {
+    const node = findHitSubsystem(ship, hitPos);
+    if (node) {
+      node.flash = 1;
+      if (remaining <= node.hp) {
+        node.hp -= remaining;
+        events.emit("hit", { ship, layer: "subsystem", amount: remaining, byPlayer });
+        spawnHitDebris(world, ship, hitPos, "subsystem", remaining);
+        return;
+      }
+      // Subsystem destroyed; overflow continues to hull.
+      const absorbed = node.hp;
+      node.hp = 0;
+      node.destroyed = true;
+      events.emit("subsystemDestroyed", { ship, kind: node.kind, byPlayer });
+      events.emit("hit", { ship, layer: "subsystem", amount: absorbed, byPlayer });
+      // Bigger fragment shower for a destroyed component.
+      spawnHitDebris(world, ship, hitPos, "subsystem", Math.max(20, absorbed));
+      remaining -= absorbed;
+      if (remaining <= 0) return;
+    }
+  }
+
+  // Step 4: Hull.
   ship.hp -= remaining;
   events.emit("hit", { ship, layer: "hull", amount: remaining, byPlayer });
   spawnHitDebris(world, ship, hitPos, "hull", remaining);
@@ -603,7 +634,7 @@ function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
 // for shield-layer hits (the shield ate it; nothing came off the hull).
 function spawnHitDebris(world, ship, hitPos, layer, amount) {
   if (!world || !hitPos) return;
-  if (layer !== "armor" && layer !== "hull") return;
+  if (layer !== "armor" && layer !== "hull" && layer !== "subsystem") return;
   // Scale fragments with the size of the bite the round took.
   // amount is raw damage post-shield. A fighter cannon round (~6 dmg)
   // shakes off one chip; a battleship broadside (~75 dmg) sheds a small

@@ -122,6 +122,85 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-19 — Destructible subsystem nodes (gun / engine / missile / laser)
+
+**What changed**
+
+Ships now carry destructible `subsystems`: an array of nodes glued to
+the hull at fixed local positions. A projectile hit that lands within
+a node's hit-radius routes damage into the node first; overflow falls
+through to hull. Destroying a node disables the corresponding
+behavior:
+
+- **gun** destroyed → forward fire / broadside cannons stop emitting.
+- **engine** destroyed → capitals dead-stop, fighters/bombers coast
+  on residual momentum with light drag (sitting ducks, but still
+  pointable so they can fight back).
+- **missile** destroyed → missile pods + fighter missile rack go cold.
+- **laser** destroyed → battleship heavy laser refuses to fire.
+- PD turrets are intentionally NOT on the subsystem list (they're a
+  swarm; killing the whole ring would feel binary). Each PD turret
+  still has its own cooldown as before.
+
+Each node has its own glyph + color (gun yellow rectangle, missile
+magenta capsule, laser white cross, engine cyan nozzle) and a
+brightness that softens with damage. Destroyed nodes draw as a sooty
+crater with radiating cracks and a flickering ember.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/ship.js` | `SUBSYSTEM_LAYOUTS` table + `createSubsystems`, `resetSubsystems`, `hasWorkingSubsystem`, `findHitSubsystem`. `updateShip` reads gates once per tick and branches movement + firing on them. `drawEnginePlume` skips when engines are destroyed. New `drawSubsystems` + `drawHealthyNode` + `drawDestroyedNode` render the nodes after legacy decorations so they sit on top. Legacy heavy-laser muzzle dot is suppressed when a laser subsystem exists at the same spot. |
+| `src/game.js` | `applyDamage` gains a Step 3: subsystem absorption between armor and hull. Overflow continues to hull. Emits `subsystemDestroyed` on kill; the existing `hit` event now also fires with `layer: "subsystem"`. `promotePlayer` calls `resetSubsystems` so a recycled candidate ship comes out whole. `spawnHitDebris` accepts the new layer. |
+| `src/types.js` | `HitLayer` gains `"subsystem"`. New `SubsystemKind` typedef. `EventPayloads.subsystemDestroyed` documented. |
+
+**Design decisions / gotchas**
+
+- **Routing is opt-in via aim.** The player has to land hits on the
+  node's hit-radius to disable it; spread fire still wears down hull
+  as before. AI ships aim at ship center, so AI hits only graze
+  subsystems occasionally — a deliberate edge for the player.
+- **Overflow continues to hull.** A killing blow that lands on a
+  node spends the node's remaining HP first, then bleeds through.
+  This avoids the "spongy ship" trap where focusing fire on a node
+  becomes a TTK-extending mistake.
+- **`hpFrac` is a fraction of `ship.hpMax`**, so race overrides that
+  change ship HP also scale subsystem HP without separate balancing.
+- **`hasWorkingSubsystem(ship, kind)` returns true if no nodes of
+  that kind exist.** A carrier has only an `engine` node — so
+  asking about its `gun` returns true and PD/replenishment continue
+  to work. Do not check `kind` directly; always go through the helper.
+- **Engine kill behavior** differs by ship class. Aircraft (fighter,
+  bomber) coast with `vel *= 0.995` so they slow gradually and
+  remain pointable. Capitals snap-stop is replaced with `vel *= 0.99`
+  so the wreck keeps drifting from its last burn. Aircraft model
+  branch is still chosen first; the engineOk gate is inside it.
+- **Hit point comes from `applyDamage(... hitPos)`**. The two callers
+  (cannon-on-ship in update, beam-on-ship in beam-application) pass
+  `p.pos` and the target's current position respectively. Don't add
+  a third caller without supplying `hitPos`; the subsystem step bails
+  out without it.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # opens Vite dev server
+```
+
+In-game (arena mode, pick Battleship as your ship):
+- Find an enemy battleship/carrier and aim at its rear-most node:
+  the engine glyph should flicker on impact. After enough hits the
+  node goes black with an ember and the ship stops moving.
+- Aim at the front laser-cross: after destruction it stops firing
+  its heavy beam.
+- Aim at the side capsule (missile pod): after destruction the ship
+  stops launching missiles.
+- Strafe a fighter with cannon: small chance of clipping its tiny
+  engine node, after which it drifts and decelerates.
+
 ### 2026-05-19 — Ship visuals, opponent picker, persistent wreckage
 
 **What changed**
