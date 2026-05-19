@@ -705,8 +705,17 @@ export class InputManager {
     canvas.addEventListener("pointermove", (e) => this.onMove(e), opts);
     canvas.addEventListener("pointerup", (e) => this.onUp(e), opts);
     canvas.addEventListener("pointercancel", (e) => this.onUp(e), opts);
-    canvas.addEventListener("pointerenter", () => { this.mouseInside = true; });
-    canvas.addEventListener("pointerleave", () => { this.mouseInside = false; });
+    // mouseInside only tracks REAL mouse cursors. Touch events shouldn't
+    // pin the mouse-aim layer to the latest fingertip position — that
+    // would override the left stick in controller()'s aim priority and
+    // route fighter movement through whichever spot a touch last
+    // landed.
+    canvas.addEventListener("pointerenter", (e) => {
+      if (e.pointerType !== "touch") this.mouseInside = true;
+    });
+    canvas.addEventListener("pointerleave", (e) => {
+      if (e.pointerType !== "touch") this.mouseInside = false;
+    });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.style.touchAction = "none";
 
@@ -738,7 +747,12 @@ export class InputManager {
   onDown(e) {
     e.preventDefault();
     const { x, y } = this.pos(e);
-    this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+    // Mouse-tracking layer only listens to real mouse pointers — touch
+    // events route exclusively through the virtual sticks and on-screen
+    // action buttons.
+    if (e.pointerType !== "touch") {
+      this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+    }
 
     // Pre-match menu: route the click to size-selection and swallow
     // everything else. A "relayout" return from click() means the user
@@ -790,7 +804,9 @@ export class InputManager {
   }
   onMove(e) {
     const { x, y } = this.pos(e);
-    this.mouse.x = x; this.mouse.y = y;
+    if (e.pointerType !== "touch") {
+      this.mouse.x = x; this.mouse.y = y;
+    }
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
   }
@@ -867,9 +883,18 @@ export class InputManager {
 
     const thrust = kLen > 0 ? kbThrust : (touchHasThrust ? touchThrust : { x: 0, y: 0 });
 
+    // Aim resolution. Fighters fly nose-first at maxSpeed so `aim`
+    // effectively IS movement direction for aircraft — the left stick
+    // therefore needs to be a valid aim source so single-thumb play
+    // (left-thumb-only) actually moves the ship. Order of precedence:
+    //   1. Right stick (precision aim with second thumb)
+    //   2. Mouse (desktop)
+    //   3. Left stick (single-thumb touch flight)
+    //   4. Keyboard WASD (desktop fallback)
     let aim;
     if (touchAimLen > 0) aim = touchAim;
     else if (mouseAim) aim = mouseAim;
+    else if (touchHasThrust) aim = touchThrust;
     else if (kLen > 0) aim = kbThrust;
     else aim = null;
 
