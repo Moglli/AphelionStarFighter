@@ -12,6 +12,11 @@ import { todaySeed } from "./modes/daily.js";
 import { Hangar } from "./hangar.js";
 import { rally } from "./rally.js";
 import { minimapHit, minimapToWorld } from "./hud.js";
+import { UPGRADES, UPGRADE_KEYS, MAX_MISSION, nextCost } from "./campaign.js";
+import {
+  MAX_ENERGY, COST_PER_GAME, PACKAGES,
+  canSpend, timeUntilNext, formatDuration,
+} from "./energy.js";
 
 const DEADZONE = 0.15;
 
@@ -88,8 +93,11 @@ export class MissileButton {
     this.rect = { x: 0, y: 0, w: 96, h: 58 };
   }
   layout(viewW, viewH) {
+    // Sit above the minimap (which occupies the bottom-right 180x135
+    // area with a 16px margin) so the button never overlaps the map.
     this.rect.x = viewW - this.rect.w - 18;
     this.rect.y = viewH - this.rect.h - 210;
+    this.rect.y = viewH - this.rect.h - 135 - 16 - 12;
   }
   hit(x, y) {
     const r = this.rect;
@@ -269,6 +277,14 @@ const FACTION_OPTIONS = [
   { key: 2, label: "2 — Duel" },
   { key: 3, label: "3 — Triad" },
   { key: 4, label: "4 — Free-for-all" },
+// Pre-match menu: lets the player pick a map size, game mode, and Allied
+// race before the world spawns. Layout is three rows of chips plus an
+// explicit START button. Each chip toggles its row's selection; START
+// emits the chosen { mapW, mapH, race, mode } bundle.
+const MODE_OPTIONS = [
+  { key: "open",     label: "Open Battle",     tagline: "Wipe the enemy fleet" },
+  { key: "defend",   label: "Defend Station",  tagline: "Destroy enemy station" },
+  { key: "campaign", label: "Campaign",        tagline: "100-mission tour" },
 ];
 
 export class StartMenu {
@@ -276,6 +292,7 @@ export class StartMenu {
     this.modeRects = [];
     this.classRects = [];
     this.sizeRects = [];
+    this.modeRects = [];
     this.raceRects = [];
     this.fleetRects = [];
     this.factionRects = [];
@@ -335,6 +352,39 @@ export class StartMenu {
       x: classStartX + i * (classBtnW + gapX),
       y: classY, w: classBtnW, h: chipH,
     }));
+    this.upgradeRects = [];
+    this.startRect = null;
+    this.selectedSize = "medium";
+    this.selectedMode = "open";
+    this.selectedRace = "terran";
+    this.justStarted = null;
+    // Campaign state ref + click callback wired by main.js.
+    this.campaign = null;
+    this.onPurchase = null;
+    // Energy state ref + IAP callback wired by main.js.
+    this.energy = null;
+    this.onEnergyPurchase = null;
+    this.showRefill = false;        // package overlay visibility
+    this.refillRects = [];          // per-package click rects
+    this.refillCloseRect = null;
+    this.energyBarRect = null;      // clickable "refill" area in the header
+  }
+
+  setCampaign(state, onPurchase) {
+    this.campaign = state;
+    this.onPurchase = onPurchase;
+  }
+
+  setEnergy(state, onPurchase) {
+    this.energy = state;
+    this.onEnergyPurchase = onPurchase;
+  }
+
+  layout(viewW, viewH) {
+    const chipH = 60;
+    const gapX = 14;
+    const rowGap = 44;
+    const titleY = viewH / 2 - 220;
 
     // Size row.
     const sizeOpts = MAP_SIZES;
@@ -342,11 +392,24 @@ export class StartMenu {
     const sizeBtnW = Math.min(160, (viewW - 80) / sn - gapX);
     const sizeRowW = sn * sizeBtnW + (sn - 1) * gapX;
     const sizeY = classY + chipH + rowGap + 8;
+    const sizeY = titleY + 70;
     const sizeStartX = (viewW - sizeRowW) / 2;
     this.sizeRects = sizeOpts.map((o, i) => ({
       key: o.key, label: o.label, mapW: o.mapW, mapH: o.mapH,
       x: sizeStartX + i * (sizeBtnW + gapX),
       y: sizeY, w: sizeBtnW, h: chipH,
+    }));
+
+    // Mode row.
+    const mn = MODE_OPTIONS.length;
+    const modeBtnW = Math.min(220, (viewW - 60) / mn - gapX);
+    const modeRowW = mn * modeBtnW + (mn - 1) * gapX;
+    const modeY = sizeY + chipH + rowGap;
+    const modeStartX = (viewW - modeRowW) / 2;
+    this.modeRects = MODE_OPTIONS.map((o, i) => ({
+      key: o.key, label: o.label, tagline: o.tagline,
+      x: modeStartX + i * (modeBtnW + gapX),
+      y: modeY, w: modeBtnW, h: chipH,
     }));
 
     // Race row.
@@ -355,6 +418,7 @@ export class StartMenu {
     const raceBtnW = Math.min(130, (viewW - 60) / rn - gapX);
     const raceRowW = rn * raceBtnW + (rn - 1) * gapX;
     const raceY = sizeY + chipH + rowGap + 8;
+    const raceY = modeY + chipH + rowGap;
     const raceStartX = (viewW - raceRowW) / 2;
     this.raceRects = raceKeys.map((k, i) => ({
       key: k, label: RACES[k].name,
@@ -520,8 +584,120 @@ export class StartMenu {
         return;
       }
       events.emit("uiClick", { source: "menu" });
-      this._emitStart();
+    // Campaign upgrade grid (only used when Campaign mode is selected).
+    // Two rows of three tiles below the race row.
+    let nextY = raceY + chipH + rowGap;
+    this.upgradeRects = [];
+    if (this.selectedMode === "campaign") {
+      const tileW = Math.min(220, (viewW - 60) / 3 - gapX);
+      const tileH = 56;
+      const cols = 3;
+      const totalRowW = cols * tileW + (cols - 1) * gapX;
+      const startX = (viewW - totalRowW) / 2;
+      nextY += 28; // header room ("Mission X/100  Credits: ...")
+      for (let i = 0; i < UPGRADE_KEYS.length; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        this.upgradeRects.push({
+          key: UPGRADE_KEYS[i],
+          x: startX + col * (tileW + gapX),
+          y: nextY + row * (tileH + 10),
+          w: tileW, h: tileH,
+        });
+      }
+      const rows = Math.ceil(UPGRADE_KEYS.length / cols);
+      nextY += rows * tileH + (rows - 1) * 10 + rowGap;
     }
+
+    // START button.
+    const startW = 260, startH = 56;
+    this.startRect = {
+      x: (viewW - startW) / 2,
+      y: nextY,
+      w: startW, h: startH,
+    };
+
+    // Energy header — clickable strip at the very top of the menu.
+    // Sits above the title in screen space.
+    const ebW = 360, ebH = 38;
+    this.energyBarRect = {
+      x: (viewW - ebW) / 2,
+      y: titleY - 60,
+      w: ebW, h: ebH,
+    };
+
+    // Refill overlay (package picker). Always laid out so the click
+    // hit-test works the moment the overlay opens — `showRefill`
+    // gates draw + click.
+    const pkgW = 220, pkgH = 110, pkgGap = 14;
+    const totalW = PACKAGES.length * pkgW + (PACKAGES.length - 1) * pkgGap;
+    const pkgY = viewH / 2 - pkgH / 2;
+    const pkgStartX = (viewW - totalW) / 2;
+    this.refillRects = PACKAGES.map((p, i) => ({
+      id: p.id,
+      x: pkgStartX + i * (pkgW + pkgGap),
+      y: pkgY,
+      w: pkgW, h: pkgH,
+    }));
+    this.refillCloseRect = {
+      x: viewW / 2 - 50,
+      y: pkgY + pkgH + 24,
+      w: 100, h: 36,
+    };
+  }
+
+  click(x, y) {
+    // Refill overlay grabs all clicks while open.
+    if (this.showRefill) {
+      for (const r of this.refillRects) {
+        if (this._hit(r, x, y)) {
+          if (this.onEnergyPurchase) this.onEnergyPurchase(r.id);
+          this.showRefill = false;
+          return true;
+        }
+      }
+      // Close button OR clicking outside the overlay dismisses it.
+      this.showRefill = false;
+      return true;
+    }
+    // Energy bar opens the refill overlay.
+    if (this.energyBarRect && this._hit(this.energyBarRect, x, y)) {
+      this.showRefill = true;
+      return true;
+    }
+    for (const r of this.sizeRects) {
+      if (this._hit(r, x, y)) { this.selectedSize = r.key; return true; }
+    }
+    for (const r of this.modeRects) {
+      if (this._hit(r, x, y)) {
+        const changed = this.selectedMode !== r.key;
+        this.selectedMode = r.key;
+        // Returning the "remeasure" flag lets the caller relayout so
+        // the campaign panel appears / disappears immediately.
+        if (changed) return "relayout";
+        return true;
+      }
+    }
+    for (const r of this.raceRects) {
+      if (this._hit(r, x, y)) { this.selectedRace = r.key; return true; }
+    }
+    for (const r of this.upgradeRects) {
+      if (this._hit(r, x, y)) {
+        if (this.onPurchase) this.onPurchase(r.key);
+        return true;
+      }
+    }
+    if (this.startRect && this._hit(this.startRect, x, y)) {
+      // Out-of-energy clicks pop the refill overlay instead of starting
+      // a match. Standard F2P funnel: friction → purchase prompt.
+      if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
+        this.showRefill = true;
+        return true;
+      }
+      this._emitStart();
+      return true;
+    }
+    return false;
   }
 
   _persist() {
@@ -554,6 +730,10 @@ export class StartMenu {
       mapH: size.mapH,
       fleetMul: fleet.mul,
       factions: this.selectedFactions,
+    this.justStarted = {
+      mapW: size.mapW, mapH: size.mapH,
+      race: this.selectedRace,
+      mode: this.selectedMode,
     };
   }
 
@@ -567,6 +747,11 @@ export class StartMenu {
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(0, 0, viewW, viewH);
+
+    // Energy header — clickable strip showing current tank and the
+    // refill countdown when below cap. Doubles as the entry point to
+    // the purchase overlay.
+    if (this.energyBarRect) this._drawEnergyHeader(ctx);
 
     ctx.fillStyle = "#cef";
     ctx.textAlign = "center";
@@ -588,8 +773,9 @@ export class StartMenu {
     for (const r of this.classRects) {
       this._drawChip(ctx, r, r.key === this.selectedKlass, r.label, CLASSES[r.key].role);
     }
+    ctx.font = "bold 36px system-ui, sans-serif";
+    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 230);
 
-    // Size row.
     ctx.fillStyle = "#9bd";
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText("MAP SIZE", viewW / 2, this.sizeRects[0].y - 12);
@@ -598,7 +784,14 @@ export class StartMenu {
         r.label, `${r.mapW} × ${r.mapH}`);
     }
 
-    // Race row.
+    ctx.fillStyle = "#9bd";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("GAME MODE", viewW / 2, this.modeRects[0].y - 14);
+    for (const r of this.modeRects) {
+      this._drawChip(ctx, r, r.key === this.selectedMode,
+        r.label, r.tagline);
+    }
+
     ctx.fillStyle = "#9bd";
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText("ALLIED RACE", viewW / 2, this.raceRects[0].y - 12);
@@ -681,6 +874,55 @@ export class StartMenu {
 
     // Profile strip — pinned top-right above the chips.
     this._drawProfileStrip(ctx, viewW);
+    // Campaign panel: progress header + upgrade tiles.
+    if (this.selectedMode === "campaign" && this.upgradeRects.length > 0) {
+      const camp = this.campaign;
+      const firstRect = this.upgradeRects[0];
+      const headerY = firstRect.y - 16;
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 16px system-ui, sans-serif";
+      const m = camp ? camp.mission : 1;
+      const money = camp ? camp.money : 0;
+      const status = camp && camp.completed
+        ? `CAMPAIGN COMPLETE — Free Skirmish`
+        : `MISSION ${m} / ${MAX_MISSION}`;
+      ctx.fillText(`${status}    Credits: ${money.toLocaleString()}`, viewW / 2, headerY);
+      for (const r of this.upgradeRects) this._drawUpgrade(ctx, r);
+    }
+
+    const s = this.startRect;
+    const outOfEnergy = this.energy && !canSpend(this.energy, COST_PER_GAME);
+    if (outOfEnergy) {
+      ctx.fillStyle = "rgba(60,40,40,0.85)";
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.strokeStyle = "#c66";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = "#fcc";
+      ctx.font = "bold 18px system-ui, sans-serif";
+      ctx.fillText("OUT OF ENERGY", s.x + s.w / 2, s.y + s.h / 2 - 2);
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillStyle = "#fa8";
+      ctx.fillText("Tap to refill", s.x + s.w / 2, s.y + s.h / 2 + 16);
+    } else {
+      ctx.fillStyle = "rgba(60,140,90,0.85)";
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.strokeStyle = "#9f8";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 22px system-ui, sans-serif";
+      let label = "START";
+      if (this.selectedMode === "campaign" && this.campaign) {
+        label = this.campaign.completed
+          ? "FREE SKIRMISH"
+          : `START MISSION ${this.campaign.mission}`;
+      }
+      ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
+    }
+
+    // Refill overlay renders last so it sits on top of everything.
+    if (this.showRefill) this._drawRefillOverlay(ctx, viewW, viewH);
 
     ctx.textAlign = "left";
     ctx.restore();
@@ -719,6 +961,133 @@ export class StartMenu {
     } else {
       ctx.fillStyle = selected ? "rgba(40,90,140,0.95)" : "rgba(20,40,60,0.85)";
     }
+  _drawEnergyHeader(ctx) {
+    const r = this.energyBarRect;
+    const e = this.energy;
+    const cur = e ? e.current : MAX_ENERGY;
+    const full = cur >= MAX_ENERGY;
+    const empty = cur <= 0;
+
+    ctx.fillStyle = empty ? "rgba(70,30,30,0.85)" : "rgba(20,40,55,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = empty ? "#f86" : (full ? "#9fc" : "#7df");
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+    // Left: ⚡ + count
+    ctx.textAlign = "left";
+    ctx.fillStyle = empty ? "#f86" : "#fe8";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("ENERGY", r.x + 12, r.y + 24);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText(`${cur}/${MAX_ENERGY}`, r.x + 90, r.y + 24);
+
+    // Middle: regen countdown.
+    if (!full && e) {
+      ctx.fillStyle = "#9bd";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const next = timeUntilNext(e);
+      ctx.fillText(`Next +1 in ${formatDuration(next)}`, r.x + r.w / 2, r.y + 23);
+    }
+
+    // Right: refill button hint.
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fe8";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("+ REFILL", r.x + r.w - 12, r.y + 24);
+    ctx.textAlign = "left";
+  }
+
+  _drawRefillOverlay(ctx, viewW, viewH) {
+    // Scrim.
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.fillText("REFUEL ENERGY", viewW / 2, this.refillRects[0].y - 30);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("Get back in the cockpit instantly",
+      viewW / 2, this.refillRects[0].y - 12);
+
+    for (let i = 0; i < this.refillRects.length; i++) {
+      const rr = this.refillRects[i];
+      const pkg = PACKAGES[i];
+      ctx.fillStyle = "rgba(30,60,100,0.95)";
+      ctx.fillRect(rr.x, rr.y, rr.w, rr.h);
+      ctx.strokeStyle = "#9cf";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rr.x, rr.y, rr.w, rr.h);
+
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 18px system-ui, sans-serif";
+      ctx.fillText(pkg.label, rr.x + rr.w / 2, rr.y + 28);
+      ctx.fillStyle = "#fe8";
+      ctx.font = "bold 32px system-ui, sans-serif";
+      ctx.fillText(`+${pkg.energy}`, rr.x + rr.w / 2, rr.y + 68);
+      ctx.fillStyle = "#9f8";
+      ctx.font = "bold 16px system-ui, sans-serif";
+      ctx.fillText(pkg.price, rr.x + rr.w / 2, rr.y + 95);
+    }
+
+    // Close button.
+    const cr = this.refillCloseRect;
+    ctx.fillStyle = "rgba(60,40,40,0.85)";
+    ctx.fillRect(cr.x, cr.y, cr.w, cr.h);
+    ctx.strokeStyle = "#c66";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cr.x, cr.y, cr.w, cr.h);
+    ctx.fillStyle = "#fcc";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText("CLOSE", cr.x + cr.w / 2, cr.y + cr.h / 2 + 5);
+    ctx.textAlign = "left";
+  }
+
+  _drawUpgrade(ctx, r) {
+    const def = UPGRADES[r.key];
+    if (!def || !this.campaign) return;
+    const lvl = this.campaign.upgrades[r.key] || 0;
+    const maxed = lvl >= def.maxLevel;
+    const cost = maxed ? null : nextCost(this.campaign, r.key);
+    const afford = !maxed && this.campaign.money >= cost;
+
+    ctx.fillStyle = maxed ? "rgba(40,80,60,0.85)"
+                  : afford ? "rgba(30,60,100,0.92)"
+                           : "rgba(40,40,55,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = maxed ? "#7d9" : afford ? "#9cf" : "#566";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(def.name, r.x + 8, r.y + 16);
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.fillText(def.desc, r.x + 8, r.y + 30);
+
+    ctx.textAlign = "right";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`Lv ${lvl}/${def.maxLevel}`, r.x + r.w - 8, r.y + 16);
+    ctx.font = "12px system-ui, sans-serif";
+    if (maxed) {
+      ctx.fillStyle = "#9f8";
+      ctx.fillText("MAX", r.x + r.w - 8, r.y + 44);
+    } else {
+      ctx.fillStyle = afford ? "#fe8" : "#866";
+      ctx.fillText(`$${cost.toLocaleString()}`, r.x + r.w - 8, r.y + 44);
+    }
+    ctx.textAlign = "left";
+  }
+
+  _drawChip(ctx, r, selected, label, sublabel) {
+    ctx.fillStyle = selected ? "rgba(40,90,140,0.95)" : "rgba(20,40,60,0.85)";
     ctx.fillRect(r.x, r.y, r.w, r.h);
     if (dim) {
       ctx.strokeStyle = selected ? "#abc" : "#456";
@@ -997,6 +1366,13 @@ export class CustomGameScreen {
     ctx.font = "bold 18px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(glyph, r.x + r.w / 2, r.y + r.h / 2 + 7);
+    ctx.font = "bold 17px system-ui, sans-serif";
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 2);
+    if (sublabel) {
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillStyle = "#9bd";
+      ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 15);
+    }
   }
 }
 
@@ -1054,7 +1430,7 @@ export class InputManager {
 
     const TRAPPED = new Set([
       "Space", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-      "KeyM", "KeyV", "KeyN", "KeyB",
+      "KeyM", "KeyV", "KeyN", "KeyB", "KeyP",
     ]);
     window.addEventListener("keydown", (e) => {
       if (e.repeat) return;
@@ -1108,6 +1484,15 @@ export class InputManager {
           this.customScreen.layout(this.canvas.clientWidth, this.canvas.clientHeight);
           this.menuScreen = "custom";
         }
+    // Pre-match menu: route the click to size-selection and swallow
+    // everything else. A "relayout" return from click() means the user
+    // toggled the mode chip — re-layout so the campaign panel appears
+    // or disappears immediately under the cursor.
+    if (this.menuActive) {
+      const result = this.startMenu.click(x, y);
+      if (result === "relayout") {
+        const rect = this.canvas.getBoundingClientRect();
+        this.startMenu.layout(rect.width, rect.height);
       }
       return;
     }
@@ -1217,6 +1602,10 @@ export class InputManager {
   consumeSpectatePrev()    {
     return this._consumeKey("KeyB", "_bLatched") || this.spectatePanel.consumePrev();
   }
+  consumeSpectateToggle()  { return this._consumeKey("KeyV", "_vLatched"); }
+  consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }
+  consumeMuteToggle()      { return this._consumeKey("KeyP", "_pLatched"); }
+  consumeSpectatePrev()    { return this._consumeKey("KeyB", "_bLatched"); }
 
   controller() {
     const touchThrust = this.left.value;

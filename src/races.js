@@ -4,7 +4,37 @@
 // resolveSpec(raceKey, klass) returns a merged spec — the base class
 // spec with race-specific overrides applied (deep-merged for nested
 // objects like weapon, shield, armor, missilePods, heavyLaser, etc).
+//
+// Defend-mode stations are defined under RACES[race].station as
+// { spread, nodes[] } — one entry per destruction target. Each node has
+// an offset and a per-node `mods` block layered onto base station spec
+// at spawn time via createShip's specOverride parameter.
 import { CLASSES } from "./classes.js";
+
+// ---------------------------------------------------------------------------
+// Weapon-system templates shared across station nodes. Each race tweaks
+// these slightly so a Hegemony PD bank feels different from a Voidsworn one.
+// ---------------------------------------------------------------------------
+const PD_BASE = {
+  damage: 7, cooldown: 0.22, projectileSpeed: 1000, range: 480,
+  projectileRadius: 3, projectileColors: { blue: "#cef", red: "#fda" },
+};
+const MISSILES_BASE = {
+  damage: 65, cooldown: 8, projectileSpeed: 300, range: 2200,
+  ttl: 7.5, turnRate: 1.9, hp: 3, radius: 7, acquireRange: 2400,
+  colors: { blue: "#fff", red: "#fc8" },
+};
+const LASER_BASE = {
+  damage: 200, cooldown: 5.0, range: 2400,
+  // Wide arc — stations can't snap-turn so the heavy beam covers a full
+  // forward hemisphere.
+  arc: Math.PI * 0.95,
+  beamDuration: 0.45,
+  beamColors: { blue: "#9ef", red: "#fc7" },
+};
+const pd = (count, extra = {}) => ({ ...PD_BASE, ...extra, count });
+const pods = (count, extra = {}) => ({ ...MISSILES_BASE, ...extra, count });
+const laser = (extra = {}) => ({ ...LASER_BASE, ...extra });
 
 export const RACES = {
   terran: {
@@ -14,6 +44,23 @@ export const RACES = {
     accent: "#7df",
     fighter: {}, bomber: {}, frigate: {}, cruiser: {}, battleship: {}, carrier: {},
     roster: { fighter: 24, bomber: 6, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 },
+    station: {
+      spread: 260,
+      nodes: [
+        { name: "Core",         offset: { x:  0, y:  0 },
+          mods: { hp: 1200, radius: 100,
+                  shield: { max: 600 }, armor: { max: 600 },
+                  pdCannons: pd(4), missilePods: pods(2), heavyLaser: laser() } },
+        { name: "PD Spire NE",  offset: { x:  1, y:  1 },
+          mods: { hp: 500, radius: 55, pdCannons: pd(5) } },
+        { name: "PD Spire SE",  offset: { x:  1, y: -1 },
+          mods: { hp: 500, radius: 55, pdCannons: pd(5) } },
+        { name: "Bastion NW",   offset: { x: -1, y:  1 },
+          mods: { hp: 500, radius: 55, pdCannons: pd(2), missilePods: pods(1) } },
+        { name: "Bastion SW",   offset: { x: -1, y: -1 },
+          mods: { hp: 500, radius: 55, pdCannons: pd(2), missilePods: pods(1) } },
+      ],
+    },
   },
   reavers: {
     key: "reavers",
@@ -50,6 +97,29 @@ export const RACES = {
       escortSize: 8,
     },
     roster: { fighter: 36, bomber: 9, frigate: 6, cruiser: 1, battleship: 0, carrier: 1 },
+    // Reavers: more, smaller nodes — a bristling spike-cluster instead of
+    // a fortress. Lots of missile pods, no heavy laser.
+    station: {
+      spread: 230,
+      nodes: [
+        { name: "Hive Core",  offset: { x:  0, y:  0 },
+          mods: { hp: 700, radius: 80,
+                  shield: { max: 250 }, armor: { max: 320 },
+                  pdCannons: pd(3, { damage: 5 }), missilePods: pods(2, { damage: 50, cooldown: 7 }) } },
+        { name: "Spike N",    offset: { x:  0, y:  1.1 },
+          mods: { hp: 320, radius: 42, missilePods: pods(2, { damage: 50, cooldown: 7 }), pdCannons: pd(2, { damage: 5 }) } },
+        { name: "Spike NE",   offset: { x:  1, y:  0.6 },
+          mods: { hp: 320, radius: 42, missilePods: pods(2, { damage: 50, cooldown: 7 }), pdCannons: pd(2, { damage: 5 }) } },
+        { name: "Spike SE",   offset: { x:  1, y: -0.6 },
+          mods: { hp: 320, radius: 42, pdCannons: pd(4, { damage: 5 }) } },
+        { name: "Spike S",    offset: { x:  0, y: -1.1 },
+          mods: { hp: 320, radius: 42, missilePods: pods(2, { damage: 50, cooldown: 7 }), pdCannons: pd(2, { damage: 5 }) } },
+        { name: "Spike SW",   offset: { x: -1, y: -0.6 },
+          mods: { hp: 320, radius: 42, missilePods: pods(2, { damage: 50, cooldown: 7 }), pdCannons: pd(2, { damage: 5 }) } },
+        { name: "Spike NW",   offset: { x: -1, y:  0.6 },
+          mods: { hp: 320, radius: 42, pdCannons: pd(4, { damage: 5 }) } },
+      ],
+    },
   },
   hegemony: {
     key: "hegemony",
@@ -85,6 +155,32 @@ export const RACES = {
       shield: { max: 700 }, armor: { max: 800 },
     },
     roster: { fighter: 18, bomber: 4, frigate: 5, cruiser: 3, battleship: 2, carrier: 1 },
+    // Hegemony: 5 hardened nodes. Big armor pools, biggest core.
+    station: {
+      spread: 280,
+      nodes: [
+        { name: "Citadel Core",   offset: { x:  0, y:  0 },
+          mods: { hp: 2500, radius: 120,
+                  shield: { max: 1000 }, armor: { max: 1500, wearRate: 0.4 },
+                  pdCannons: pd(6, { damage: 9 }), missilePods: pods(2, { damage: 80 }), heavyLaser: laser({ damage: 260, cooldown: 4.5 }) } },
+        { name: "Bastion N",      offset: { x:  0, y:  1 },
+          mods: { hp: 1100, radius: 65,
+                  shield: { max: 400 }, armor: { max: 600, wearRate: 0.42 },
+                  pdCannons: pd(5, { damage: 9 }), missilePods: pods(1, { damage: 80 }) } },
+        { name: "Bastion S",      offset: { x:  0, y: -1 },
+          mods: { hp: 1100, radius: 65,
+                  shield: { max: 400 }, armor: { max: 600, wearRate: 0.42 },
+                  pdCannons: pd(5, { damage: 9 }), missilePods: pods(1, { damage: 80 }) } },
+        { name: "Reinforced E",   offset: { x:  1, y:  0 },
+          mods: { hp: 1000, radius: 60,
+                  shield: { max: 400 }, armor: { max: 500, wearRate: 0.42 },
+                  pdCannons: pd(6, { damage: 9 }) } },
+        { name: "Reinforced W",   offset: { x: -1, y:  0 },
+          mods: { hp: 1000, radius: 60,
+                  shield: { max: 400 }, armor: { max: 500, wearRate: 0.42 },
+                  pdCannons: pd(6, { damage: 9 }) } },
+      ],
+    },
   },
   voidsworn: {
     key: "voidsworn",
@@ -125,6 +221,33 @@ export const RACES = {
       replenish: { fighter: 22, bomber: 40 },
     },
     roster: { fighter: 18, bomber: 5, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 },
+    // Voidsworn: huge shields with fast regen, premium beam weapons. Fewer
+    // nodes but each one is shield-tanky.
+    station: {
+      spread: 250,
+      nodes: [
+        { name: "Aegis Core",     offset: { x:  0, y:  0 },
+          mods: { hp: 1100, radius: 95,
+                  shield: { max: 1500, regen: 35, regenDelay: 4 }, armor: { max: 500 },
+                  pdCannons: pd(4), missilePods: pods(2, { damage: 80 }), heavyLaser: laser({ damage: 240, cooldown: 4.0 }) } },
+        { name: "Crystal NE",     offset: { x:  1, y:  1 },
+          mods: { hp: 600, radius: 55,
+                  shield: { max: 700, regen: 24, regenDelay: 3 }, armor: { max: 240 },
+                  pdCannons: pd(3), heavyLaser: laser({ damage: 180, cooldown: 5.0 }) } },
+        { name: "Crystal NW",     offset: { x: -1, y:  1 },
+          mods: { hp: 600, radius: 55,
+                  shield: { max: 700, regen: 24, regenDelay: 3 }, armor: { max: 240 },
+                  pdCannons: pd(4) } },
+        { name: "Crystal SE",     offset: { x:  1, y: -1 },
+          mods: { hp: 600, radius: 55,
+                  shield: { max: 700, regen: 24, regenDelay: 3 }, armor: { max: 240 },
+                  pdCannons: pd(3), heavyLaser: laser({ damage: 180, cooldown: 5.0 }) } },
+        { name: "Crystal SW",     offset: { x: -1, y: -1 },
+          mods: { hp: 600, radius: 55,
+                  shield: { max: 700, regen: 24, regenDelay: 3 }, armor: { max: 240 },
+                  pdCannons: pd(4) } },
+      ],
+    },
   },
 };
 
@@ -133,8 +256,16 @@ export const RACE_KEYS = Object.keys(RACES);
 export function resolveSpec(raceKey, klass) {
   const base = CLASSES[klass];
   const race = RACES[raceKey] || RACES.terran;
+  // `race.station` is a spawn descriptor ({ spread, nodes }), not a spec
+  // override. Per-node mods are applied via createShip's specOverride.
+  if (klass === "station") return base;
   const mods = race[klass] || {};
   return deepMerge(base, mods);
+}
+
+export function getStationDef(raceKey) {
+  const race = RACES[raceKey] || RACES.terran;
+  return race.station || RACES.terran.station;
 }
 
 export function randomRaceKey() {
@@ -143,7 +274,7 @@ export function randomRaceKey() {
 
 // Deep-merge `mods` onto `base`. Plain objects recurse; scalars and
 // arrays replace wholesale. Returns a new object — base is untouched.
-function deepMerge(base, mods) {
+export function deepMerge(base, mods) {
   if (mods === null || typeof mods !== "object" || Array.isArray(mods)) return mods;
   if (base === null || typeof base !== "object" || Array.isArray(base)) {
     return cloneDeep(mods);

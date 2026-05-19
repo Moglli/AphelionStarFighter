@@ -18,6 +18,15 @@ import {
   pushWreck, pushDebris,
 } from "./wreckage.js";
 import { rally } from "./rally.js";
+import { RACES, RACE_KEYS, randomRaceKey, getStationDef } from "./races.js";
+import {
+  worldToLocal, findHitModuleLocal, findSplashModulesLocal, moduleWorldPos,
+} from "./modules.js";
+import {
+  updateParticle, spawnHitSparks, spawnDestructionBurst, spawnContinuousSmoke,
+  spawnArmorFlakes, spawnHullBreakoff,
+} from "./particles.js";
+import { SIDES } from "./classes.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -53,6 +62,9 @@ export function createGame() {
     // then settles as a charred husk. Capped to MAX_WRECKAGE so long runs
     // don't accumulate unbounded draw cost.
     wreckage: [],
+    // Particle VFX (sparks, smoke, fire, debris, shockwaves) live in
+    // world space and tick alongside projectiles.
+    particles: [],
     arena: ARENA,
     starfield: createStarfield(),
     playerController: {
@@ -90,6 +102,9 @@ export function createGame() {
     // Custom Game screen. Shape: { blue: {fighter: N, ...}, red: {...},
     // hostileRace: "terran" }. Ignored by non-custom modes.
     customRoster: null,
+    // Game mode: "open" (fleet vs fleet, current default) or "defend"
+    // (each side has a multi-node station; first station down loses).
+    mode: "open",
   };
   return game;
 }
@@ -112,6 +127,16 @@ export function startGame(game, opts = {}) {
   const mapW = opts.mapW != null ? opts.mapW : 7000;
   const mapH = opts.mapH != null ? opts.mapH : 5000;
 
+// Called from main when the player picks map size + allied race + mode
+// on the start menu. Hostile race is rolled here so the enemy
+// composition is a surprise.
+//
+// Campaign mode passes a `campaign` config: { enemies, allies, playerOverride }.
+// `enemies` and `allies` are roster maps that override the race-defined
+// counts so mission difficulty can scale independently of race. The
+// player ship is then promoted with `playerOverride` (a deepMerge-style
+// patch describing purchased upgrades).
+export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null) {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -120,6 +145,7 @@ export function startGame(game, opts = {}) {
   game.wrecks = [];
   game.debris = [];
   game.wreckage = [];
+  game.particles = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -222,6 +248,29 @@ function spawnRoster(game, override, opts) {
       ARENA.height / 2 - zone.y,
       ARENA.width / 2 - zone.x,
     );
+  game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
+  game.hostileRace = randomRaceKey();
+  game.mode = mode === "defend" ? "defend" : (mode === "campaign" ? "campaign" : "open");
+  game.state = "playing";
+  game.campaign = campaign || null;
+  game.playerSpecOverride = (campaign && campaign.playerOverride) || null;
+  game.kills = 0;
+  spawnRoster(game);
+}
+
+function spawnRoster(game) {
+  for (const side of ["blue", "red"]) {
+    const race = side === "blue" ? game.alliedRace : game.hostileRace;
+    // Campaign mode overrides race-defined rosters with mission-defined
+    // counts so the difficulty curve drives composition, not race choice.
+    let roster;
+    if (game.campaign) {
+      roster = side === "blue" ? game.campaign.allies : game.campaign.enemies;
+    } else {
+      roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
+    }
+    const zone = ARENA.spawn[side];
+    const facing = side === "blue" ? 0 : Math.PI;
     for (const [klass, count] of Object.entries(roster)) {
       if (count <= 0) continue;
       if (klass === "fighter") {
@@ -242,6 +291,39 @@ function spawnRoster(game, override, opts) {
         }
       }
     }
+    // Defend mode: one multi-node station per side, dropped at the
+    // centre of that side's spawn zone (so the fleet sits between
+    // the station and the contested middle of the map).
+    if (game.mode === "defend") {
+      spawnStation(game, side, race, zone, facing);
+    }
+  }
+}
+
+// Each station = N separate ships of klass "station" arranged at offsets
+// from the spawn-zone centre. Each carries its own per-node weapon kit
+// applied as a createShip specOverride.
+function spawnStation(game, side, race, zone, facing) {
+  const def = getStationDef(race);
+  if (!def) return;
+  const center = { x: zone.x, y: zone.y };
+  const spread = def.spread || 240;
+  for (const node of def.nodes) {
+    const pos = {
+      x: center.x + (node.offset.x || 0) * spread,
+      y: center.y + (node.offset.y || 0) * spread,
+    };
+    const ship = createShip({
+      klass: "station",
+      race,
+      side,
+      pos,
+      heading: facing,
+      controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      specOverride: node.mods,
+    });
+    ship.stationNodeName = node.name;
+    game.ships.push(ship);
   }
 }
 
@@ -346,6 +428,13 @@ function promotePlayer(game, klass) {
   // player slots into the spawned roster instead of duplicating.
   const candidate = game.ships.find(
     (s) => s.side === "blue" && s.klass === want && !s.isPlayer && !s.dead,
+function promotePlayer(game) {
+  // Campaign mode always builds a FRESH player ship so purchased
+  // upgrades (specOverride) apply cleanly. Reusing an existing
+  // ally fighter would keep the unupgraded race baseline.
+  const forceFresh = !!game.playerSpecOverride;
+  const candidate = forceFresh ? null : game.ships.find(
+    (s) => s.side === "blue" && s.klass === "fighter" && !s.isPlayer && !s.dead,
   );
   let ship;
   if (!candidate) {
@@ -356,6 +445,7 @@ function promotePlayer(game, klass) {
       pos: randomSpawnPos(ARENA.spawn.blue),
       heading: 0,
       controller: game.playerController,
+      specOverride: game.playerSpecOverride,
     });
     ship.isPlayer = true;
     game.ships.push(ship);
@@ -593,6 +683,10 @@ export function update(game, dt) {
           }
           applyDisconnectionDamage(game, ship, attacker);
         }
+      const r = ship.spec.radius + p.radius;
+      if (dx * dx + dy * dy <= r * r) {
+        const targets = computeModuleTargets(ship, p);
+        applyDamage(ship, p, targets, game.particles);
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) {
@@ -625,6 +719,12 @@ export function update(game, dt) {
   }
   if (game.debris.length > 0) {
     for (const d of game.debris) updateDebris(d, dt, game.arena.bounds);
+  // Particle VFX: continuous smoke / fire from damaged + disabled modules,
+  // then tick existing particles.
+  emitContinuousModuleVFX(game, dt);
+  for (const p of game.particles) updateParticle(p, dt);
+  if (game.particles.length > 0) {
+    game.particles = game.particles.filter((p) => !p.dead);
   }
 
   // Player death + respawn (only when not spectating).
@@ -686,6 +786,19 @@ export function update(game, dt) {
         score: game.score,
       });
       persistMatchResult(game);
+    if (game.mode === "defend") {
+      // First side to lose every station node loses the match.
+      const blueStation = game.ships.some(
+        (s) => s.side === "blue" && s.klass === "station" && !s.dead);
+      const redStation  = game.ships.some(
+        (s) => s.side === "red"  && s.klass === "station" && !s.dead);
+      if (!redStation)  { game.matchOver = true; game.winner = "blue"; }
+      else if (!blueStation) { game.matchOver = true; game.winner = "red"; }
+    } else {
+      const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
+      const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
+      if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
+      else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
     }
   }
 }
@@ -812,6 +925,7 @@ export function restart(game) {
   game.wrecks = [];
   game.debris = [];
   game.wreckage = [];
+  game.particles = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -837,6 +951,52 @@ export function restart(game) {
 //   "slowly deteriorates" rather than burning through in a single salvo.
 // ---------------------------------------------------------------------------
 function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
+// Continuous module-state VFX. Each frame, for every damaged-but-alive
+// module emit a thin smoke puff at a low rate, and for every disabled
+// module emit thick dark smoke + occasional fire at a higher rate. The
+// per-frame coin flip uses dt so the average rate is framerate-stable.
+function emitContinuousModuleVFX(game, dt) {
+  // Smoke rates per second.
+  const DISABLED_RATE = 12;
+  const DAMAGED_RATE = 3.5;
+  for (const s of game.ships) {
+    if (s.dead || !s.modules) continue;
+    for (const m of s.modules) {
+      let rate = 0;
+      if (m.disabled) rate = DISABLED_RATE;
+      else if (m.hp / m.hpMax < 0.5) rate = DAMAGED_RATE;
+      else continue;
+      // Poisson-style: probability = rate * dt of one emission this frame.
+      if (Math.random() < rate * dt) {
+        const wpos = moduleWorldPos(s, m.name);
+        if (wpos) spawnContinuousSmoke(game.particles, wpos.x, wpos.y, m.disabled);
+      }
+    }
+  }
+}
+
+// Decide which modules (if any) absorb a hit. Cannon/laser hits land on
+// at most one module — the closest disc that contains the impact. Missile
+// hits splash: the directly-hit module takes full damage and every other
+// module within blast radius takes 50%. Laser beam damage skips module
+// routing entirely (lasers carve through to central hull).
+function computeModuleTargets(ship, p) {
+  if (!ship.modules || ship.modules.length === 0) return null;
+  if (p.kind === "laser") return null;
+  const local = worldToLocal(ship, p.pos.x, p.pos.y);
+  if (p.kind === "missile") {
+    const blastR = ship.spec.radius * 0.30;
+    const splash = findSplashModulesLocal(ship, local.x, local.y, blastR);
+    if (splash.length === 0) return null;
+    const direct = findHitModuleLocal(ship, local.x, local.y);
+    return splash.map((m) => ({ module: m, weight: m === direct ? 1.0 : 0.5 }));
+  }
+  // Cannon / PD round.
+  const hit = findHitModuleLocal(ship, local.x, local.y);
+  return hit ? [{ module: hit, weight: 1.0 }] : null;
+}
+
+function applyDamage(ship, p, moduleTargets = null, particles = null) {
   let remaining = p.damage;
   const byPlayer = !!(attacker && attacker.isPlayer);
 
@@ -872,11 +1032,14 @@ function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
       ship.armor -= armorWear;
       events.emit("hit", { ship, layer: "armor", amount: remaining, byPlayer });
       spawnHitDebris(world, ship, hitPos, "armor", remaining);
+      recordArmorImpact(ship, p, remaining, particles);
       return; // armor ate the whole hit
     }
     // Armor strips; convert remaining capacity back into incoming damage.
     const dmgAbsorbed = ship.armor / wearRate;
     ship.armor = 0;
+    // Big shed moment — pass the full absorbed amount so extra flakes spawn.
+    recordArmorImpact(ship, p, dmgAbsorbed * 1.2, particles);
     remaining = remaining - dmgAbsorbed;
     if (remaining <= 0) {
       events.emit("hit", { ship, layer: "armor", amount: dmgAbsorbed, byPlayer });
@@ -914,6 +1077,39 @@ function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
   }
 
   // Step 4: Hull.
+  // Step 3: Damage now hits the hull (either via modules or directly).
+  // Record a persistent hull scar + spawn breakoff fragments at the
+  // impact point regardless of whether modules absorb part of the hit.
+  recordHullImpact(ship, p, remaining, particles);
+
+  if (moduleTargets && moduleTargets.length > 0) {
+    for (const { module, weight } of moduleTargets) {
+      if (module.disabled) continue;
+      const dmg = remaining * weight;
+      module.hp -= dmg;
+      module.flash = Math.min(1, module.flash + 0.6);
+      // VFX: hit sparks at the module's live world position.
+      if (particles) {
+        const wpos = moduleWorldPos(ship, module.name);
+        if (wpos) spawnHitSparks(particles, wpos.x, wpos.y, 4);
+      }
+      if (module.hp <= 0) {
+        module.disabled = true;
+        module.hp = 0;
+        // Killing a subsystem ruptures part of the central hull too —
+        // strip enough modules and the ship dies of cumulative breaches.
+        ship.hp -= module.hullPenalty;
+        if (particles) {
+          const wpos = moduleWorldPos(ship, module.name);
+          if (wpos) {
+            const moduleRadiusWorld = module.radius * ship.spec.radius;
+            spawnDestructionBurst(particles, wpos.x, wpos.y, moduleRadiusWorld);
+          }
+        }
+      }
+    }
+    return;
+  }
   ship.hp -= remaining;
   events.emit("hit", { ship, layer: "hull", amount: remaining, byPlayer });
   spawnHitDebris(world, ship, hitPos, "hull", remaining);
@@ -933,6 +1129,74 @@ function spawnHitDebris(world, ship, hitPos, layer, amount) {
   if (amount > 40) count = 3;
   const frags = createDebrisBurst(ship.pos, hitPos, ship.vel, ship.klass, ship.side, count);
   pushDebris(world.debris, frags);
+}
+
+// Record an armor impact: a chipped/scratched flake scar at the impact
+// point on the ship-local frame, plus light-gray fragments tumbling
+// outward in world space.
+function recordArmorImpact(ship, p, dmg, particles) {
+  if (!p || !p.pos) return;
+  const local = worldToLocal(ship, p.pos.x, p.pos.y);
+  addImpactScar(ship, "armor-flake", local.x, local.y, dmg);
+  if (!particles) return;
+  const ang = Math.atan2(p.pos.y - ship.pos.y, p.pos.x - ship.pos.x);
+  spawnArmorFlakes(particles, p.pos.x, p.pos.y, dmg, ang);
+}
+
+// Record a hull impact: a dark gouge with hot rim that grows under
+// sustained nearby fire, plus tinted hull fragments breaking off.
+function recordHullImpact(ship, p, dmg, particles) {
+  if (!p || !p.pos) return;
+  const local = worldToLocal(ship, p.pos.x, p.pos.y);
+  addImpactScar(ship, "hull-hole", local.x, local.y, dmg);
+  if (!particles) return;
+  const ang = Math.atan2(p.pos.y - ship.pos.y, p.pos.x - ship.pos.x);
+  const tint = SIDES[ship.side].primary;
+  spawnHullBreakoff(particles, p.pos.x, p.pos.y, dmg, tint, ang);
+}
+
+// Merge nearby same-kind scars into one growing mark; otherwise append
+// a fresh entry. Bounded by MAX_SCARS so the array stays cheap to draw
+// even after a long firefight. Scar size is capped relative to ship
+// radius so a hole on a fighter doesn't eat the whole silhouette.
+function addImpactScar(ship, kind, localX, localY, dmg) {
+  const R = ship.spec && ship.spec.radius;
+  if (!R) return;
+  // Clamp to the silhouette so scars don't paint outside the hull.
+  const rMax = R * 0.92;
+  const d2 = localX * localX + localY * localY;
+  if (d2 > rMax * rMax) {
+    const d = Math.sqrt(d2);
+    localX = localX / d * rMax;
+    localY = localY / d * rMax;
+  }
+  const sizeCap = kind === "hull-hole" ? R * 0.17 : R * 0.13;
+  const grow = Math.min(dmg * 0.055, sizeCap * 0.7);
+  const mergeDist2 = (R * 0.18) * (R * 0.18);
+  for (const s of ship.scars) {
+    if (s.kind !== kind) continue;
+    const dx = s.lx - localX;
+    const dy = s.ly - localY;
+    if (dx * dx + dy * dy < mergeDist2) {
+      s.size = Math.min(sizeCap, s.size + grow);
+      return;
+    }
+  }
+  const MAX_SCARS = 26;
+  if (ship.scars.length >= MAX_SCARS) {
+    let idx = 0; let smallest = Infinity;
+    for (let i = 0; i < ship.scars.length; i++) {
+      if (ship.scars[i].size < smallest) { smallest = ship.scars[i].size; idx = i; }
+    }
+    ship.scars.splice(idx, 1);
+  }
+  ship.scars.push({
+    kind,
+    lx: localX,
+    ly: localY,
+    size: Math.max(1.2, grow),
+    seed: Math.random(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -970,6 +1234,13 @@ function applyAndAgeBeams(game, dt) {
             t.dead = true;
             handleShipDestroyed(game, t, attacker);
           }
+          applyDamage(
+            t,
+            { damage: beam.damage, kind: "laser", fromKlass: "battleship", pos: { x: t.pos.x, y: t.pos.y } },
+            null,
+            game.particles,
+          );
+          if (t.hp <= 0) t.dead = true;
           beam.hit = { x: t.pos.x, y: t.pos.y };
         } else {
     // Re-anchor origin to the live owner so the beam tracks the firing
@@ -1072,7 +1343,8 @@ function resolveHeavyOverlap(ships, bounds) {
   for (const s of ships) {
     if (s.dead) continue;
     if (s.klass === "frigate" || s.klass === "cruiser"
-        || s.klass === "battleship" || s.klass === "carrier") {
+        || s.klass === "battleship" || s.klass === "carrier"
+        || s.klass === "station") {
       heavies.push(s);
     }
   }
@@ -1089,11 +1361,23 @@ function resolveHeavyOverlap(ships, bounds) {
           const d = d2 > 1e-6 ? Math.sqrt(d2) : 0;
           const nx = d > 1e-6 ? dx / d : 1;
           const ny = d > 1e-6 ? dy / d : 0;
-          const overlap = (minDist - d) * 0.5;
-          a.pos.x -= nx * overlap;
-          a.pos.y -= ny * overlap;
-          b.pos.x += nx * overlap;
-          b.pos.y += ny * overlap;
+          const overlap = minDist - d;
+          // Stations are immobile — only the other hull gets shoved.
+          const aImmovable = a.klass === "station";
+          const bImmovable = b.klass === "station";
+          if (aImmovable && bImmovable) continue;
+          if (aImmovable) {
+            b.pos.x += nx * overlap;
+            b.pos.y += ny * overlap;
+          } else if (bImmovable) {
+            a.pos.x -= nx * overlap;
+            a.pos.y -= ny * overlap;
+          } else {
+            a.pos.x -= nx * overlap * 0.5;
+            a.pos.y -= ny * overlap * 0.5;
+            b.pos.x += nx * overlap * 0.5;
+            b.pos.y += ny * overlap * 0.5;
+          }
           pushed = true;
         }
       }
@@ -1101,6 +1385,7 @@ function resolveHeavyOverlap(ships, bounds) {
     if (!pushed) break;
   }
   for (const s of heavies) {
+    if (s.klass === "station") continue; // never shove stations into bounds
     const r = s.spec.radius;
     if (s.pos.x < bounds.minX + r) s.pos.x = bounds.minX + r;
     if (s.pos.x > bounds.maxX - r) s.pos.x = bounds.maxX - r;

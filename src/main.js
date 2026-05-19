@@ -20,14 +20,46 @@ void saveStore;
 void events;
 void audio;
 void progression;
+import { prerenderSprites } from "./sprites.js";
+import { drawParticle } from "./particles.js";
+import { GameAudio } from "./audio.js";
+import {
+  loadCampaign, saveCampaign, getMissionConfig,
+  buildPlayerUpgrade, purchaseUpgrade, recordVictory,
+} from "./campaign.js";
+import { resolveSpec } from "./races.js";
+import {
+  loadEnergy, regenTick, spendEnergy, purchase as purchaseEnergy,
+} from "./energy.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const input = new InputManager(canvas);
+// Bake every (race, klass, side) ship sprite into an offscreen canvas
+// before the first frame so drawShip can blit instead of re-drawing
+// polygons each tick.
+prerenderSprites();
 const game = createGame();
 // Rally taps on the minimap need to read game.ships at click time.
 input._gameRef = game;
 window.game = game; // for console smoke-testing
+const audio = new GameAudio();
+let musicWasPlaying = false; // tracks state for start/stop edge detection
+
+// Campaign state is loaded from localStorage on boot and kept in memory
+// so the menu can render mission progress + money. Mutations happen in
+// purchase / victory callbacks below and re-save themselves.
+const campaign = loadCampaign();
+input.startMenu.setCampaign(campaign, (key) => purchaseUpgrade(campaign, key));
+
+// Energy / stamina state — gates how many matches can be played per
+// real-time window. PASSIVE regen ticks each frame via regenTick().
+const energy = loadEnergy();
+input.startMenu.setEnergy(energy, (packId) => purchaseEnergy(energy, packId));
+// Edge-detect the match-over transition so we credit a campaign
+// victory exactly once even though matchOver stays true until the
+// player taps to leave.
+let prevMatchOver = false;
 
 let viewW = 0, viewH = 0;
 function resize() {
@@ -65,6 +97,9 @@ function frame(now) {
   // which sub-buttons (toggle vs prev/next) are hit-active.
   input.spectating = game.spectating;
 
+  // Passive energy regen every frame. Idempotent; cheap.
+  regenTick(energy);
+
   if (game.state === "menu") {
     // Start menu launches with the chip selections; the custom screen
     // launches with an explicit roster bundled into the same opts shape.
@@ -90,6 +125,37 @@ function frame(now) {
     } else {
       const choice = input.startMenu.consumeStart();
       if (choice) startGame(game, choice);
+    const choice = input.startMenu.consumeStart();
+    // Energy gate: deduct exactly here. The menu already filtered
+    // clicks via canSpend, so a failure path is defensive only —
+    // re-open the refill overlay and skip the start.
+    if (choice && !spendEnergy(energy)) {
+      input.startMenu.showRefill = true;
+    } else if (choice) {
+      if (choice.mode === "campaign" && !campaign.completed) {
+        // Campaign mission: roster + map are mission-defined, player
+        // ship gets the upgrade specOverride.
+        const mc = getMissionConfig(campaign.mission, choice.race);
+        const baseSpec = resolveSpec(choice.race, "fighter");
+        const playerOverride = buildPlayerUpgrade(campaign, baseSpec);
+        startGame(game, mc.mapW, mc.mapH, choice.race, "campaign", {
+          enemies: mc.enemies,
+          allies: mc.allies,
+          playerOverride,
+        });
+        // Stash a reference + the staged reward so the match-over HUD
+        // can display it without re-deriving.
+        game.campaign.totalMoney = campaign.money;
+        game.campaign.lastReward = mc.reward;
+        game.campaign.missionNumber = mc.mission;
+      } else {
+        // Open / Defend, or Campaign-completed (falls through to a free
+        // skirmish at the player's chosen map size).
+        const mode = choice.mode === "campaign" ? "open" : choice.mode;
+        startGame(game, choice.mapW, choice.mapH, choice.race, mode);
+      }
+      // The "Play" click is the user-gesture that unlocks Web Audio.
+      audio.start();
     }
   } else {
     // Player input → controller.
@@ -111,8 +177,32 @@ function frame(now) {
       if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
     }
 
-    if (game.matchOver && input.consumeEnterPress()) restart(game);
+    // Edge-trigger: match just ended this frame. Bank a campaign
+    // victory exactly once.
+    if (game.matchOver && !prevMatchOver) {
+      if (game.mode === "campaign" && game.winner === "blue" && game.campaign) {
+        recordVictory(campaign);
+        game.campaign.totalMoney = campaign.money;
+      }
+    }
+    prevMatchOver = game.matchOver;
+
+    if (game.matchOver && input.consumeEnterPress()) {
+      restart(game);
+      audio.stop();
+    }
   }
+
+  // P toggles music mute (works regardless of state).
+  if (input.consumeMuteToggle()) audio.toggleMute();
+
+  // Music plays only during active gameplay. Pause it on match-over
+  // and on the start menu; resume when a new game kicks off (the
+  // startGame branch above calls audio.start()).
+  const shouldPlay = game.state === "playing" && !game.matchOver;
+  if (shouldPlay && !musicWasPlaying) audio.start();
+  else if (!shouldPlay && musicWasPlaying) audio.stop();
+  musicWasPlaying = shouldPlay;
 
   while (accum >= FIXED_DT) {
     update(game, FIXED_DT);
@@ -151,12 +241,21 @@ function draw() {
   // Wreckage sits under live ships so a fly-by passes over the debris.
   if (game.wreckage && game.wreckage.length > 0) {
     for (const w of game.wreckage) drawWreck(ctx, w);
+  // Smoke particles render behind the hull layer so plumes look like
+  // they're trailing from the ship rather than painted on top of it.
+  if (game.particles) {
+    for (const p of game.particles) if (p.kind === "smoke") drawParticle(ctx, p);
   }
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship);
   // Small fragments on top so sparks read against hulls + space.
   if (game.debris) for (const d of game.debris) drawDebris(ctx, d);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
+  // Sparks / fire / debris / shockwaves render on top of ships and beams
+  // so a freshly-killed module's explosion reads above the hull silhouette.
+  if (game.particles) {
+    for (const p of game.particles) if (p.kind !== "smoke") drawParticle(ctx, p);
+  }
 
   ctx.restore();
 

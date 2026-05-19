@@ -4,6 +4,13 @@ import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
 import { events } from "./events.js";
 import { buildCells } from "./sprites.js";
+import { resolveSpec, deepMerge } from "./races.js";
+import * as V from "./vec.js";
+import { createProjectile, createMissile } from "./projectile.js";
+import { getSprite, ENGINES, ENGINE_X } from "./sprites.js";
+import {
+  buildModules, pdTurretToModuleName, podToModuleName, pickBomberAimModule,
+} from "./modules.js";
 
 let nextId = 1;
 
@@ -25,6 +32,9 @@ const HULLS = {
                  [-1.0, -0.7], [-0.4, -0.95], [-0.2, -0.7], [0.7, -0.6]],
     carrier:    [[1.0, 0.32], [0.55, 0.55], [-0.85, 0.6], [-1.0, 0.4],
                  [-1.0, -0.4], [-0.85, -0.6], [0.55, -0.55], [1.0, -0.32]],
+    // Hexagonal modular bunker — reads as a starbase segment.
+    station:    [[1.0, 0.0], [0.5, 0.85], [-0.5, 0.85], [-1.0, 0.0],
+                 [-0.5, -0.85], [0.5, -0.85]],
   },
   reavers: {
     // Hooked dart with re-entrant tail.
@@ -49,6 +59,9 @@ const HULLS = {
     carrier:    [[1.0, 0.3], [0.6, 0.45], [0.1, 0.7], [-0.4, 0.65], [-0.9, 0.55],
                  [-1.0, 0.35], [-1.0, -0.35], [-0.9, -0.55], [-0.4, -0.65],
                  [0.1, -0.7], [0.6, -0.45], [1.0, -0.3]],
+    // 8-point spiked star — bristling carapace.
+    station:    [[1.0, 0.0], [0.45, 0.45], [0.0, 1.0], [-0.45, 0.45],
+                 [-1.0, 0.0], [-0.45, -0.45], [0.0, -1.0], [0.45, -0.45]],
   },
   hegemony: {
     // Armored gunship — chamfered slab.
@@ -70,6 +83,9 @@ const HULLS = {
     // Huge cube with internal hangars.
     carrier:    [[1.0, 0.35], [0.9, 0.55], [0.3, 0.6], [-0.9, 0.6], [-1.0, 0.4],
                  [-1.0, -0.4], [-0.9, -0.6], [0.3, -0.6], [0.9, -0.55], [1.0, -0.35]],
+    // Chamfered square fortress block — armored slab.
+    station:    [[1.0, 0.6], [0.6, 1.0], [-0.6, 1.0], [-1.0, 0.6],
+                 [-1.0, -0.6], [-0.6, -1.0], [0.6, -1.0], [1.0, -0.6]],
   },
   voidsworn: {
     // Needle with swept wings.
@@ -91,6 +107,10 @@ const HULLS = {
     carrier:    [[1.0, 0.25], [0.7, 0.55], [-0.4, 0.7], [-0.95, 0.55], [-1.0, 0.3],
                  [-0.8, 0], [-1.0, -0.3], [-0.95, -0.55], [-0.4, -0.7], [0.7, -0.55],
                  [1.0, -0.25]],
+    // Rune-cut hexagon — clean outer hex with bevelled inner mouths.
+    station:    [[1.0, 0.0], [0.7, 0.5], [0.35, 0.5], [0.0, 1.0],
+                 [-0.35, 0.5], [-0.7, 0.5], [-1.0, 0.0], [-0.7, -0.5],
+                 [-0.35, -0.5], [0.0, -1.0], [0.35, -0.5], [0.7, -0.5]],
   },
 };
 
@@ -236,6 +256,11 @@ export function findHitSubsystem(ship, hitPos) {
 
 export function createShip({ klass, race = "terran", side, pos, heading = 0, controller }) {
   const spec = resolveSpec(race, klass);
+export { HULLS };
+
+export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null }) {
+  let spec = resolveSpec(race, klass);
+  if (specOverride) spec = deepMerge(spec, specOverride);
   const ship = {
     id: nextId++,
     klass,
@@ -263,6 +288,12 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     armor: spec.armor ? spec.armor.max : 0,
     armorMax: spec.armor ? spec.armor.max : 0,
     armorFlash: 0,     // visual: brief flash when armor takes a hit
+    // Persistent battle damage marks, painted on top of the hull sprite.
+    // Each entry: { lx, ly, size, kind: "armor-flake" | "hull-hole", seed }.
+    // Positions are in ship-local (world units), so they rotate with the
+    // ship. Sustained fire on the same spot grows an existing scar instead
+    // of stacking new ones (see addImpactScar in game.js).
+    scars: [],
     // Missile state (single-shot weapons like the fighter's missile).
     missileCd: 0,
     aiMissileCd: 0,
@@ -320,6 +351,33 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
   // so dropping a PD/pod/laser module also drops its mount cell.
   if (ship.sprite && ship.modules) {
     bindModuleCells(ship);
+    // Capital subsystem modules: nullable list of destructible parts.
+    // Populated for battleship / carrier / cruiser; other classes stay null
+    // and route damage straight to hull as before.
+    modules: buildModules(klass),
+    moduleByName: null,
+    pdTurretModules: null,
+    podModules: null,
+  };
+  if (ship.modules) {
+    ship.moduleByName = {};
+    for (const m of ship.modules) ship.moduleByName[m.name] = m;
+    // Pre-compute per-turret and per-pod module lookups so subsystem
+    // updates don't have to map angles → modules every tick.
+    if (spec.pdCannons) {
+      const n = spec.pdCannons.count;
+      ship.pdTurretModules = new Array(n);
+      for (let i = 0; i < n; i++) {
+        ship.pdTurretModules[i] = pdTurretToModuleName(klass, i, n);
+      }
+    }
+    if (spec.missilePods) {
+      const n = spec.missilePods.count;
+      ship.podModules = new Array(n);
+      for (let i = 0; i < n; i++) {
+        ship.podModules[i] = podToModuleName(klass, i, n);
+      }
+    }
   }
   return ship;
 }
@@ -893,6 +951,35 @@ export function updateShip(ship, dt, world) {
   if (ship.klass !== "carrier") {
     ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
     ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+  // Engine module gating — each visible plume is its own targetable
+  // module (engine-0 .. engine-N-1). Lose half your engines, fly at half
+  // speed. Lose them all and the ship goes dead in the water (drifting
+  // velocity exponentially decays).
+  let aliveEngines = 0, totalEngines = 0;
+  if (ship.modules) {
+    for (const m of ship.modules) {
+      if (m.name[0] === "e" && m.name.startsWith("engine")) {
+        totalEngines++;
+        if (!m.disabled) aliveEngines++;
+      }
+    }
+  }
+  const engineFrac = totalEngines > 0 ? aliveEngines / totalEngines : 1;
+  const engineDead = totalEngines > 0 && aliveEngines === 0;
+  const effMaxSpeed = s.maxSpeed * engineFrac;
+
+  // Fighters and bombers use an aircraft flight model: velocity is locked
+  // to nose direction at constant maxSpeed. They cannot strafe or
+  // snap-turn — the only way to change direction is to bank (rotate
+  // heading), which is turn-rate-limited.
+  if (engineDead) {
+    // Half-life ~0.45s — visibly drifts a beat, then stops.
+    const decay = Math.exp(-1.5 * dt);
+    ship.vel.x *= decay;
+    ship.vel.y *= decay;
+  } else if (ship.klass === "fighter" || ship.klass === "bomber") {
+    ship.vel.x = Math.cos(ship.heading) * effMaxSpeed;
+    ship.vel.y = Math.sin(ship.heading) * effMaxSpeed;
   } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
   // Subsystem gates — read once per tick so the rest of update can branch
   // cheaply. Ships without a subsystem of a kind treat it as "working".
@@ -921,15 +1008,19 @@ export function updateShip(ship, dt, world) {
     ship.vel.y = t.y * s.maxSpeed;
   } else if (engineOk && ship.isPlayer) {
     // Player never decelerates — keep flying at maxSpeed in current
+    ship.vel.x = t.x * effMaxSpeed;
+    ship.vel.y = t.y * effMaxSpeed;
+  } else if (ship.isPlayer) {
+    // Player never decelerates — keep flying at effMaxSpeed in current
     // direction; fall back to heading when there's no prior velocity
     // (game start / respawn).
     const curLen = Math.hypot(ship.vel.x, ship.vel.y);
     if (curLen > 1e-6) {
-      ship.vel.x = (ship.vel.x / curLen) * s.maxSpeed;
-      ship.vel.y = (ship.vel.y / curLen) * s.maxSpeed;
+      ship.vel.x = (ship.vel.x / curLen) * effMaxSpeed;
+      ship.vel.y = (ship.vel.y / curLen) * effMaxSpeed;
     } else {
-      ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
-      ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+      ship.vel.x = Math.cos(ship.heading) * effMaxSpeed;
+      ship.vel.y = Math.sin(ship.heading) * effMaxSpeed;
     }
   } else if (!engineOk) {
     // Engine down — coast with drag instead of snap-stopping so the wreck
@@ -951,11 +1042,15 @@ export function updateShip(ship, dt, world) {
   if (ship.pos.y < b.minY + s.radius) { ship.pos.y = b.minY + s.radius; if (ship.vel.y < 0) ship.vel.y = 0; }
   if (ship.pos.y > b.maxY - s.radius) { ship.pos.y = b.maxY - s.radius; if (ship.vel.y > 0) ship.vel.y = 0; }
 
-  // Rotate heading toward aim direction at class turn rate.
+  // Rotate heading toward aim direction. Turn rate scales with the
+  // fraction of engines still alive: lose half your engines, turn at
+  // half speed. When every engine is gone we still allow 15% residual
+  // RCS so the silhouette can slowly drift its attitude.
   if (c.aim && (c.aim.x !== 0 || c.aim.y !== 0)) {
     const target = V.angle(c.aim);
     const delta = V.angleDelta(ship.heading, target);
-    const step = Math.sign(delta) * Math.min(Math.abs(delta), s.turnRate * dt);
+    const turnScale = engineDead ? 0.15 : Math.max(0.15, engineFrac);
+    const step = Math.sign(delta) * Math.min(Math.abs(delta), s.turnRate * turnScale * dt);
     ship.heading += step;
   }
 
@@ -1001,6 +1096,11 @@ export function updateShip(ship, dt, world) {
     }
   }
   tickParticles(ship, dt);
+  if (ship.modules) {
+    for (const m of ship.modules) {
+      if (m.flash > 0) m.flash = Math.max(0, m.flash - dt * 4);
+    }
+  }
 
   // Primary weapon — branch by firing mode. "none" (carrier) has no
   // primary armament; PD and replenishment handle it. Cooldowns still
@@ -1093,6 +1193,9 @@ export function updateShip(ship, dt, world) {
 // bomber cycle at 2x the fighter cycle, the launch ratio is 2:1.
 // ---------------------------------------------------------------------------
 function updateReplenishment(carrier, dt, world) {
+  // A destroyed hangar freezes both production lines — the carrier's
+  // strategic role ends without killing the ship.
+  if (carrier.moduleByName && carrier.moduleByName.hangar && carrier.moduleByName.hangar.disabled) return;
   carrier.fighterLaunchCd -= dt;
   carrier.bomberLaunchCd -= dt;
   if (carrier.fighterLaunchCd <= 0) {
@@ -1193,11 +1296,17 @@ function updateBroadsideFire(ship, world) {
     return false;
   };
 
-  if (ship.cooldownPort <= 0 && hasTargetInArc(sidePort)) {
+  // Disabled-broadside-battery modules silence their side's volley.
+  const portMod = ship.moduleByName && ship.moduleByName["broadside-port"];
+  const stbdMod = ship.moduleByName && ship.moduleByName["broadside-stbd"];
+  const portLive = !portMod || !portMod.disabled;
+  const stbdLive = !stbdMod || !stbdMod.disabled;
+
+  if (portLive && ship.cooldownPort <= 0 && hasTargetInArc(sidePort)) {
     emitBroadside(ship, world, sidePort, fwd);
     ship.cooldownPort = w.cooldown;
   }
-  if (ship.cooldownStarboard <= 0 && hasTargetInArc(sideStarboard)) {
+  if (stbdLive && ship.cooldownStarboard <= 0 && hasTargetInArc(sideStarboard)) {
     emitBroadside(ship, world, sideStarboard, fwd);
     ship.cooldownStarboard = w.cooldown;
   }
@@ -1298,6 +1407,12 @@ function updatePDFire(ship, world) {
   for (let i = 0; i < ship.pdCooldowns.length; i++) {
     if (ship.pdCooldowns[i] > 0) continue;
     if (moduleDead(ship, "pd", i)) continue;
+    // Skip turrets whose owning module has been knocked out.
+    if (ship.pdTurretModules) {
+      const modName = ship.pdTurretModules[i];
+      const mod = modName && ship.moduleByName[modName];
+      if (mod && mod.disabled) continue;
+    }
     const origin = pdTurretOffset(ship, i);
     const tgt = pickPDTarget(origin, range2, ship.side, world);
     if (!tgt) continue;
@@ -1332,7 +1447,7 @@ function updatePDFire(ship, world) {
 // Picks the largest enemy in range; falls back to nearest.
 // ---------------------------------------------------------------------------
 function pickPodTarget(ship, world, acquireRange) {
-  const RANK = { battleship: 4, cruiser: 3, frigate: 2, fighter: 1 };
+  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2, fighter: 1 };
   const r2Max = acquireRange * acquireRange;
   let bestRank = -1, bestD2 = Infinity, best = null;
   for (const o of world.ships) {
@@ -1356,6 +1471,12 @@ function updateMissilePodFire(ship, world) {
   for (let i = 0; i < ship.podCooldowns.length; i++) {
     if (ship.podCooldowns[i] > 0) continue;
     if (moduleDead(ship, "pod", i)) continue;
+    // Skip pods whose missile bay is disabled.
+    if (ship.podModules) {
+      const modName = ship.podModules[i];
+      const mod = modName && ship.moduleByName[modName];
+      if (mod && mod.disabled) continue;
+    }
     const target = pickPodTarget(ship, world, pods.acquireRange);
     if (!target) continue;
     // Pod position: distributed along the hull length.
@@ -1376,6 +1497,13 @@ function updateMissilePodFire(ship, world) {
 
     const colors = pods.colors || { blue: "#fff", red: "#fc8" };
     const missile = createMissile({
+    // Bombers home onto a specific defensive module first (PD, then
+    // broadsides, then anything else) so a strike wave actively peels
+    // a capital's screen before chewing into hull.
+    const targetModuleName = ship.klass === "bomber"
+      ? pickBomberAimModule(target)
+      : null;
+    world.projectiles.push(createMissile({
       pos: origin,
       heading: launchHeading,
       damage: pods.damage,
@@ -1396,6 +1524,8 @@ function updateMissilePodFire(ship, world) {
     // this undefined and behave as plain torpedoes.
     if (pods.cluster) missile.cluster = pods.cluster;
     world.projectiles.push(missile);
+      targetModuleName,
+    }));
     ship.podCooldowns[i] = pods.cooldown;
     events.emit("weaponFired", { ship, kind: "missile" });
   }
@@ -1499,6 +1629,7 @@ function pickLaserTarget(ship, world) {
   // Heavy lasers are reserved for capital-class targets — wasting a
   // 4-second cooldown on a fighter or bomber is a poor trade.
   const RANK = { battleship: 4, cruiser: 3, frigate: 2, carrier: 4 };
+  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2, fighter: 1 };
   let bestRank = -1, bestD2 = Infinity, best = null;
   for (const o of world.ships) {
     if (o.dead || o.side === ship.side) continue;
@@ -1521,6 +1652,8 @@ function pickLaserTarget(ship, world) {
 function updateHeavyLaser(ship, world) {
   if (ship.laserCd > 0) return;
   if (moduleDead(ship, "laser", 0)) return;
+  // A destroyed laser mount silences the beam for the rest of the match.
+  if (ship.moduleByName && ship.moduleByName.laser && ship.moduleByName.laser.disabled) return;
   const l = ship.spec.heavyLaser;
   const target = pickLaserTarget(ship, world);
   if (!target) return;
@@ -1839,10 +1972,99 @@ function drawBattleScars(ctx, ship) {
     const size = 1.5 + ((u + v) % 1) * 2.5;
     ctx.beginPath();
     ctx.arc(sx, sy, size, 0, Math.PI * 2);
+// Live engine glow / thrust plumes. Each plume corresponds to its own
+// targetable engine module (engine-0, engine-1, ...). A plume's
+// intensity scales with its module's HP — bright when healthy, dim and
+// jittery near death, fully extinguished when that module is destroyed
+// (the module-marker pass then paints the crater over the dead nozzle).
+function drawEnginePlumes(ctx, ship) {
+  const klass = ship.klass;
+  const count = ENGINES[klass] || 0;
+  if (count <= 0) return;
+  const R = ship.spec.radius;
+  const side = ship.side;
+
+  const ex = (ENGINE_X[klass] || -0.9) * R;
+  const glowHi = side === "blue" ? "rgba(140,210,255," : "rgba(255,180,100,";
+  const glowMid = side === "blue" ? "rgba(80,170,255,"  : "rgba(255,130,60,";
+  const glowR = R * (klass === "fighter" ? 0.18 : 0.14);
+  for (let i = 0; i < count; i++) {
+    // Per-plume gating: read this engine module's state.
+    const eng = ship.moduleByName && ship.moduleByName["engine-" + i];
+    if (eng && eng.disabled) continue;
+    let intensity = 1;
+    if (eng) {
+      const frac = eng.hp / eng.hpMax;
+      intensity = 0.35 + frac * 0.65;
+      if (frac < 0.4) intensity *= 0.7 + Math.random() * 0.3;
+    }
+    const yOff = count === 1 ? 0 : ((i / (count - 1)) - 0.5) * R * 1.05;
+    const g = ctx.createRadialGradient(ex, yOff, 0, ex, yOff, glowR * 2.4);
+    g.addColorStop(0.0, glowHi + (0.95 * intensity).toFixed(3) + ")");
+    g.addColorStop(0.45, glowMid + (0.50 * intensity).toFixed(3) + ")");
+    g.addColorStop(1.0, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(ex, yOff, glowR * 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(240,250,255," + (0.95 * intensity).toFixed(3) + ")";
+    ctx.beginPath();
+    ctx.arc(ex + R * 0.02, yOff, glowR * 0.35, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
+// Paint one persistent battle scar inside the ship's rotated frame.
+// "armor-flake" reads as a chipped/scratched plate (light irregular
+// patch), "hull-hole" as a dark gouge with a hot rim. Both are drawn
+// from a deterministic seed so the silhouette doesn't flicker frame to
+// frame even though we re-generate the polygon path on every draw.
+function drawScar(ctx, sc) {
+  const r = sc.size;
+  if (r <= 0.2) return;
+  ctx.save();
+  ctx.translate(sc.lx, sc.ly);
+  ctx.rotate(sc.seed * Math.PI * 2);
+  if (sc.kind === "armor-flake") {
+    // Light scratched-metal chip — bright patch with a dark seam.
+    ctx.fillStyle = "rgba(190,190,200,0.55)";
+    ctx.strokeStyle = "rgba(30,30,40,0.7)";
+    ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const nr = r * (0.6 + 0.55 * Math.sin(sc.seed * 13.7 + i * 2.3));
+      const x = Math.cos(a) * nr;
+      const y = Math.sin(a) * nr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    // Hull hole — hot orange rim, dark irregular bore.
+    ctx.strokeStyle = "rgba(255,130,50,0.7)";
+    ctx.lineWidth = Math.max(0.8, r * 0.25);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.05, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    ctx.beginPath();
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const nr = r * (0.65 + 0.45 * Math.sin(sc.seed * 17.1 + i * 3.1));
+      const x = Math.cos(a) * nr;
+      const y = Math.sin(a) * nr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+// ---------------------------------------------------------------------------
 export function drawShip(ctx, ship) {
   const s = ship.spec;
   // Cosmetic override for the player ship: equipped hull-skin tint
@@ -1942,9 +2164,22 @@ export function drawShip(ctx, ship) {
   if (ship.klass === "carrier") {
     ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 1.5;
+  // Hull — pre-rendered schematic sprite (panels + shading + glow + outline).
+  // Falls back to a flat polygon if the sprite cache isn't ready (eg. tests).
+  const sprite = getSprite(ship.race, ship.klass, ship.side);
+  if (sprite) {
+    const scale = s.radius / sprite.baseRadius;
+    const half = sprite.halfExtent * scale;
+    ctx.drawImage(sprite.canvas, -half, -half, half * 2, half * 2);
+  } else {
+    const poly = getHull(ship.race, ship.klass);
     ctx.beginPath();
-    ctx.moveTo(s.radius * 0.85, 0);
-    ctx.lineTo(-s.radius * 0.85, 0);
+    ctx.moveTo(poly[0][0] * s.radius, poly[0][1] * s.radius);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0] * s.radius, poly[i][1] * s.radius);
+    }
+    ctx.closePath();
+    ctx.fill();
     ctx.stroke();
   }
 
@@ -2042,14 +2277,34 @@ export function drawShip(ctx, ship) {
   // already encode their structure in cells; the extra dots clutter
   // the silhouette and are skipped.
   if (!ship.sprite && ship.spec.firingMode === "broadside") {
+  // Engine plumes — drawn live so they can dim with engine module HP and
+  // black out entirely when the engine module is destroyed. Reads
+  // ship.moduleByName.engine if present (added for every mobile class).
+  // Stations have no engine entry; their ENGINES[klass] is 0 so this
+  // is a no-op for them.
+  drawEnginePlumes(ctx, ship);
+
+  // Persistent battle damage — armor flakes and hull holes accumulated
+  // from incoming fire. Drawn inside the rotated frame so they ride with
+  // the hull. Holes grow under sustained nearby fire (game.js merges
+  // nearby impacts into the same scar instead of stacking new ones).
+  if (ship.scars && ship.scars.length > 0) {
+    for (const sc of ship.scars) drawScar(ctx, sc);
+  }
+
+  // Broadside gun ports. Each side dims when its battery module is dead.
+  if (ship.spec.firingMode === "broadside") {
     const w = ship.spec.weapon;
     const muzzles = w.muzzles || 1;
     const spread = w.muzzleSpread || 0;
     const offsetY = s.radius * 0.7;
-    ctx.fillStyle = tint;
+    const portDead = ship.moduleByName && ship.moduleByName["broadside-port"] && ship.moduleByName["broadside-port"].disabled;
+    const stbdDead = ship.moduleByName && ship.moduleByName["broadside-stbd"] && ship.moduleByName["broadside-stbd"].disabled;
     for (let i = 0; i < muzzles; i++) {
       const lengthwise = muzzles === 1 ? 0 : ((i - (muzzles - 1) / 2) * spread);
+      ctx.fillStyle = stbdDead ? "rgba(60,30,20,0.7)" : tint;
       ctx.beginPath(); ctx.arc(lengthwise,  offsetY, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = portDead ? "rgba(60,30,20,0.7)" : tint;
       ctx.beginPath(); ctx.arc(lengthwise, -offsetY, 2.5, 0, Math.PI * 2); ctx.fill();
     }
   }
@@ -2077,6 +2332,18 @@ export function drawShip(ctx, ship) {
     for (const m of ship.modules) {
       if (!m.dead) continue;
       const cutR = (m.kind === "laser" ? 6 : m.kind === "pod" ? 5 : 4);
+  // PD turret stubs — dim when their owning cluster module is destroyed.
+  if (ship.spec.pdCannons) {
+    const n = ship.spec.pdCannons.count;
+    const r = s.radius * 0.75;
+    for (let i = 0; i < n; i++) {
+      let alive = true;
+      if (ship.pdTurretModules && ship.moduleByName) {
+        const mod = ship.moduleByName[ship.pdTurretModules[i]];
+        if (mod && mod.disabled) alive = false;
+      }
+      ctx.fillStyle = alive ? "#fff" : "rgba(60,40,30,0.75)";
+      const a = (i / n) * Math.PI * 2;
       ctx.beginPath();
       ctx.arc(m.lx, m.ly, cutR, 0, Math.PI * 2);
       ctx.fill();
@@ -2110,6 +2377,10 @@ export function drawShip(ctx, ship) {
   // node renders its own emitter glyph.
   if (ship.spec.heavyLaser && !shipHasSubsystem(ship, "laser")) {
     ctx.fillStyle = "#fff";
+  // Heavy laser muzzle on the bow.
+  if (ship.spec.heavyLaser) {
+    const laserDead = ship.moduleByName && ship.moduleByName.laser && ship.moduleByName.laser.disabled;
+    ctx.fillStyle = laserDead ? "rgba(60,30,30,0.75)" : "#fff";
     ctx.beginPath();
     ctx.arc(s.radius * 0.95, 0, 4, 0, Math.PI * 2);
     ctx.fill();
@@ -2119,6 +2390,37 @@ export function drawShip(ctx, ship) {
   // so the destructible emplacements overlay any static muzzle/port
   // glyphs that share a position with them.
   drawSubsystems(ctx, ship);
+  // Module markers. Alive modules show a faint accent disc that hue-shifts
+  // toward red as HP drops; destroyed modules show a black crater + soot
+  // ring. Hit flashes briefly outline the module in white. Markers are
+  // drawn inside the rotated frame so their (offset.x, offset.y) align
+  // with the hull geometry.
+  if (ship.modules) {
+    for (const m of ship.modules) {
+      const mx = m.offset.x * s.radius;
+      const my = m.offset.y * s.radius;
+      const mr = m.radius * s.radius * 0.55;
+      if (m.disabled) {
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "rgba(120,60,40,0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      } else {
+        const frac = m.hp / m.hpMax;
+        const color = frac > 0.66 ? "rgba(180,220,255,0.45)"
+                    : frac > 0.33 ? "rgba(255,220,140,0.65)"
+                                  : "rgba(255,140,90,0.78)";
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+        if (m.flash > 0) {
+          ctx.strokeStyle = "rgba(255,255,255," + m.flash.toFixed(2) + ")";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+    }
+  }
 
   // Player indicator.
   if (ship.isPlayer) {
