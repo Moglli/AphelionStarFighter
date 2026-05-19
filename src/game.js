@@ -8,6 +8,11 @@ import { MODES, DEFAULT_MODE } from "./modes/index.js";
 import { saveStore } from "./save.js";
 import { audio } from "./audio.js";
 import { resolveCosmetic } from "./cosmetics.js";
+import {
+  createWreck, createDebrisBurst,
+  updateWreck, updateDebris,
+  pushWreck, pushDebris,
+} from "./wreckage.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -34,6 +39,10 @@ export function createGame() {
     ships: [],
     projectiles: [],
     beams: [],
+    // Persistent map litter: chunks of destroyed ships + small bits
+    // knocked off by damaging hits. See ./wreckage.js.
+    wrecks: [],
+    debris: [],
     arena: ARENA,
     starfield: createStarfield(),
     playerController: {
@@ -89,6 +98,8 @@ export function startGame(game, opts = {}) {
   game.ships = [];
   game.projectiles = [];
   game.beams = [];
+  game.wrecks = [];
+  game.debris = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -399,7 +410,7 @@ export function update(game, dt) {
         const attacker = p.ownerId != null
           ? game.ships.find((s) => s.id === p.ownerId)
           : null;
-        applyDamage(ship, p, attacker);
+        applyDamage(ship, p, attacker, game, p.pos);
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) {
@@ -416,6 +427,15 @@ export function update(game, dt) {
 
   if (game.projectiles.length > 0) {
     game.projectiles = game.projectiles.filter((p) => !p.dead);
+  }
+
+  // Drift + age persistent map litter. Both arrays are capped at spawn
+  // time so we never need to cull by age here.
+  if (game.wrecks.length > 0) {
+    for (const w of game.wrecks) updateWreck(w, dt, game.arena.bounds);
+  }
+  if (game.debris.length > 0) {
+    for (const d of game.debris) updateDebris(d, dt, game.arena.bounds);
   }
 
   // Player death + respawn (only when not spectating).
@@ -496,6 +516,8 @@ export function restart(game) {
   game.ships = [];
   game.projectiles = [];
   game.beams = [];
+  game.wrecks = [];
+  game.debris = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -518,7 +540,7 @@ export function restart(game) {
 //   a 100-damage hit erodes ~50 armor by default — so a thick plate
 //   "slowly deteriorates" rather than burning through in a single salvo.
 // ---------------------------------------------------------------------------
-function applyDamage(ship, p, attacker = null) {
+function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
   let remaining = p.damage;
   const byPlayer = !!(attacker && attacker.isPlayer);
 
@@ -553,6 +575,7 @@ function applyDamage(ship, p, attacker = null) {
     if (armorWear <= ship.armor) {
       ship.armor -= armorWear;
       events.emit("hit", { ship, layer: "armor", amount: remaining, byPlayer });
+      spawnHitDebris(world, ship, hitPos, "armor", remaining);
       return; // armor ate the whole hit
     }
     // Armor strips; convert remaining capacity back into incoming damage.
@@ -561,6 +584,7 @@ function applyDamage(ship, p, attacker = null) {
     remaining = remaining - dmgAbsorbed;
     if (remaining <= 0) {
       events.emit("hit", { ship, layer: "armor", amount: dmgAbsorbed, byPlayer });
+      spawnHitDebris(world, ship, hitPos, "armor", dmgAbsorbed);
       return;
     }
   }
@@ -568,6 +592,23 @@ function applyDamage(ship, p, attacker = null) {
   // Step 3: Hull.
   ship.hp -= remaining;
   events.emit("hit", { ship, layer: "hull", amount: remaining, byPlayer });
+  spawnHitDebris(world, ship, hitPos, "hull", remaining);
+}
+
+// Knock 1-3 small fragments off the hull at the impact point. Skipped
+// for shield-layer hits (the shield ate it; nothing came off the hull).
+function spawnHitDebris(world, ship, hitPos, layer, amount) {
+  if (!world || !hitPos) return;
+  if (layer !== "armor" && layer !== "hull") return;
+  // Scale fragments with the size of the bite the round took.
+  // amount is raw damage post-shield. A fighter cannon round (~6 dmg)
+  // shakes off one chip; a battleship broadside (~75 dmg) sheds a small
+  // shower. Cap so even huge hits stay bounded.
+  let count = 1;
+  if (amount > 15) count = 2;
+  if (amount > 40) count = 3;
+  const frags = createDebrisBurst(ship.pos, hitPos, ship.vel, ship.klass, ship.side, count);
+  pushDebris(world.debris, frags);
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +629,7 @@ function applyAndAgeBeams(game, dt) {
           const attacker = beam.ownerId != null
             ? game.ships.find((s) => s.id === beam.ownerId)
             : null;
-          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" }, attacker);
+          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" }, attacker, game, { x: t.pos.x, y: t.pos.y });
           if (t.hp <= 0) {
             t.dead = true;
             handleShipDestroyed(game, t, attacker);
@@ -626,6 +667,12 @@ function handleShipDestroyed(game, ship, killer) {
     game.kills += 1;
     game.score += SCORE_PER_KILL[ship.klass] || 10;
   }
+  // Persistent wreckage: the broken hull stays on the map, and a
+  // shower of small fragments blows out in every direction.
+  pushWreck(game.wrecks, createWreck(ship));
+  const isBig = ship.klass === "cruiser" || ship.klass === "battleship" || ship.klass === "carrier";
+  const burstCount = isBig ? 14 : (ship.klass === "frigate" ? 10 : 7);
+  pushDebris(game.debris, createDebrisBurst(ship.pos, ship.pos, ship.vel, ship.klass, ship.side, burstCount));
 }
 
 // ---------------------------------------------------------------------------

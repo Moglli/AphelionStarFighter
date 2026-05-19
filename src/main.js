@@ -5,6 +5,7 @@ import {
 import { drawArena, drawArenaBounds, ARENA } from "./arena.js";
 import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
+import { drawWreck, drawDebris } from "./wreckage.js";
 import { drawHUD, drawBeams } from "./hud.js";
 import { InputManager } from "./input.js";
 import { saveStore } from "./save.js";
@@ -117,7 +118,11 @@ function draw() {
   ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
+  // Wrecks under live ships so combatants overlay the battlefield litter.
+  if (game.wrecks) for (const w of game.wrecks) drawWreck(ctx, w);
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship);
+  // Small fragments on top so sparks read against hulls + space.
+  if (game.debris) for (const d of game.debris) drawDebris(ctx, d);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
 
