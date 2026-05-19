@@ -10,6 +10,7 @@ import {
   updateParticle, spawnHitSparks, spawnDestructionBurst, spawnContinuousSmoke,
   spawnArmorFlakes, spawnHullBreakoff,
 } from "./particles.js";
+import { damageCellsInRadius, killCellsForModule } from "./sprites.js";
 import { SIDES } from "./classes.js";
 
 const RESPAWN_SECONDS = 2.0;
@@ -594,6 +595,16 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
   // impact point regardless of whether modules absorb part of the hit.
   recordHullImpact(ship, p, remaining, particles);
 
+  // Step 3a: Chew the destructible cell grid at the hit point. Radius
+  // scales with damage so a glancing fighter round chips a single cell
+  // and a cruiser shell or missile rips out a cluster. This is what
+  // gives the silhouette its visibly missing chunks.
+  if (ship.cells && p && p.pos) {
+    const local = worldToLocal(ship, p.pos.x, p.pos.y);
+    const chewR = chewRadius(ship, remaining);
+    damageCellsInRadius(ship, local.x, local.y, chewR, 1);
+  }
+
   if (moduleTargets && moduleTargets.length > 0) {
     for (const { module, weight } of moduleTargets) {
       if (module.disabled) continue;
@@ -611,6 +622,9 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
         // Killing a subsystem ruptures part of the central hull too —
         // strip enough modules and the ship dies of cumulative breaches.
         ship.hp -= module.hullPenalty;
+        // Tear out the cluster of cells bound to this module so the
+        // ship's silhouette loses a recognisable chunk at the same time.
+        if (ship.cells) killCellsForModule(ship, module.name);
         if (particles) {
           const wpos = moduleWorldPos(ship, module.name);
           if (wpos) {
@@ -623,6 +637,20 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
     return;
   }
   ship.hp -= remaining;
+}
+
+// Cell-damage radius for a given hit. Scales with damage so a glancing
+// hit chips one or two pixels and a big shell shears a chunk. The cap
+// keeps a single hit from clearing more than ~30% of a ship's grid
+// extent — sustained fire still has to do the work of stripping the
+// hull. The base is at least one full cell so a hit on the hull always
+// lands at least one visible block, not a near-miss.
+function chewRadius(ship, dmg) {
+  const R = ship.spec && ship.spec.radius ? ship.spec.radius : 14;
+  const cellSize = Math.max(ship.cellW || 6, ship.cellH || 6);
+  const base = cellSize * 0.85;
+  const scale = Math.min(R * 0.5, base + Math.sqrt(Math.max(0, dmg)) * 2.4);
+  return scale;
 }
 
 // Record an armor impact: a chipped/scratched flake scar at the impact

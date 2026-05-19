@@ -1,9 +1,18 @@
-// Procedural ship sprite renderer.
+// Procedural ship sprite renderer + destructible damage-cell grid.
 //
-// At game start, prerenderSprites() bakes every (race, klass, side) combo
-// into an offscreen canvas — hull + shaded fill + panel lines + race
-// accent stripe + engine glow + outline. drawShip then blits the cached
-// bitmap each frame instead of re-tessellating polygons.
+// Two systems live in this file:
+//
+// 1. Pre-rendered ship sprites — at game start, prerenderSprites() bakes
+//    every (race, klass, side) combo into an offscreen canvas (hull +
+//    shaded fill + panel lines + race accent stripe + outline).
+//    drawShip blits the cached bitmap instead of re-tessellating polygons.
+//
+// 2. Damage cell grids — each ship class has a small grid of cells
+//    overlaid on the sprite. Cells take hits and "die" (become dark
+//    voids) so the silhouette visibly loses chunks as the ship is
+//    damaged. Cells near a destructible module bind to it, so killing
+//    a module also tears out its cluster of cells. See buildCells +
+//    damageCellsInRadius (called from game.js applyDamage).
 //
 // Sprites use the class's base radius as the reference scale. Ships
 // whose spec.radius differs (e.g. station nodes overriding the base
@@ -197,4 +206,127 @@ function drawSchematic(ctx, race, klass, side, R) {
   ctx.strokeStyle = tint;
   ctx.lineWidth = Math.max(1, R * 0.05);
   ctx.stroke(hullPath);
+}
+
+// ---------------------------------------------------------------------------
+// Destructible damage cells.
+// ---------------------------------------------------------------------------
+//
+// Each class gets a 2D grid of cells laid over its silhouette. The grid
+// is sized so the cell footprint covers the hull's bounding box; cells
+// whose centre falls outside the unit-circle of the hull start `dead`
+// (they were never part of the silhouette to begin with). Live cells
+// take damage from projectile hits within a damage-scaled radius and
+// from module destruction. A "dead" cell paints as a dark void in
+// drawShip, leaving a visible chunk-shaped hole in the ship.
+//
+// gridCols/gridRows per class — bigger ships get more cells so the
+// chunks read at the right scale. Cell size is then derived from
+// spec.radius so the grid spans the silhouette regardless of which
+// class-specific radius the ship instance happens to have.
+const CELL_GRID = {
+  fighter:    { cols:  6, rows:  4 },
+  bomber:     { cols:  7, rows:  5 },
+  frigate:    { cols: 10, rows:  6 },
+  cruiser:    { cols: 14, rows:  7 },
+  battleship: { cols: 16, rows:  8 },
+  carrier:    { cols: 18, rows: 10 },
+  station:    { cols: 12, rows: 12 },
+};
+
+// Build a per-ship cell grid in ship-local coordinates. The bounding
+// box spans roughly [-R..R] on each axis; cells outside the unit circle
+// start `dead` so the grid hugs the silhouette rather than appearing as
+// a flat square. `R` is the ship's spec.radius — the per-cell pixel
+// size is R*2 / cols (and the same on the rows axis).
+//
+// Returns null when the class has no entry in CELL_GRID (defensive).
+export function buildCells(klass, R) {
+  const spec = CELL_GRID[klass];
+  if (!spec) return null;
+  const cols = spec.cols;
+  const rows = spec.rows;
+  // Per-axis cell size — slightly wider than tall on most hulls because
+  // ships are elongated bow-to-stern. Picking the cell size as 2R/cols
+  // makes the grid span the silhouette along the long axis; the row
+  // axis uses the same cell size so cells stay square (consistent
+  // "pixel-block" look). For stations the grid is genuinely square.
+  const cellW = (R * 2) / cols;
+  const cellH = klass === "station" ? cellW : (R * 1.4) / rows;
+  const halfX = (cols * cellW) / 2;
+  const halfY = (rows * cellH) / 2;
+  const cells = new Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const lx = -halfX + c * cellW + cellW / 2;
+      const ly = -halfY + r * cellH + cellH / 2;
+      // Approximate hull silhouette as an ellipse on the bounding box.
+      // Cells whose centre falls outside the ellipse are `culled` so
+      // they're never drawn AND never damaged — they don't leak ugly
+      // dark squares into the silhouette's corners on undamaged ships.
+      // Only cells that started `inside` and got killed by combat draw
+      // as missing chunks.
+      const nx = lx / (halfX * 0.98);
+      const ny = ly / (halfY * 0.98);
+      const inside = (nx * nx + ny * ny) <= 1.0;
+      cells[r * cols + c] = {
+        lx, ly, row: r, col: c,
+        // One-shot kill keeps the visible-chunks feedback immediate —
+        // we'd otherwise need two hits before a cell goes dark, which
+        // hides the loss under shield/armor flicker.
+        hp: 1,
+        hpMax: 1,
+        culled: !inside,    // never alive — not part of the silhouette
+        dead: false,        // killed by damage — draws as a void
+        // Module binding is set in ship.js after createShip — the
+        // module table lives there, not here.
+        moduleName: null,
+        flash: 0,
+      };
+    }
+  }
+  return { cells, cellW, cellH, cols, rows, halfX, halfY };
+}
+
+// Kill every live cell whose centre falls within `radius` of (lx, ly).
+// Returns the number of cells removed plus a list of newly-destroyed
+// module names so the caller can fire the matching destruction VFX.
+// Each cell takes at most one hp per call, so a single low-damage hit
+// chips a cell, and a heavy hit clears a whole cluster.
+export function damageCellsInRadius(ship, lx, ly, radius, hpDrain = 1) {
+  if (!ship.cells || ship.cells.length === 0) {
+    return { destroyed: 0, modulesDestroyed: [] };
+  }
+  const r2 = radius * radius;
+  let destroyed = 0;
+  const modulesDestroyed = [];
+  for (const cell of ship.cells) {
+    if (cell.culled || cell.dead) continue;
+    const dx = cell.lx - lx;
+    const dy = cell.ly - ly;
+    if (dx * dx + dy * dy > r2) continue;
+    cell.hp -= hpDrain;
+    cell.flash = 1;
+    if (cell.hp <= 0) {
+      cell.dead = true;
+      destroyed++;
+    }
+  }
+  return { destroyed, modulesDestroyed };
+}
+
+// Kill every live cell bound to a given module (called when the module
+// gets disabled by the existing module-damage flow in game.js). The
+// cluster of cells over the module visibly tears out at once.
+export function killCellsForModule(ship, moduleName) {
+  if (!ship.cells || !moduleName) return 0;
+  let count = 0;
+  for (const cell of ship.cells) {
+    if (cell.culled || cell.dead) continue;
+    if (cell.moduleName === moduleName) {
+      cell.dead = true;
+      count++;
+    }
+  }
+  return count;
 }

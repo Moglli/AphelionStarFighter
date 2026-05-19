@@ -2,7 +2,7 @@ import { SIDES } from "./classes.js";
 import { resolveSpec, deepMerge } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
-import { getSprite, ENGINES, ENGINE_X } from "./sprites.js";
+import { getSprite, ENGINES, ENGINE_X, buildCells, killCellsForModule } from "./sprites.js";
 import {
   buildModules, pdTurretToModuleName, podToModuleName, pickBomberAimModule,
 } from "./modules.js";
@@ -195,6 +195,42 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
       }
     }
   }
+
+  // Destructible cell overlay. Each cell sits in ship-local space and
+  // dies in one or two hits within a damage-scaled radius (see
+  // damageCellsInRadius in sprites.js / applyDamage in game.js). Cells
+  // are bound to the nearest module so a module kill tears out a
+  // matching cluster of pixels along with it.
+  const grid = buildCells(klass, spec.radius);
+  if (grid) {
+    ship.cells = grid.cells;
+    ship.cellW = grid.cellW;
+    ship.cellH = grid.cellH;
+    if (ship.modules) {
+      // For each module, bind every still-unbound live cell whose centre
+      // sits inside the module's disc to that module. Multiple discs may
+      // overlap; the first-touch-wins assignment keeps the binding
+      // deterministic and means engines (added late by buildModules) don't
+      // steal weapon-cluster cells.
+      for (const m of ship.modules) {
+        const mx = m.offset.x * spec.radius;
+        const my = m.offset.y * spec.radius;
+        const mr = m.radius * spec.radius;
+        const mr2 = mr * mr;
+        for (const cell of ship.cells) {
+          if (cell.culled || cell.dead || cell.moduleName) continue;
+          const dx = cell.lx - mx;
+          const dy = cell.ly - my;
+          if (dx * dx + dy * dy <= mr2) {
+            cell.moduleName = m.name;
+          }
+        }
+      }
+    }
+  } else {
+    ship.cells = null;
+  }
+
   return ship;
 }
 
@@ -932,6 +968,44 @@ export function drawShip(ctx, ship) {
   // nearby impacts into the same scar instead of stacking new ones).
   if (ship.scars && ship.scars.length > 0) {
     for (const sc of ship.scars) drawScar(ctx, sc);
+  }
+
+  // Destructible cell overlay — for every cell that's been killed by a
+  // hit (or by losing its bound module), paint an opaque dark void.
+  // This is what makes the silhouette visibly lose chunks: the
+  // pre-rendered sprite stays pretty, but dead cells punch holes
+  // through it. Drawn after scars so a chunk missing from the hull
+  // covers any scar that used to sit there.
+  if (ship.cells) {
+    const cw = ship.cellW;
+    const ch = ship.cellH;
+    const halfW = cw / 2;
+    const halfH = ch / 2;
+    // Pad each cell by 1px so adjacent dead cells form a continuous
+    // void instead of leaving thin sliver lines between them.
+    const padW = cw + 1;
+    const padH = ch + 1;
+    ctx.fillStyle = "#000";
+    for (const cell of ship.cells) {
+      if (!cell.dead) continue;
+      ctx.fillRect(cell.lx - halfW, cell.ly - halfH, padW, padH);
+    }
+    // Bright rim around the freshest chip so a hit reads visibly even
+    // before the chunk has finished tearing out.
+    let anyFlash = false;
+    for (const cell of ship.cells) {
+      if (!cell.dead && cell.flash > 0.05) { anyFlash = true; break; }
+    }
+    if (anyFlash) {
+      ctx.fillStyle = "rgba(255,200,90,0.85)";
+      for (const cell of ship.cells) {
+        if (cell.dead || cell.flash <= 0.05) continue;
+        ctx.globalAlpha = Math.min(1, cell.flash);
+        ctx.fillRect(cell.lx - halfW, cell.ly - halfH, cw, ch);
+        cell.flash -= 0.08;
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
   // Broadside gun ports. Each side dims when its battery module is dead.
