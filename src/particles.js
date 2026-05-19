@@ -9,6 +9,8 @@
 //   fire       — orange flicker, brief, shrinks
 //   debris     — small rotating fragment, medium ttl, slight drag
 //   shockwave  — expanding ring stroke, short ttl
+//   fragment   — larger irregular polygon (hull chunk / armor flake)
+//                tumbling outward, used when a piece breaks off a ship
 //
 // Public surface:
 //   createSmoke / createSpark / createFire / createDebris / createShockwave
@@ -81,6 +83,38 @@ export function createFire(x, y, opts = {}) {
   };
 }
 
+// Random jagged polygon in unit space (vertices on a noisy radius). Used
+// as the silhouette of a hull/armor fragment that's broken off a ship.
+function randomFragmentShape() {
+  const n = 4 + Math.floor(Math.random() * 3);
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    const r = 0.65 + Math.random() * 0.6;
+    pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+  }
+  return pts;
+}
+
+export function createFragment(x, y, opts = {}) {
+  const ttl = opts.ttl != null ? opts.ttl : (1.1 + Math.random() * 1.4);
+  const ang = opts.angle != null ? opts.angle : Math.random() * Math.PI * 2;
+  const sp = opts.speed != null ? opts.speed : (70 + Math.random() * 140);
+  return {
+    kind: "fragment",
+    pos: { x, y },
+    vel: { x: Math.cos(ang) * sp, y: Math.sin(ang) * sp },
+    size: opts.size != null ? opts.size : (2.5 + Math.random() * 3),
+    rot: Math.random() * Math.PI * 2,
+    rotVel: (Math.random() - 0.5) * 7,
+    ttl, maxTtl: ttl,
+    color: opts.color || "#8a8a90",
+    stroke: opts.stroke || "rgba(0,0,0,0.55)",
+    shape: opts.shape || randomFragmentShape(),
+    dead: false,
+  };
+}
+
 export function createShockwave(x, y, opts = {}) {
   const ttl = opts.ttl != null ? opts.ttl : 0.42;
   return {
@@ -104,6 +138,11 @@ export function updateParticle(p, dt) {
   } else if (p.kind === "debris") {
     p.vel.x *= 0.97;
     p.vel.y *= 0.97;
+    p.rot += p.rotVel * dt;
+  } else if (p.kind === "fragment") {
+    // Slightly heavier than debris — chunks settle a bit faster.
+    p.vel.x *= 0.955;
+    p.vel.y *= 0.955;
     p.rot += p.rotVel * dt;
   } else if (p.kind === "spark") {
     p.vel.x *= 0.92;
@@ -149,6 +188,25 @@ export function drawParticle(ctx, p) {
     ctx.fillRect(-p.size, -p.size * 0.55, p.size * 2, p.size * 1.1);
     ctx.restore();
     ctx.globalAlpha = 1;
+  } else if (p.kind === "fragment") {
+    ctx.save();
+    ctx.translate(p.pos.x, p.pos.y);
+    ctx.rotate(p.rot);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.strokeStyle = p.stroke;
+    ctx.lineWidth = 0.6;
+    const pts = p.shape;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0] * p.size, pts[0][1] * p.size);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i][0] * p.size, pts[i][1] * p.size);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    ctx.globalAlpha = 1;
   } else if (p.kind === "shockwave") {
     ctx.strokeStyle = p.color + (alpha * 0.85).toFixed(3) + ")";
     ctx.lineWidth = 3 * alpha;
@@ -165,6 +223,50 @@ export function drawParticle(ctx, p) {
 // A few sparks fanning outward from a module hit point.
 export function spawnHitSparks(particles, x, y, count = 4) {
   for (let i = 0; i < count; i++) particles.push(createSpark(x, y));
+}
+
+// Armor flaking off — small light fragments + 1-2 sparks. Optional
+// outwardAngle biases the fragment velocity away from the ship centre
+// (caller passes the direction from ship centre to impact point).
+export function spawnArmorFlakes(particles, x, y, damage, outwardAngle = null) {
+  const count = damage >= 50 ? 2 : 1;
+  for (let i = 0; i < count; i++) {
+    const ang = outwardAngle != null
+      ? outwardAngle + (Math.random() - 0.5) * 1.2
+      : Math.random() * Math.PI * 2;
+    particles.push(createFragment(x, y, {
+      color: "#b8b8c0",
+      stroke: "rgba(20,20,30,0.6)",
+      size: 1.8 + Math.random() * 1.6,
+      angle: ang,
+      speed: 90 + Math.random() * 120,
+      ttl: 0.7 + Math.random() * 0.6,
+    }));
+  }
+  particles.push(createSpark(x, y));
+}
+
+// Hull plates breaking off — bigger, ship-tinted fragments with longer
+// ttl. `tint` is the ship's primary color; the fragment is rendered in
+// that color so the broken piece reads as part of that ship's hull.
+export function spawnHullBreakoff(particles, x, y, damage, tint, outwardAngle = null) {
+  const heavy = damage >= 80;
+  const count = heavy ? 2 + Math.floor(Math.random() * 2) : 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < count; i++) {
+    const ang = outwardAngle != null
+      ? outwardAngle + (Math.random() - 0.5) * 1.5
+      : Math.random() * Math.PI * 2;
+    particles.push(createFragment(x, y, {
+      color: tint,
+      stroke: "rgba(0,0,0,0.6)",
+      size: heavy ? (3.5 + Math.random() * 3) : (2.5 + Math.random() * 2.5),
+      angle: ang,
+      speed: 60 + Math.random() * 140,
+      ttl: 1.2 + Math.random() * 1.3,
+    }));
+  }
+  // A few sparks at the breakoff point too.
+  for (let i = 0; i < (heavy ? 4 : 2); i++) particles.push(createSpark(x, y));
 }
 
 // Module-just-destroyed burst: shockwave + heavy sparks + debris + initial

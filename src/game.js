@@ -8,7 +8,9 @@ import {
 } from "./modules.js";
 import {
   updateParticle, spawnHitSparks, spawnDestructionBurst, spawnContinuousSmoke,
+  spawnArmorFlakes, spawnHullBreakoff,
 } from "./particles.js";
+import { SIDES } from "./classes.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -541,16 +543,23 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
     const armorWear = remaining * wearRate;
     if (armorWear <= ship.armor) {
       ship.armor -= armorWear;
+      recordArmorImpact(ship, p, remaining, particles);
       return; // armor ate the whole hit
     }
     // Armor strips; convert remaining capacity back into incoming damage.
     const dmgAbsorbed = ship.armor / wearRate;
     ship.armor = 0;
+    // Big shed moment — pass the full absorbed amount so extra flakes spawn.
+    recordArmorImpact(ship, p, dmgAbsorbed * 1.2, particles);
     remaining = remaining - dmgAbsorbed;
     if (remaining <= 0) return;
   }
 
-  // Step 3: Route to modules (if any matched) or to central hull.
+  // Step 3: Damage now hits the hull (either via modules or directly).
+  // Record a persistent hull scar + spawn breakoff fragments at the
+  // impact point regardless of whether modules absorb part of the hit.
+  recordHullImpact(ship, p, remaining, particles);
+
   if (moduleTargets && moduleTargets.length > 0) {
     for (const { module, weight } of moduleTargets) {
       if (module.disabled) continue;
@@ -582,6 +591,74 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
   ship.hp -= remaining;
 }
 
+// Record an armor impact: a chipped/scratched flake scar at the impact
+// point on the ship-local frame, plus light-gray fragments tumbling
+// outward in world space.
+function recordArmorImpact(ship, p, dmg, particles) {
+  if (!p || !p.pos) return;
+  const local = worldToLocal(ship, p.pos.x, p.pos.y);
+  addImpactScar(ship, "armor-flake", local.x, local.y, dmg);
+  if (!particles) return;
+  const ang = Math.atan2(p.pos.y - ship.pos.y, p.pos.x - ship.pos.x);
+  spawnArmorFlakes(particles, p.pos.x, p.pos.y, dmg, ang);
+}
+
+// Record a hull impact: a dark gouge with hot rim that grows under
+// sustained nearby fire, plus tinted hull fragments breaking off.
+function recordHullImpact(ship, p, dmg, particles) {
+  if (!p || !p.pos) return;
+  const local = worldToLocal(ship, p.pos.x, p.pos.y);
+  addImpactScar(ship, "hull-hole", local.x, local.y, dmg);
+  if (!particles) return;
+  const ang = Math.atan2(p.pos.y - ship.pos.y, p.pos.x - ship.pos.x);
+  const tint = SIDES[ship.side].primary;
+  spawnHullBreakoff(particles, p.pos.x, p.pos.y, dmg, tint, ang);
+}
+
+// Merge nearby same-kind scars into one growing mark; otherwise append
+// a fresh entry. Bounded by MAX_SCARS so the array stays cheap to draw
+// even after a long firefight. Scar size is capped relative to ship
+// radius so a hole on a fighter doesn't eat the whole silhouette.
+function addImpactScar(ship, kind, localX, localY, dmg) {
+  const R = ship.spec && ship.spec.radius;
+  if (!R) return;
+  // Clamp to the silhouette so scars don't paint outside the hull.
+  const rMax = R * 0.92;
+  const d2 = localX * localX + localY * localY;
+  if (d2 > rMax * rMax) {
+    const d = Math.sqrt(d2);
+    localX = localX / d * rMax;
+    localY = localY / d * rMax;
+  }
+  const sizeCap = kind === "hull-hole" ? R * 0.17 : R * 0.13;
+  const grow = Math.min(dmg * 0.055, sizeCap * 0.7);
+  const mergeDist2 = (R * 0.18) * (R * 0.18);
+  for (const s of ship.scars) {
+    if (s.kind !== kind) continue;
+    const dx = s.lx - localX;
+    const dy = s.ly - localY;
+    if (dx * dx + dy * dy < mergeDist2) {
+      s.size = Math.min(sizeCap, s.size + grow);
+      return;
+    }
+  }
+  const MAX_SCARS = 26;
+  if (ship.scars.length >= MAX_SCARS) {
+    let idx = 0; let smallest = Infinity;
+    for (let i = 0; i < ship.scars.length; i++) {
+      if (ship.scars[i].size < smallest) { smallest = ship.scars[i].size; idx = i; }
+    }
+    ship.scars.splice(idx, 1);
+  }
+  ship.scars.push({
+    kind,
+    lx: localX,
+    ly: localY,
+    size: Math.max(1.2, grow),
+    seed: Math.random(),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Beam ticking. Each beam applies its damage to the locked target on the
 // first frame it exists, then lingers as visual for `ttl` seconds.
@@ -597,7 +674,12 @@ function applyAndAgeBeams(game, dt) {
         const dy = t.pos.y - beam.origin.y;
         const d2 = dx * dx + dy * dy;
         if (d2 <= beam.range * beam.range) {
-          applyDamage(t, { damage: beam.damage, kind: "laser", fromKlass: "battleship" });
+          applyDamage(
+            t,
+            { damage: beam.damage, kind: "laser", fromKlass: "battleship", pos: { x: t.pos.x, y: t.pos.y } },
+            null,
+            game.particles,
+          );
           if (t.hp <= 0) t.dead = true;
           beam.hit = { x: t.pos.x, y: t.pos.y };
         } else {

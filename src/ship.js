@@ -145,6 +145,12 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     armor: spec.armor ? spec.armor.max : 0,
     armorMax: spec.armor ? spec.armor.max : 0,
     armorFlash: 0,     // visual: brief flash when armor takes a hit
+    // Persistent battle damage marks, painted on top of the hull sprite.
+    // Each entry: { lx, ly, size, kind: "armor-flake" | "hull-hole", seed }.
+    // Positions are in ship-local (world units), so they rotate with the
+    // ship. Sustained fire on the same spot grows an existing scar instead
+    // of stacking new ones (see addImpactScar in game.js).
+    scars: [],
     // Missile state (single-shot weapons like the fighter's missile).
     missileCd: 0,
     aiMissileCd: 0,
@@ -763,6 +769,58 @@ function updateHeavyLaser(ship, world) {
 // ---------------------------------------------------------------------------
 // Rendering.
 // ---------------------------------------------------------------------------
+
+// Paint one persistent battle scar inside the ship's rotated frame.
+// "armor-flake" reads as a chipped/scratched plate (light irregular
+// patch), "hull-hole" as a dark gouge with a hot rim. Both are drawn
+// from a deterministic seed so the silhouette doesn't flicker frame to
+// frame even though we re-generate the polygon path on every draw.
+function drawScar(ctx, sc) {
+  const r = sc.size;
+  if (r <= 0.2) return;
+  ctx.save();
+  ctx.translate(sc.lx, sc.ly);
+  ctx.rotate(sc.seed * Math.PI * 2);
+  if (sc.kind === "armor-flake") {
+    // Light scratched-metal chip — bright patch with a dark seam.
+    ctx.fillStyle = "rgba(190,190,200,0.55)";
+    ctx.strokeStyle = "rgba(30,30,40,0.7)";
+    ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    const n = 6;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const nr = r * (0.6 + 0.55 * Math.sin(sc.seed * 13.7 + i * 2.3));
+      const x = Math.cos(a) * nr;
+      const y = Math.sin(a) * nr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    // Hull hole — hot orange rim, dark irregular bore.
+    ctx.strokeStyle = "rgba(255,130,50,0.7)";
+    ctx.lineWidth = Math.max(0.8, r * 0.25);
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.05, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    ctx.beginPath();
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const nr = r * (0.65 + 0.45 * Math.sin(sc.seed * 17.1 + i * 3.1));
+      const x = Math.cos(a) * nr;
+      const y = Math.sin(a) * nr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+// ---------------------------------------------------------------------------
 export function drawShip(ctx, ship) {
   const s = ship.spec;
   const tint = SIDES[ship.side].primary;
@@ -791,6 +849,14 @@ export function drawShip(ctx, ship) {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+  }
+
+  // Persistent battle damage — armor flakes and hull holes accumulated
+  // from incoming fire. Drawn inside the rotated frame so they ride with
+  // the hull. Holes grow under sustained nearby fire (game.js merges
+  // nearby impacts into the same scar instead of stacking new ones).
+  if (ship.scars && ship.scars.length > 0) {
+    for (const sc of ship.scars) drawScar(ctx, sc);
   }
 
   // Broadside gun ports. Each side dims when its battery module is dead.
