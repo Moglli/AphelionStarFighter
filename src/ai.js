@@ -118,8 +118,10 @@ export function updateAI(ship, world, dt) {
     return;
   }
 
-  if (ship.klass === "fighter" || ship.klass === "bomber") {
+  if (ship.klass === "fighter") {
     flybyAI(ship, target, dt, world);
+  } else if (ship.klass === "bomber") {
+    bomberStandoffAI(ship, target, dt, world);
   } else if (ship.klass === "battleship") {
     battleshipAI(ship, target, dt, world);
   } else {
@@ -176,47 +178,152 @@ function packCohesion(ship, pack) {
   return { x: dx / d, y: dy / d };
 }
 
-const FORWARD_ARC_HALF = Math.PI / 4;
-const FORWARD_ARC_COS = Math.cos(FORWARD_ARC_HALF);
+// Per-class threat scale — small craft treat a battleship as much more
+// dangerous than a frigate even before checking specific weapon ranges.
+const KLASS_THREAT = {
+  battleship: 2.4, carrier: 1.8, station: 2.2,
+  cruiser: 1.6, frigate: 1.0, bomber: 0.5,
+};
+const FORWARD_ARC_COS_WIDE = Math.cos(Math.PI / 3); // 60° half-angle
+
+// Aggregate danger vector for a small craft. Each enemy contributes a
+// push proportional to its threat radius (PD, missile pods, heavy laser,
+// primary weapon) and weighted by class. Returned as a unit vector —
+// the magnitude information is lost on normalization, so the caller has
+// to weight the blend. Returns null if no enemy is exerting pressure.
+//
+// Specifically considered:
+//   - PD: radial repulsion (PD fires in all directions). The dominant
+//     small-craft threat at short range.
+//   - Missile pods: long-range radial repulsion (missiles home).
+//   - Heavy laser: forward-cone push perpendicular to the beam axis.
+//   - Primary weapon (cannon / barrage): broadside ships get a
+//     PREDICTIVE push along the threat's forward axis whenever the
+//     small craft is broadly perpendicular, not only once already in
+//     the arc — broadside ships are rotating to bring their guns to
+//     bear and the small craft has at most a second or two before
+//     being in the kill zone. Forward-firing ships push laterally
+//     when the craft is in the wider 60° nose arc.
 function bigShipDanger(ship, ships) {
   let ax = 0, ay = 0;
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
     if (other.klass === "fighter") continue;
-    const range = other.spec.weapon.range;
+    if (other === ship) continue;
+
     const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
     const d2 = dx * dx + dy * dy;
-    if (d2 > range * range) continue;
     const d = Math.sqrt(d2);
     if (d < 1e-6) continue;
-    const fwdX = Math.cos(other.heading), fwdY = Math.sin(other.heading);
     const toUsX = dx / d, toUsY = dy / d;
+    const fwdX = Math.cos(other.heading), fwdY = Math.sin(other.heading);
     const portX = -fwdY, portY = fwdX;
-    const urgency = 1 - d / range;
+    const klassMul = KLASS_THREAT[other.klass] || 1.0;
 
-    if (other.spec.firingMode === "broadside") {
-      const arcCos = Math.cos(other.spec.broadsideArc || Math.PI / 4);
-      const stbdX = fwdY, stbdY = -fwdX;
-      const portDot = toUsX * portX + toUsY * portY;
-      const stbdDot = toUsX * stbdX + toUsY * stbdY;
-      if (portDot < arcCos && stbdDot < arcCos) continue;
-      const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
-      const dotF = myFwdX * fwdX + myFwdY * fwdY;
-      const sign = dotF >= 0 ? 1 : -1;
-      ax += sign * fwdX * urgency;
-      ay += sign * fwdY * urgency;
-    } else {
-      if (toUsX * fwdX + toUsY * fwdY < FORWARD_ARC_COS) continue;
-      const portDot = toUsX * portX + toUsY * portY;
-      const sign = portDot >= 0 ? 1 : -1;
-      ax += sign * portX * urgency;
-      ay += sign * portY * urgency;
+    let pushX = 0, pushY = 0;
+    const spec = other.spec;
+
+    // 1. PD point-defence — small-craft killer at 380-480 range.
+    //    Bias is radial (PD has a 360° arc) with a buffer past the
+    //    nominal range so AI starts peeling off BEFORE entering it.
+    if (spec.pdCannons) {
+      const pdR = spec.pdCannons.range * 1.25;
+      if (d < pdR) {
+        const u = (1 - d / pdR);
+        const w = u * u * 1.5;
+        pushX += toUsX * w;
+        pushY += toUsY * w;
+      }
     }
+
+    // 2. Missile pods — long-range homing. Radial again because they
+    //    track. Softer weight than PD since flares / dodging works.
+    if (spec.missilePods) {
+      const mR = spec.missilePods.range;
+      if (d < mR) {
+        const u = 1 - d / mR;
+        pushX += toUsX * u * 0.55;
+        pushY += toUsY * u * 0.55;
+      }
+    }
+
+    // 3. Heavy laser — instant hit, fatal damage. Push perpendicular
+    //    if we're in its forward firing arc.
+    if (spec.heavyLaser) {
+      const lR = spec.heavyLaser.range;
+      if (d < lR) {
+        const arc = spec.heavyLaser.arc || Math.PI * 0.55;
+        const arcCos = Math.cos(arc);
+        if (toUsX * fwdX + toUsY * fwdY > arcCos) {
+          const u = 1 - d / lR;
+          const portDot = toUsX * portX + toUsY * portY;
+          const sign = portDot >= 0 ? 1 : -1;
+          pushX += sign * portX * u * 1.6;
+          pushY += sign * portY * u * 1.6;
+        }
+      }
+    }
+
+    // 4. Primary cannon / barrage. Only present on ships with a real
+    //    weapon (carriers and stations may have none).
+    const w = spec.weapon;
+    if (w && w.range && d < w.range) {
+      const u = 1 - d / w.range;
+      if (spec.firingMode === "broadside") {
+        // Broadside ships rotate to bring beams onto a target. Push
+        // along their forward axis whenever the small craft is roughly
+        // perpendicular — get to the bow or stern, not the broadside.
+        const arcCos = Math.cos(spec.broadsideArc || Math.PI / 4);
+        const stbdX = fwdY, stbdY = -fwdX;
+        const portDot = toUsX * portX + toUsY * portY;
+        const stbdDot = toUsX * stbdX + toUsY * stbdY;
+        const lateralExposure = Math.max(Math.abs(portDot), Math.abs(stbdDot));
+        const inArc = portDot >= arcCos || stbdDot >= arcCos;
+        if (lateralExposure > 0.25 || inArc) {
+          // Sign: shove toward the closer fore/aft cap.
+          const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
+          const dotF = myFwdX * fwdX + myFwdY * fwdY;
+          const sign = dotF >= 0 ? 1 : -1;
+          const boost = inArc ? 2.0 : 0.7; // hard push if already in arc
+          pushX += sign * fwdX * u * boost;
+          pushY += sign * fwdY * u * boost;
+        }
+      } else if (spec.firingMode === "forward") {
+        // 60° half-cone — wider than the old 45° check, since forward
+        // ships also rotate to track and there's no benefit to lingering
+        // in the cone.
+        if (toUsX * fwdX + toUsY * fwdY > FORWARD_ARC_COS_WIDE) {
+          const portDot = toUsX * portX + toUsY * portY;
+          const sign = portDot >= 0 ? 1 : -1;
+          pushX += sign * portX * u * 1.3;
+          pushY += sign * portY * u * 1.3;
+        }
+      }
+    }
+
+    ax += pushX * klassMul;
+    ay += pushY * klassMul;
   }
   const aLen = Math.hypot(ax, ay);
   if (aLen < 1e-6) return null;
   return { x: ax / aLen, y: ay / aLen };
+}
+
+// Quick query: is `ship` inside ANY enemy capital's PD bubble (with a
+// buffer)? Used by fighters to force a break-off when they've drifted
+// too deep into PD range, and by bombers to suppress gun runs that
+// would commit them to lethal proximity.
+function insideEnemyPDRange(ship, ships) {
+  for (const other of ships) {
+    if (other.dead || other.side === ship.side) continue;
+    if (!other.spec.pdCannons) continue;
+    const r = other.spec.pdCannons.range * 1.1;
+    const dx = other.pos.x - ship.pos.x;
+    const dy = other.pos.y - ship.pos.y;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  return false;
 }
 
 function tailDanger(ship, ships) {
@@ -267,10 +374,15 @@ function flybyAI(ship, target, dt, world) {
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
   const perp = { x: -dir.y, y: dir.x };
 
-  const REGROUP_DIST = 600;
-  const PASS_ZONE_DIST = 500;
+  // Regroup distance pushed out so the break-off actually clears the
+  // capital's PD bubble (max PD range ~480) and a chunk of broadside
+  // engagement. Pass-zone widened correspondingly.
+  const REGROUP_DIST = 950;
+  const PASS_ZONE_DIST = 600;
   const MIN_BREAK_TIME = 1.2;
-  const MAX_APPROACH_TIME = 12;
+  const MAX_APPROACH_TIME = 10;
+
+  const inPdZone = insideEnemyPDRange(ship, world ? world.ships : []);
 
   if (ship.attackState === "approach") {
     ship.approachTimer += dt;
@@ -285,7 +397,12 @@ function flybyAI(ship, target, dt, world) {
     const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
     const inPassZone = dist < PASS_ZONE_DIST;
     const settled = ship.approachTimer > 0.5;
-    if ((departing && inPassZone && settled) || ship.approachTimer > MAX_APPROACH_TIME) {
+    // Force break-off if we've drifted into PD range — we either fired
+    // and are now in lethal proximity, or we never had a shot lined up
+    // and there's no point staying.
+    if ((departing && inPassZone && settled)
+        || ship.approachTimer > MAX_APPROACH_TIME
+        || (inPdZone && settled)) {
       ship.attackState = "break";
       ship.breakTimer = MIN_BREAK_TIME;
       ship.approachTimer = 0;
@@ -295,8 +412,8 @@ function flybyAI(ship, target, dt, world) {
     const tangY = perp.y * ship.breakSide;
     const outX = -dir.x;
     const outY = -dir.y;
-    const bx = tangX * 1.0 + outX * 0.5;
-    const by = tangY * 1.0 + outY * 0.5;
+    const bx = tangX * 1.0 + outX * 0.7;
+    const by = tangY * 1.0 + outY * 0.7;
     const bLen = Math.hypot(bx, by);
     c.thrust = { x: 0, y: 0 };
     c.aim = { x: bx / bLen, y: by / bLen };
@@ -304,7 +421,7 @@ function flybyAI(ship, target, dt, world) {
 
     ship.breakTimer -= dt;
     const minTimeMet = ship.breakTimer <= 0;
-    const farEnough = dist > REGROUP_DIST;
+    const farEnough = dist > REGROUP_DIST && !inPdZone;
     const breakOverdue = ship.breakTimer <= -3.0;
     if ((minTimeMet && farEnough) || breakOverdue) {
       ship.attackState = "approach";
@@ -321,9 +438,14 @@ function flybyAI(ship, target, dt, world) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.35; ay += cohesion.y * 0.35; }
-    if (danger)   { ax += danger.x   * 1.30; ay += danger.y   * 1.30; }
+    // Avoidance weight is high because heading-locked fighters can't
+    // strafe — turning IS dodging, and slow turn-rate means we need
+    // sharp commit to actually get out of the kill zone in time.
+    if (danger)   { ax += danger.x   * 1.95; ay += danger.y   * 1.95; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
     c.aim = { x: ax, y: ay };
+    // Suppress firing when avoiding heavy fire. Bombers' missile pods
+    // auto-fire elsewhere — they keep delivering payload while running.
     if (danger) c.firing = false;
   }
 
@@ -340,6 +462,78 @@ function flybyAI(ship, target, dt, world) {
         ship.aiMissileCd = s.aiMissileCooldown || s.missile.cooldown;
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bomber behaviour: standoff orbit at the outer edge of missile-pod
+// range. Pods auto-fire on any target inside acquireRange (see
+// updateMissilePodFire in ship.js), so the bomber can deliver its full
+// payload without committing to a fly-through that would put it inside
+// enemy PD bubbles and primary-weapon arcs. Heading-locked flight
+// model still applies: the bomber points along an orbit tangent
+// in the sweet spot, retreats if it drifts inside the standoff band,
+// closes if too far. Threat avoidance overrides the orbit when any
+// heavy ship's weapon envelope creeps onto the bomber.
+// ---------------------------------------------------------------------------
+function bomberStandoffAI(ship, target, dt, world) {
+  const c = ship.controller;
+  const s = ship.spec;
+
+  const rel = V.sub(target.pos, ship.pos);
+  const dist = V.len(rel);
+  const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
+  const perp = { x: -dir.y, y: dir.x };
+
+  // Pod range is the upper bound — sit just inside it so missiles
+  // can lock but the bomber stays clear of enemy guns.
+  const pods = s.missilePods;
+  const podRange = pods ? pods.range : 1700;
+  const STANDOFF = Math.min(podRange * 0.92, 1600);
+  const DEAD_BAND = 200;
+
+  let aim;
+  if (dist > STANDOFF + DEAD_BAND) {
+    aim = dir; // close
+  } else if (dist < STANDOFF - DEAD_BAND) {
+    aim = { x: -dir.x, y: -dir.y }; // back off
+  } else {
+    // Sweet spot — orbit tangentially. Use ship-id parity for a
+    // consistent direction so the bomber doesn't oscillate.
+    const orbitSign = (ship.id % 2 === 0) ? 1 : -1;
+    aim = { x: perp.x * orbitSign, y: perp.y * orbitSign };
+  }
+
+  c.thrust = { x: 0, y: 0 };
+  c.aim = aim;
+
+  // Bombers' light gun has range ~600 — way inside enemy primary
+  // weapon envelopes. Fire it only when nose-on AND in range AND not
+  // sitting inside any PD bubble. In standoff this almost never
+  // triggers, which is fine: the auto-firing pods are the real damage.
+  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+  const aimNorm = V.norm(aim);
+  const aligned = V.dot(fwd, aimNorm);
+  const inPd = insideEnemyPDRange(ship, world ? world.ships : []);
+  c.firing = !inPd && dist <= s.weapon.range && aligned > 0.85
+          && V.dot(fwd, dir) > 0.7;
+  c.firingMissile = false;
+
+  // Threat avoidance — same blend as fighter, but the avoidance weight
+  // is even higher because bombers are slower, sluggish to turn, and
+  // expensive to lose.
+  const pack = world && world.packs ? world.packs.get(ship.packId) : null;
+  const cohesion = packCohesion(ship, pack);
+  const danger = bigShipDanger(ship, world ? world.ships : []);
+  const tail = tailDanger(ship, world ? world.ships : []);
+  if (cohesion || danger || tail) {
+    const aimN = V.norm(c.aim);
+    let ax = aimN.x, ay = aimN.y;
+    if (cohesion) { ax += cohesion.x * 0.30; ay += cohesion.y * 0.30; }
+    if (danger)   { ax += danger.x   * 2.20; ay += danger.y   * 2.20; }
+    if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
+    c.aim = { x: ax, y: ay };
+    if (danger) c.firing = false;
   }
 }
 
