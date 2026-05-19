@@ -19,17 +19,18 @@ const CACHE = new Map();
 const SUPERSAMPLE = 2;
 
 // Per-class detail tables. Bigger ships get more panel lines + engines.
+// Engine counts and back-edge x-positions are exported so drawShip can
+// render the plumes live (intensity scales with engine module HP; full
+// black-out when the engine module is destroyed).
 const PANEL_LINES = {
   fighter: 1, bomber: 2, frigate: 2, cruiser: 3,
   battleship: 4, carrier: 5, station: 0,
 };
-const ENGINES = {
+export const ENGINES = {
   fighter: 1, bomber: 2, frigate: 2, cruiser: 3,
   battleship: 5, carrier: 6, station: 0,
 };
-// X position (in units of R) where engine glow centers sit — depends on
-// the back-edge of each class's hull silhouette.
-const ENGINE_X = {
+export const ENGINE_X = {
   fighter: -0.6, bomber: -0.75, frigate: -0.85,
   cruiser: -0.95, battleship: -0.95, carrier: -0.95,
 };
@@ -188,34 +189,11 @@ function drawSchematic(ctx, race, klass, side, R) {
     ctx.fill();
   }
 
-  // 7. Engine glow — radial gradient circles at the rear, side-coloured.
-  const engineCount = ENGINES[klass] || 0;
-  if (engineCount > 0) {
-    const ex = (ENGINE_X[klass] || -0.9) * R;
-    const glowHi = side === "blue" ? "rgba(140,210,255,0.95)" : "rgba(255,180,100,0.95)";
-    const glowMid = side === "blue" ? "rgba(80,170,255,0.50)" : "rgba(255,130,60,0.50)";
-    const glowR = R * (klass === "fighter" ? 0.18 : 0.14);
-    for (let i = 0; i < engineCount; i++) {
-      const yOff = engineCount === 1
-        ? 0
-        : ((i / (engineCount - 1)) - 0.5) * R * 1.05;
-      const g = ctx.createRadialGradient(ex, yOff, 0, ex, yOff, glowR * 2.4);
-      g.addColorStop(0.0, glowHi);
-      g.addColorStop(0.45, glowMid);
-      g.addColorStop(1.0, "rgba(0,0,0,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(ex, yOff, glowR * 2.4, 0, Math.PI * 2);
-      ctx.fill();
-      // Bright core dot inside each engine.
-      ctx.fillStyle = "rgba(240,250,255,0.95)";
-      ctx.beginPath();
-      ctx.arc(ex + R * 0.02, yOff, glowR * 0.35, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+  // Engine glow was baked here previously. It's now rendered live in
+  // drawShip (src/ship.js) so it can dim with engine HP and black out
+  // when the engine module is destroyed.
 
-  // 8. Outline stroke in the side tint — sharp silhouette read.
+  // 7. Outline stroke in the side tint — sharp silhouette read.
   ctx.strokeStyle = tint;
   ctx.lineWidth = Math.max(1, R * 0.05);
   ctx.stroke(hullPath);

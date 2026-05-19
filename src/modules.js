@@ -1,38 +1,57 @@
-// Capital-ship destructible subsystems.
+// Destructible ship subsystems.
 //
-// Battleships, carriers, and cruisers carry a list of modules — each
-// one a turret cluster, broadside battery, missile bay, hangar, or
-// heavy-laser mount. Modules have their own HP and a position on the
-// ship's local frame. Targeted damage that lands on a module's disc
-// drains that module's HP independently of the central hull. When a
-// module reaches 0 HP it becomes permanently `disabled` and drains its
-// `hullPenalty` from the ship's central HP in one shot — so stripping
-// modules accelerates the kill rather than replacing it.
+// Capitals (battleship / carrier / cruiser) carry a full module roster:
+// turret clusters, broadside batteries, missile bays, hangar, heavy-laser
+// mount, plus the engine. Smaller ships (fighter / bomber / frigate)
+// carry just a single targetable engine module — destroy it and the
+// ship goes dead in the water. Stations don't move, so no engine module.
+//
+// Modules have their own HP and a position on the ship's local frame.
+// Targeted damage that lands on a module's disc drains that module's HP
+// independently of the central hull. When a module reaches 0 HP it
+// becomes permanently `disabled` and drains its `hullPenalty` from the
+// ship's central HP in one shot — so stripping modules accelerates the
+// kill rather than replacing it. A disabled engine additionally zeros
+// out propulsion (see updateShip in ship.js).
 //
 // Offsets and radii are normalized to spec.radius (same convention as
 // hull polygons): offset.x of 0.7 means 70% of the ship's radius along
 // its forward axis.
 
 export const MODULES = {
+  fighter: [
+    // Single tail-mounted thruster — destroy it and the fighter is
+    // unable to maintain flight (vel decays, turn rate craters).
+    { name: "engine",         offset: { x: -0.65, y:  0.00 }, radius: 0.28, hp:  18, hullPenalty:  8 },
+  ],
+  bomber: [
+    { name: "engine",         offset: { x: -0.70, y:  0.00 }, radius: 0.26, hp:  32, hullPenalty: 15 },
+  ],
+  frigate: [
+    { name: "engine",         offset: { x: -0.75, y:  0.00 }, radius: 0.22, hp:  70, hullPenalty: 30 },
+  ],
   battleship: [
     { name: "laser",          offset: { x:  0.70, y:  0.00 }, radius: 0.22, hp: 220, hullPenalty: 100 },
     { name: "missile-fwd",    offset: { x:  0.20, y:  0.00 }, radius: 0.20, hp: 160, hullPenalty: 80  },
-    { name: "missile-aft",    offset: { x: -0.40, y:  0.00 }, radius: 0.20, hp: 160, hullPenalty: 80  },
+    { name: "missile-aft",    offset: { x: -0.40, y:  0.00 }, radius: 0.18, hp: 160, hullPenalty: 80  },
     { name: "broadside-port", offset: { x: -0.10, y: -0.70 }, radius: 0.24, hp: 200, hullPenalty: 100 },
     { name: "broadside-stbd", offset: { x: -0.10, y:  0.70 }, radius: 0.24, hp: 200, hullPenalty: 100 },
     { name: "pd-bow",         offset: { x:  0.50, y:  0.40 }, radius: 0.22, hp: 120, hullPenalty: 50  },
     { name: "pd-stern",       offset: { x: -0.55, y:  0.40 }, radius: 0.22, hp: 120, hullPenalty: 50  },
+    { name: "engine",         offset: { x: -0.78, y:  0.00 }, radius: 0.16, hp: 200, hullPenalty: 90  },
   ],
   carrier: [
     { name: "hangar",         offset: { x:  0.00, y:  0.00 }, radius: 0.32, hp: 300, hullPenalty: 150 },
     { name: "pd-port",        offset: { x:  0.10, y: -0.55 }, radius: 0.26, hp: 140, hullPenalty: 60  },
     { name: "pd-stbd",        offset: { x:  0.10, y:  0.55 }, radius: 0.26, hp: 140, hullPenalty: 60  },
+    { name: "engine",         offset: { x: -0.78, y:  0.00 }, radius: 0.18, hp: 220, hullPenalty: 100 },
   ],
   cruiser: [
     { name: "broadside-port", offset: { x: -0.10, y: -0.65 }, radius: 0.22, hp: 150, hullPenalty: 70 },
     { name: "broadside-stbd", offset: { x: -0.10, y:  0.65 }, radius: 0.22, hp: 150, hullPenalty: 70 },
     { name: "torpedo-bay",    offset: { x:  0.25, y:  0.00 }, radius: 0.20, hp: 140, hullPenalty: 70 },
-    { name: "pd-cluster",     offset: { x: -0.55, y:  0.00 }, radius: 0.25, hp: 100, hullPenalty: 50 },
+    { name: "pd-cluster",     offset: { x: -0.50, y:  0.00 }, radius: 0.22, hp: 100, hullPenalty: 50 },
+    { name: "engine",         offset: { x: -0.82, y:  0.00 }, radius: 0.15, hp: 140, hullPenalty: 60 },
   ],
 };
 

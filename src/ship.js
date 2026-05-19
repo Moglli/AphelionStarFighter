@@ -2,7 +2,7 @@ import { SIDES } from "./classes.js";
 import { resolveSpec, deepMerge } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
-import { getSprite } from "./sprites.js";
+import { getSprite, ENGINES, ENGINE_X } from "./sprites.js";
 import {
   buildModules, pdTurretToModuleName, podToModuleName, pickBomberAimModule,
 } from "./modules.js";
@@ -205,11 +205,22 @@ export function updateShip(ship, dt, world) {
   const s = ship.spec;
   const c = ship.controller;
 
+  // Engine module gating — when the engine is destroyed the ship loses
+  // propulsion entirely. Current velocity bleeds away exponentially
+  // (dead-in-the-water drift) and the thrust controller is ignored.
+  const engineDead = ship.moduleByName && ship.moduleByName.engine
+                  && ship.moduleByName.engine.disabled;
+
   // Fighters and bombers use an aircraft flight model: velocity is locked
   // to nose direction at constant maxSpeed. They cannot strafe or
   // snap-turn — the only way to change direction is to bank (rotate
   // heading), which is turn-rate-limited.
-  if (ship.klass === "fighter" || ship.klass === "bomber") {
+  if (engineDead) {
+    // Half-life ~0.45s — visibly drifts a beat, then stops.
+    const decay = Math.exp(-1.5 * dt);
+    ship.vel.x *= decay;
+    ship.vel.y *= decay;
+  } else if (ship.klass === "fighter" || ship.klass === "bomber") {
     ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
     ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
   } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
@@ -243,11 +254,14 @@ export function updateShip(ship, dt, world) {
   if (ship.pos.y < b.minY + s.radius) { ship.pos.y = b.minY + s.radius; if (ship.vel.y < 0) ship.vel.y = 0; }
   if (ship.pos.y > b.maxY - s.radius) { ship.pos.y = b.maxY - s.radius; if (ship.vel.y > 0) ship.vel.y = 0; }
 
-  // Rotate heading toward aim direction at class turn rate.
+  // Rotate heading toward aim direction at class turn rate. Engine death
+  // also tanks turn rate — without main thrust the ship can barely
+  // adjust attitude on residual RCS.
   if (c.aim && (c.aim.x !== 0 || c.aim.y !== 0)) {
     const target = V.angle(c.aim);
     const delta = V.angleDelta(ship.heading, target);
-    const step = Math.sign(delta) * Math.min(Math.abs(delta), s.turnRate * dt);
+    const turnRate = engineDead ? s.turnRate * 0.15 : s.turnRate;
+    const step = Math.sign(delta) * Math.min(Math.abs(delta), turnRate * dt);
     ship.heading += step;
   }
 
@@ -770,6 +784,55 @@ function updateHeavyLaser(ship, world) {
 // Rendering.
 // ---------------------------------------------------------------------------
 
+// Live engine glow / thrust plume. Replaces the previously-baked sprite
+// glow so the visual reacts to the engine module's HP — full brightness
+// when healthy, dimmer + jittery when damaged, completely off when the
+// engine is destroyed (the module's crater marker handles the dead-look).
+// Called inside the ship's rotated frame; ship faces +X so the glow
+// sits at -R on the X axis. ENGINES / ENGINE_X define count and rear
+// offset per class (lifted from the old sprite code, unchanged values).
+function drawEnginePlumes(ctx, ship) {
+  const klass = ship.klass;
+  const count = ENGINES[klass] || 0;
+  if (count <= 0) return;
+  const R = ship.spec.radius;
+  const side = ship.side;
+
+  // Intensity falls off with engine HP; full black-out when disabled.
+  let intensity = 1;
+  const eng = ship.moduleByName && ship.moduleByName.engine;
+  if (eng) {
+    if (eng.disabled) return;
+    const frac = eng.hp / eng.hpMax;
+    intensity = 0.35 + frac * 0.65; // 35% at near-death, 100% at full
+    if (frac < 0.4) {
+      // Stutter visible when the engine is heavily damaged.
+      intensity *= 0.7 + Math.random() * 0.3;
+    }
+  }
+
+  const ex = (ENGINE_X[klass] || -0.9) * R;
+  const glowHi = side === "blue" ? "rgba(140,210,255," : "rgba(255,180,100,";
+  const glowMid = side === "blue" ? "rgba(80,170,255,"  : "rgba(255,130,60,";
+  const glowR = R * (klass === "fighter" ? 0.18 : 0.14);
+  for (let i = 0; i < count; i++) {
+    const yOff = count === 1 ? 0 : ((i / (count - 1)) - 0.5) * R * 1.05;
+    const g = ctx.createRadialGradient(ex, yOff, 0, ex, yOff, glowR * 2.4);
+    g.addColorStop(0.0, glowHi + (0.95 * intensity).toFixed(3) + ")");
+    g.addColorStop(0.45, glowMid + (0.50 * intensity).toFixed(3) + ")");
+    g.addColorStop(1.0, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(ex, yOff, glowR * 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright white-hot core dot.
+    ctx.fillStyle = "rgba(240,250,255," + (0.95 * intensity).toFixed(3) + ")";
+    ctx.beginPath();
+    ctx.arc(ex + R * 0.02, yOff, glowR * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // Paint one persistent battle scar inside the ship's rotated frame.
 // "armor-flake" reads as a chipped/scratched plate (light irregular
 // patch), "hull-hole" as a dark gouge with a hot rim. Both are drawn
@@ -850,6 +913,13 @@ export function drawShip(ctx, ship) {
     ctx.fill();
     ctx.stroke();
   }
+
+  // Engine plumes — drawn live so they can dim with engine module HP and
+  // black out entirely when the engine module is destroyed. Reads
+  // ship.moduleByName.engine if present (added for every mobile class).
+  // Stations have no engine entry; their ENGINES[klass] is 0 so this
+  // is a no-op for them.
+  drawEnginePlumes(ctx, ship);
 
   // Persistent battle damage — armor flakes and hull holes accumulated
   // from incoming fire. Drawn inside the rotated frame so they ride with
