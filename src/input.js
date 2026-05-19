@@ -10,6 +10,8 @@ import { saveStore } from "./save.js";
 import { events } from "./events.js";
 import { todaySeed } from "./modes/daily.js";
 import { Hangar } from "./hangar.js";
+import { rally } from "./rally.js";
+import { minimapHit, minimapToWorld } from "./hud.js";
 
 const DEADZONE = 0.15;
 
@@ -529,6 +531,18 @@ export class InputManager {
     if (this.missileBtn.hit(x, y)) {
       this.canvas.setPointerCapture(e.pointerId);
       this.missileBtn.start(e.pointerId);
+      return;
+    }
+
+    // Minimap tap → rally command. First tap pins the source area,
+    // second tap orders the friendlies inside that area to the new
+    // point. Always consumes the click so the right-stick claim below
+    // doesn't fire a stray aim swing toward the corner of the screen.
+    const w0 = this.canvas.clientWidth;
+    const h0 = this.canvas.clientHeight;
+    if (minimapHit(w0, h0, x, y)) {
+      const world = minimapToWorld(w0, h0, x, y);
+      if (this._gameRef) rally.tap(this._gameRef, world.x, world.y);
       return;
     }
 

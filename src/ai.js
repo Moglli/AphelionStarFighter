@@ -1,5 +1,34 @@
 import * as V from "./vec.js";
 
+const RALLY_ARRIVAL_RADIUS = 220;
+const RALLY_ARRIVAL_RADIUS_SQ = RALLY_ARRIVAL_RADIUS * RALLY_ARRIVAL_RADIUS;
+
+function rallyArrived(ship) {
+  const t = ship.rallyTarget;
+  if (!t) return true;
+  const dx = ship.pos.x - t.x;
+  const dy = ship.pos.y - t.y;
+  return dx * dx + dy * dy <= RALLY_ARRIVAL_RADIUS_SQ;
+}
+
+// Steer the ship toward its rally target. Aircraft (fighter/bomber)
+// lock velocity to heading, so we only need to set aim. Capitals get
+// thrust set directly. Weapons hold fire during transit — the order is
+// "move there", not "engage". Once arrived, ai.js restores normal logic.
+function applyRally(ship) {
+  const c = ship.controller;
+  const dx = ship.rallyTarget.x - ship.pos.x;
+  const dy = ship.rallyTarget.y - ship.pos.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const nx = dx / d, ny = dy / d;
+  c.aim = { x: nx, y: ny };
+  c.thrust = (ship.klass === "fighter" || ship.klass === "bomber")
+    ? { x: 0, y: 0 }            // aircraft model carries them forward at maxSpeed
+    : { x: nx, y: ny };
+  c.firing = false;
+  c.firingMissile = false;
+}
+
 // Find nearest enemy to a ship.
 function nearestEnemy(ship, ships) {
   let best = null, bestD2 = Infinity;
@@ -72,6 +101,18 @@ function pickBomberTarget(ship, ships) {
 }
 
 export function updateAI(ship, world, dt) {
+  // Rally order overrides normal AI: ship heads straight for the
+  // designated point, ignoring targets, until it arrives. Restored to
+  // normal hunt logic once inside the arrival radius.
+  if (ship.rallyTarget) {
+    if (rallyArrived(ship)) {
+      ship.rallyTarget = null;
+    } else {
+      applyRally(ship);
+      return;
+    }
+  }
+
   // Carriers have their own passive routine — no target hunt, no orbit.
   if (ship.klass === "carrier") {
     carrierAI(ship, world);

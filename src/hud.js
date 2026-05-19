@@ -5,6 +5,7 @@ import { RACES } from "./races.js";
 import { MODES } from "./modes/index.js";
 import { saveStore } from "./save.js";
 import { progression } from "./progression.js";
+import { rally, sourceRadius } from "./rally.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
 
@@ -282,23 +283,102 @@ function drawSpectateOverlay(ctx, game, viewW, viewH) {
   ctx.textAlign = "left";
 }
 
+// Minimap layout — shared with input.js (hit-testing) and rally.js
+// (coord translation). Tappable: the rally system reads the tap location
+// and translates it to world space.
+const MINIMAP_W = 180;
+const MINIMAP_H = 135;
+const MINIMAP_MARGIN = 16;
+
+export function minimapRect(viewW, viewH) {
+  return {
+    x: viewW - MINIMAP_W - MINIMAP_MARGIN,
+    y: viewH - MINIMAP_H - MINIMAP_MARGIN,
+    w: MINIMAP_W,
+    h: MINIMAP_H,
+  };
+}
+
+export function minimapHit(viewW, viewH, x, y) {
+  const r = minimapRect(viewW, viewH);
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+
+/** Translate a tap inside the minimap rect to world-space coordinates. */
+export function minimapToWorld(viewW, viewH, x, y) {
+  const r = minimapRect(viewW, viewH);
+  const u = (x - r.x) / r.w;
+  const v = (y - r.y) / r.h;
+  return {
+    x: u * ARENA.width,
+    y: v * ARENA.height,
+  };
+}
+
 function drawMinimap(ctx, game, viewW, viewH) {
-  const mapW = 180, mapH = 135;
-  const x = viewW - mapW - 16;
-  const y = viewH - mapH - 16;
+  const rect = minimapRect(viewW, viewH);
+  const mapW = rect.w, mapH = rect.h;
+  const x = rect.x, y = rect.y;
   ctx.fillStyle = "rgba(0,0,0,0.45)";
   ctx.fillRect(x, y, mapW, mapH);
-  ctx.strokeStyle = "#456";
+  ctx.strokeStyle = rally.pending ? "#fd6" : "#456";
+  ctx.lineWidth = rally.pending ? 2 : 1;
   ctx.strokeRect(x, y, mapW, mapH);
+  ctx.lineWidth = 1;
 
   const sx = mapW / ARENA.width;
   const sy = mapH / ARENA.height;
+  const toMap = (wx, wy) => ({ x: x + wx * sx, y: y + wy * sy });
+
+  // Recent rally orders: a fading line from source → dest with arrival ring.
+  for (const o of rally.recentOrders) {
+    const a = Math.max(0, 1 - o.age / 4);
+    if (a <= 0) continue;
+    const s0 = toMap(o.source.x, o.source.y);
+    const d0 = toMap(o.dest.x, o.dest.y);
+    ctx.save();
+    ctx.globalAlpha = 0.5 * a;
+    ctx.strokeStyle = "#fd6";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(s0.x, s0.y);
+    ctx.lineTo(d0.x, d0.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#fd6";
+    ctx.beginPath();
+    ctx.arc(d0.x, d0.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Pending source pulse.
+  if (rally.pending) {
+    const p = toMap(rally.pending.x, rally.pending.y);
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+    const srcR = (sourceRadius() * sx);
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.3 * pulse;
+    ctx.strokeStyle = "#fd6";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, srcR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#fd6";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   for (const s of game.ships) {
     if (s.dead) continue;
     const px = x + s.pos.x * sx;
     const py = y + s.pos.y * sy;
     const isSpec = game.spectating && s.id === game.spectateTargetId;
-    ctx.fillStyle = (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
+    const onRally = !s.isPlayer && s.rallyTarget;
+    ctx.fillStyle = onRally
+      ? "#fd6"
+      : (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
     const r = (s.isPlayer || isSpec) ? 2.5
       : (s.klass === "carrier" ? 2.6
       : s.klass === "battleship" ? 2.2
@@ -308,6 +388,15 @@ function drawMinimap(ctx, game, viewW, viewH) {
     ctx.beginPath();
     ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // Hint banner above the minimap when a source tap is pending.
+  if (rally.pending) {
+    ctx.fillStyle = "#fd6";
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("RALLY: tap destination", x + mapW, y - 6);
+    ctx.textAlign = "left";
   }
 }
 

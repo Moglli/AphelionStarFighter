@@ -13,6 +13,7 @@ import {
   updateWreck, updateDebris,
   pushWreck, pushDebris,
 } from "./wreckage.js";
+import { rally } from "./rally.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -353,6 +354,7 @@ export function update(game, dt) {
   if (game.state !== "playing") return;
 
   if (!game.matchOver) game.elapsed += dt;
+  rally.update(dt);
   // Mode-specific per-tick logic (e.g. spawning new waves). Runs before
   // ship AI so any newly-spawned ships still tick this frame. Suppressed
   // once the match is decided so post-game freeze-frame stays still.
@@ -528,6 +530,8 @@ export function restart(game) {
   game.kills = 0;
   game.elapsed = 0;
   game.modeState = null;
+  rally.pending = null;
+  rally.recentOrders = [];
 }
 
 // ---------------------------------------------------------------------------
