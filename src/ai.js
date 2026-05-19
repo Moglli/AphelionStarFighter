@@ -1,34 +1,5 @@
 import * as V from "./vec.js";
 
-const RALLY_ARRIVAL_RADIUS = 220;
-const RALLY_ARRIVAL_RADIUS_SQ = RALLY_ARRIVAL_RADIUS * RALLY_ARRIVAL_RADIUS;
-
-function rallyArrived(ship) {
-  const t = ship.rallyTarget;
-  if (!t) return true;
-  const dx = ship.pos.x - t.x;
-  const dy = ship.pos.y - t.y;
-  return dx * dx + dy * dy <= RALLY_ARRIVAL_RADIUS_SQ;
-}
-
-// Steer the ship toward its rally target. Aircraft (fighter/bomber)
-// lock velocity to heading, so we only need to set aim. Capitals get
-// thrust set directly. Weapons hold fire during transit — the order is
-// "move there", not "engage". Once arrived, ai.js restores normal logic.
-function applyRally(ship) {
-  const c = ship.controller;
-  const dx = ship.rallyTarget.x - ship.pos.x;
-  const dy = ship.rallyTarget.y - ship.pos.y;
-  const d = Math.hypot(dx, dy) || 1;
-  const nx = dx / d, ny = dy / d;
-  c.aim = { x: nx, y: ny };
-  c.thrust = (ship.klass === "fighter" || ship.klass === "bomber")
-    ? { x: 0, y: 0 }            // aircraft model carries them forward at maxSpeed
-    : { x: nx, y: ny };
-  c.firing = false;
-  c.firingMissile = false;
-}
-
 // Find nearest enemy to a ship.
 function nearestEnemy(ship, ships) {
   let best = null, bestD2 = Infinity;
@@ -101,22 +72,9 @@ function pickBomberTarget(ship, ships) {
 }
 
 export function updateAI(ship, world, dt) {
-  // Rally order overrides normal AI: ship heads straight for the
-  // designated point, ignoring targets, until it arrives. Restored to
-  // normal hunt logic once inside the arrival radius.
-  if (ship.rallyTarget) {
-    if (rallyArrived(ship)) {
-      ship.rallyTarget = null;
-    } else {
-      applyRally(ship);
-      return;
-    }
-  }
-
   // Carriers have their own passive routine — no target hunt, no orbit.
   if (ship.klass === "carrier") {
     carrierAI(ship, world);
-    applyBeamAvoidance(ship, world);
     return;
   }
   // Station nodes are immobile — they only update aim (slow tracking) so
@@ -157,7 +115,6 @@ export function updateAI(ship, world, dt) {
     c.aim = null;
     c.firing = false;
     c.firingMissile = false;
-    applyBeamAvoidance(ship, world);
     return;
   }
 
@@ -169,95 +126,6 @@ export function updateAI(ship, world, dt) {
     battleshipAI(ship, target, dt, world);
   } else {
     orbitAI(ship, target, dt, world);
-  }
-
-  // Overlay: dodge enemy heavy-laser beams. Runs after each class's
-  // normal steering so the avoidance vector wins in the danger window.
-  applyBeamAvoidance(ship, world);
-}
-
-// ---------------------------------------------------------------------------
-// Beam dodging. Heavy lasers are sustained for ~3 seconds; for that
-// window, the line from beam.origin to its tracked target is a hazard
-// corridor for any non-friendly ship. We compute a perpendicular escape
-// vector when the ship is inside the corridor, then blend it into the
-// existing controller — aim for aircraft (heading turns away), thrust
-// for capitals (sidestep).
-// ---------------------------------------------------------------------------
-const BEAM_DANGER_RADIUS = 280;
-
-function beamAvoidance(ship, beams) {
-  if (!beams || beams.length === 0) return null;
-  let ax = 0, ay = 0;
-  let highestUrgency = 0;
-  for (const beam of beams) {
-    if (beam.side === ship.side) continue;        // friendly beam — ignore
-    if (beam.ttl <= 0) continue;
-    if (!beam.target || beam.target.dead) continue;
-    const ox = beam.origin.x, oy = beam.origin.y;
-    const dx = beam.target.pos.x - ox;
-    const dy = beam.target.pos.y - oy;
-    const blen = Math.hypot(dx, dy);
-    if (blen < 1e-6) continue;
-    const bx = dx / blen, by = dy / blen;
-    // Project ship onto the beam line (axis through origin, direction (bx,by)).
-    const relX = ship.pos.x - ox;
-    const relY = ship.pos.y - oy;
-    const proj = relX * bx + relY * by;
-    // Outside the beam's longitudinal range? Not at risk.
-    const segLen = Math.min(beam.range, blen + 150);
-    if (proj < -50 || proj > segLen) continue;
-    const perpX = relX - proj * bx;
-    const perpY = relY - proj * by;
-    const perpDist = Math.hypot(perpX, perpY);
-    if (perpDist > BEAM_DANGER_RADIUS) continue;
-    // Closer to the line ⇒ stronger push. Multiply by remaining beam
-    // life so a beam about to time out gets less weight.
-    const lifeFrac = beam.duration > 0 ? (beam.ttl / beam.duration) : 1;
-    const urgency = (1 - perpDist / BEAM_DANGER_RADIUS) * (0.35 + 0.65 * lifeFrac);
-    if (urgency > highestUrgency) highestUrgency = urgency;
-    if (perpDist < 1e-3) {
-      // Sitting on the line — pick the perpendicular side deterministically.
-      const sign = (ship.id % 2 === 0) ? 1 : -1;
-      ax += -by * urgency * sign;
-      ay +=  bx * urgency * sign;
-    } else {
-      ax += (perpX / perpDist) * urgency;
-      ay += (perpY / perpDist) * urgency;
-    }
-  }
-  if (Math.abs(ax) < 1e-6 && Math.abs(ay) < 1e-6) return null;
-  const aLen = Math.hypot(ax, ay);
-  return { x: ax / aLen, y: ay / aLen, urgency: highestUrgency };
-}
-
-function applyBeamAvoidance(ship, world) {
-  if (!world || !world.beams) return;
-  const avoid = beamAvoidance(ship, world.beams);
-  if (!avoid) return;
-  const c = ship.controller;
-  const u = avoid.urgency;
-  // Aircraft (fighter, bomber) turn out of the beam by re-aiming. Strong
-  // urgency wholly overrides the previous aim; mild urgency blends.
-  if (ship.klass === "fighter" || ship.klass === "bomber") {
-    const w = 1.0 + 1.5 * u;
-    let ax = (c.aim && (c.aim.x || c.aim.y)) ? c.aim.x : 0;
-    let ay = (c.aim && (c.aim.x || c.aim.y)) ? c.aim.y : 0;
-    const aLen = Math.hypot(ax, ay) || 1;
-    ax /= aLen; ay /= aLen;
-    c.aim = { x: ax + avoid.x * w, y: ay + avoid.y * w };
-    // Stop dumping fire forward while we duck the beam.
-    if (u > 0.5) c.firing = false;
-  } else {
-    // Capitals add sidestep to their thrust vector. Weighted so even a
-    // strafing cruiser tilts away from the beam line.
-    const tx = (c.thrust && c.thrust.x) || 0;
-    const ty = (c.thrust && c.thrust.y) || 0;
-    const w = 1.2 + 1.8 * u;
-    const sx = tx + avoid.x * w;
-    const sy = ty + avoid.y * w;
-    const sLen = Math.hypot(sx, sy);
-    c.thrust = sLen > 1 ? { x: sx / sLen, y: sy / sLen } : { x: sx, y: sy };
   }
 }
 
@@ -341,11 +209,6 @@ function bigShipDanger(ship, ships) {
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
     if (other.klass === "fighter") continue;
-    // Some capitals (cruisers, carriers) carry no primary weapon —
-    // their danger is from missiles / laser handled elsewhere, so
-    // skip them here rather than crashing on a missing weapon spec.
-    if (!other.spec.weapon) continue;
-    const range = other.spec.weapon.range;
     if (other === ship) continue;
 
     const dx = ship.pos.x - other.pos.x;
@@ -730,14 +593,8 @@ function battleshipAI(ship, target, dt, world) {
 }
 
 // ---------------------------------------------------------------------------
-// Frigate / cruiser: forward-firing capitals are on the fighter-flight
-// model now (velocity locked to heading), so the old "stop in the orbit
-// band and strafe" plan made them ram. They now use a flyby pattern —
-// approach with lead aim, then break to one side when they pass through
-// or run out the approach timer — tuned with longer windows than
-// fighters to account for slow turn rates. Broadside hulls (battleship)
-// keep their dedicated AI branch; this function only handles
-// forward-firing capitals.
+// Frigate / cruiser: orbit at preferred range. Heavy hulls hold position when
+// in the orbit band; lighter and broadside hulls strafe.
 // ---------------------------------------------------------------------------
 function orbitAI(ship, target, dt, world) {
   const c = ship.controller;
@@ -747,105 +604,43 @@ function orbitAI(ship, target, dt, world) {
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
   const isBroadside = s.firingMode === "broadside";
 
+  const orbit = s.aiOrbit;
+  let thrust;
+  if (dist > orbit * 1.15) {
+    thrust = dir;
+  } else if (dist < orbit * 0.85) {
+    thrust = { x: -dir.x, y: -dir.y };
+  } else {
+    const shouldStrafe = isBroadside || ship.klass === "frigate";
+    if (shouldStrafe) {
+      const sign = (ship.id % 2 === 0) ? 1 : -1;
+      thrust = { x: -dir.y * sign, y: dir.x * sign };
+    } else {
+      thrust = { x: 0, y: 0 };
+    }
+  }
+  // Capitals nudge apart from each other so they don't clump on the same
+  // target and ram hulls.
+  const sep = capitalSeparation(ship, world ? world.ships : []);
+  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
+  c.thrust = thrust;
+
   if (isBroadside) {
-    // Broadside ship — aim perpendicular so velocity (locked to heading)
-    // strafes alongside the target instead of into it.
-    const sep = capitalSeparation(ship, world ? world.ships : []);
-    let thrust = { x: -dir.y, y: dir.x };
-    thrust = blendThrustWithSeparation(thrust, sep, 1.1);
-    c.thrust = thrust;
     const perpA = { x: -dir.y, y: dir.x };
     const perpB = { x: dir.y, y: -dir.x };
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
     c.firing = true;
-    c.firingMissile = false;
-    return;
-  } else if (s.weapon) {
+  } else {
     const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
     c.aim = leadVec;
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     const aimNorm = V.norm(leadVec);
     const aligned = V.dot(fwd, aimNorm);
     c.firing = dist <= s.weapon.range && aligned > 0.9;
-  } else {
-    // No primary cannon (artillery cruiser). Just face the target so
-    // bow-mount weapons (heavy laser, missile pods, siege missile)
-    // align on it. Missile / laser fire is handled inside updateShip.
-    c.aim = { x: rel.x, y: rel.y };
-    c.firing = false;
   }
 
-  // Forward-firing flyby pattern. Init state once.
-  if (ship.attackState === undefined) {
-    ship.attackState = "approach";
-    ship.breakSide = (ship.id % 2 === 0) ? 1 : -1;
-    ship.breakTimer = 0;
-    ship.approachTimer = 0;
-  }
-
-  // Tuned for slower capitals — much longer cycles than fighters.
-  const REGROUP_DIST = Math.max(1400, s.aiOrbit * 1.3);
-  const PASS_ZONE_DIST = Math.max(700, s.radius * 6);
-  const MIN_BREAK_TIME = 4.0;
-  const MAX_APPROACH_TIME = 24;
-
-  // Lead-aim toward the target's predicted position; in break mode swing
-  // aim hard to the side so the ship peels off instead of ramming.
-  const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
-  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-
-  if (ship.attackState === "approach") {
-    ship.approachTimer += dt;
-    c.thrust = { x: 0, y: 0 }; // ignored under fighter flight model
-    c.aim = leadVec;
-    const aimNorm = V.norm(leadVec);
-    const aligned = V.dot(fwd, aimNorm);
-    c.firing = dist <= s.weapon.range && aligned > 0.88;
-
-    const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
-    const inPassZone = dist < PASS_ZONE_DIST;
-    const settled = ship.approachTimer > 1.5;
-    if ((departing && inPassZone && settled) || ship.approachTimer > MAX_APPROACH_TIME) {
-      ship.attackState = "break";
-      ship.breakTimer = MIN_BREAK_TIME;
-      ship.approachTimer = 0;
-    }
-  } else {
-    // Break: aim perpendicular to the threat axis with a small "away"
-    // bias so the capital drifts out instead of orbiting back through.
-    const tangX = -dir.y * ship.breakSide;
-    const tangY =  dir.x * ship.breakSide;
-    const outX = -dir.x;
-    const outY = -dir.y;
-    const bx = tangX * 1.0 + outX * 0.35;
-    const by = tangY * 1.0 + outY * 0.35;
-    const bLen = Math.hypot(bx, by) || 1;
-    c.thrust = { x: 0, y: 0 };
-    c.aim = { x: bx / bLen, y: by / bLen };
-    c.firing = false;
-
-    ship.breakTimer -= dt;
-    const minTimeMet = ship.breakTimer <= 0;
-    const farEnough = dist > REGROUP_DIST;
-    const breakOverdue = ship.breakTimer <= -5.0;
-    if ((minTimeMet && farEnough) || breakOverdue) {
-      ship.attackState = "approach";
-      ship.breakSide = -ship.breakSide;
-      ship.approachTimer = 0;
-    }
-  }
-
-  // Push aim further off-axis when a friendly capital sits on the same
-  // line — keeps frigates from stacking noses into the same target.
-  const sep = capitalSeparation(ship, world ? world.ships : []);
-  if (sep) {
-    const aimN = V.norm(c.aim);
-    c.aim = {
-      x: aimN.x + sep.x * 0.5,
-      y: aimN.y + sep.y * 0.5,
-    };
-  }
+  c.firingMissile = false;
 }
 
 // ---------------------------------------------------------------------------

@@ -2,10 +2,6 @@ import { CLASSES, SIDES } from "./classes.js";
 import { ARENA, MAP_SIZES } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
 import { RACES } from "./races.js";
-import { MODES } from "./modes/index.js";
-import { saveStore } from "./save.js";
-import { progression } from "./progression.js";
-import { rally, sourceRadius } from "./rally.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
 
@@ -25,55 +21,6 @@ const MODULE_LABELS = {
   "pd-cluster":     "PD Cluster",
 };
 
-// Toast queue: progression emits text labels for XP / credit awards;
-// the HUD picks them up here and decays each over TOAST_LIFETIME seconds.
-const TOAST_LIFETIME = 2.6;
-const toasts = [];
-let lastToastDrainMs = performance.now();
-
-function drainAndAgeToasts() {
-  const now = performance.now();
-  const dt = (now - lastToastDrainMs) / 1000;
-  lastToastDrainMs = now;
-  for (const t of toasts) t.age += dt;
-  // Drop expired.
-  while (toasts.length > 0 && toasts[0].age >= TOAST_LIFETIME) toasts.shift();
-  // Pull new awards.
-  const fresh = progression.consumeRecentRewards();
-  for (const r of fresh) toasts.push({ text: r.text, kind: r.kind, age: 0 });
-  // Cap the visible stack at 6.
-  while (toasts.length > 6) toasts.shift();
-}
-
-const TOAST_COLORS = {
-  xp:      "#7df",
-  credits: "#fd6",
-  premium: "#b6f",
-  win:     "#9f8",
-  levelup: "#fff",
-};
-
-function drawToasts(ctx, viewW, viewH) {
-  drainAndAgeToasts();
-  if (toasts.length === 0) return;
-  ctx.save();
-  ctx.textAlign = "right";
-  const x = viewW - 16;
-  let y = viewH * 0.32;
-  for (const t of toasts) {
-    const a = Math.max(0, 1 - t.age / TOAST_LIFETIME);
-    ctx.globalAlpha = a;
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(x - 320, y - 18, 320, 26);
-    ctx.fillStyle = TOAST_COLORS[t.kind] || "#cef";
-    ctx.font = t.kind === "levelup" ? "bold 16px system-ui, sans-serif" : "bold 13px system-ui, sans-serif";
-    ctx.fillText(t.text, x - 8, y);
-    y += 30;
-  }
-  ctx.globalAlpha = 1;
-  ctx.restore();
-}
-
 function countBySide(ships) {
   const out = {
     blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0, station: 0 },
@@ -83,15 +30,9 @@ function countBySide(ships) {
   return out;
 }
 
-export function drawHUD(ctx, game, viewW, viewH, input) {
+export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   if (game.state === "menu") {
-    if (input.menuScreen === "hangar") {
-      input.hangar.draw(ctx, viewW, viewH);
-    } else if (input.menuScreen === "custom") {
-      input.customScreen.draw(ctx, viewW, viewH);
-    } else if (input.startMenu) {
-      input.startMenu.draw(ctx, viewW, viewH);
-    }
+    if (startMenu) startMenu.draw(ctx, viewW, viewH);
     return;
   }
 
@@ -100,15 +41,12 @@ export function drawHUD(ctx, game, viewW, viewH, input) {
   drawSideStrip(ctx, counts.blue, "blue", game.alliedRace, 16, 16, "left");
   drawSideStrip(ctx, counts.red,  "red",  game.hostileRace, viewW - 16, 16, "right");
 
-  drawModeBanner(ctx, game, viewW);
-
   const player = game.ships.find((s) => s.isPlayer && !s.dead);
   if (player) {
-    drawPlayerHUD(ctx, player, viewW, viewH, input.missileBtn);
-    input.fireBtn.draw(ctx);
+    drawPlayerHUD(ctx, player, viewW, viewH, missileBtn);
   } else if (game.spectating) {
     drawSpectateOverlay(ctx, game, viewW, viewH);
-  } else if (game.respawnTimer > 0 && game.mode !== "waves") {
+  } else if (game.respawnTimer > 0) {
     ctx.fillStyle = "#fff";
     ctx.font = "bold 28px system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -116,66 +54,7 @@ export function drawHUD(ctx, game, viewW, viewH, input) {
     ctx.textAlign = "left";
   }
 
-  // On-screen spectate toggle + (when active) prev/next. Drawn during any
-  // playing state so touch users can enter/exit spectate without a keyboard.
-  if (!game.matchOver) input.spectatePanel.draw(ctx, game.spectating);
-
   if (game.matchOver) {
-    drawMatchOverOverlay(ctx, game, viewW, viewH);
-  }
-
-  drawToasts(ctx, viewW, viewH);
-  drawMinimap(ctx, game, viewW, viewH, input);
-}
-
-function drawModeBanner(ctx, game, viewW) {
-  const mode = MODES[game.mode];
-  if (!mode) return;
-  ctx.save();
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#9bd";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.fillText(mode.label.toUpperCase(), viewW / 2, 18);
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillStyle = "#cef";
-  let line = `Score ${game.score}  ·  Kills ${game.kills}`;
-  if (game.mode === "waves" && game.modeState) {
-    line = `Wave ${game.modeState.wave}  ·  ${line}`;
-  }
-  ctx.fillText(line, viewW / 2, 36);
-  ctx.textAlign = "left";
-  ctx.restore();
-}
-
-function drawMatchOverOverlay(ctx, game, viewW, viewH) {
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(0, viewH / 2 - 110, viewW, 220);
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 42px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  let title;
-  if (game.mode === "waves") {
-    title = `WAVE ${game.modeState ? game.modeState.survivedWaves : 0} SURVIVED`;
-  } else if (game.mode === "daily") {
-    title = game.winner === "blue" ? "DAILY CLEARED" : "DAILY FAILED";
-  } else {
-    title = game.winner === "blue" ? "ALLIED VICTORY" : "HOSTILE VICTORY";
-  }
-  ctx.fillText(title, viewW / 2, viewH / 2 - 30);
-  ctx.font = "16px system-ui, sans-serif";
-  ctx.fillStyle = "#cef";
-  ctx.fillText(`Score ${game.score}  ·  Kills ${game.kills}`, viewW / 2, viewH / 2);
-  const best = saveStore.get().bestScores;
-  if (game.mode === "arena" || game.mode === "waves") {
-    const b = best[game.mode];
-    ctx.fillStyle = "#9bd";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(`Best: ${b}`, viewW / 2, viewH / 2 + 22);
-  }
-  ctx.font = "16px system-ui, sans-serif";
-  ctx.fillStyle = "#fff";
-  ctx.fillText("Tap to return to menu", viewW / 2, viewH / 2 + 60);
-  ctx.textAlign = "left";
     const isCampaign = game.mode === "campaign";
     const panelH = isCampaign ? 220 : 160;
     ctx.fillStyle = "rgba(0,0,0,0.62)";
@@ -344,62 +223,11 @@ function drawSpectateOverlay(ctx, game, viewW, viewH) {
     ctx.fillText("No targets available", viewW / 2, viewH - 20);
   }
   ctx.fillStyle = "#cdf";
-  ctx.fillText("EXIT / PREV / NEXT  (keys: V, B, N)", viewW / 2, viewH - 6);
+  ctx.fillText("V: return to ship   ·   N / B: cycle target", viewW / 2, viewH - 6);
   ctx.textAlign = "left";
 }
 
-// Minimap layout — shared with input.js (hit-testing) and rally.js
-// (coord translation). Tappable: the rally system reads the tap location
-// and translates it to world space.
-const MINIMAP_W = 180;
-const MINIMAP_H = 135;
-const MINIMAP_MARGIN = 16;
-
-export function minimapRect(viewW, viewH) {
-  return {
-    x: viewW - MINIMAP_W - MINIMAP_MARGIN,
-    y: viewH - MINIMAP_H - MINIMAP_MARGIN,
-    w: MINIMAP_W,
-    h: MINIMAP_H,
-  };
-}
-
-export function minimapHit(viewW, viewH, x, y) {
-  const r = minimapRect(viewW, viewH);
-  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
-}
-
-/** Translate a tap inside the minimap rect to world-space coordinates. */
-export function minimapToWorld(viewW, viewH, x, y) {
-  const r = minimapRect(viewW, viewH);
-  const u = (x - r.x) / r.w;
-  const v = (y - r.y) / r.h;
-  return {
-    x: u * ARENA.width,
-    y: v * ARENA.height,
-  };
-}
-
 function drawMinimap(ctx, game, viewW, viewH) {
-  const rect = minimapRect(viewW, viewH);
-  const mapW = rect.w, mapH = rect.h;
-  const x = rect.x, y = rect.y;
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
-function drawMinimap(ctx, game, viewW, viewH, input) {
-  // Pinned to top-center between the two side strips. Avoids the FIRE /
-  // MISSILE stack at the bottom-right, the player HUD bars at the bottom,
-  // and any joystick activation zone (which all live in the lower half).
-  // Opaque background — gameplay shouldn't bleed through.
-  const mapW = 180, mapH = 128;
-  const x = viewW / 2 - mapW / 2;
-  const y = 90;
-  // Publish rect to InputManager so onDown can swallow taps in this area
-  // instead of letting them spin up a virtual joystick.
-  if (input) input.minimapRect = { x, y, w: mapW, h: mapH };
-  ctx.fillStyle = "#02030a";
-  ctx.fillRect(x, y, mapW, mapH);
-  ctx.strokeStyle = rally.pending ? "#fd6" : "#456";
-  ctx.lineWidth = rally.pending ? 2 : 1;
   const mapW = 180, mapH = 135;
   const x = viewW - mapW - 16;
   const y = viewH - mapH - 16;
@@ -408,61 +236,15 @@ function drawMinimap(ctx, game, viewW, viewH, input) {
   ctx.strokeStyle = "#456";
   ctx.lineWidth = 1.5;
   ctx.strokeRect(x, y, mapW, mapH);
-  ctx.lineWidth = 1;
 
   const sx = mapW / ARENA.width;
   const sy = mapH / ARENA.height;
-  const toMap = (wx, wy) => ({ x: x + wx * sx, y: y + wy * sy });
-
-  // Recent rally orders: a fading line from source → dest with arrival ring.
-  for (const o of rally.recentOrders) {
-    const a = Math.max(0, 1 - o.age / 4);
-    if (a <= 0) continue;
-    const s0 = toMap(o.source.x, o.source.y);
-    const d0 = toMap(o.dest.x, o.dest.y);
-    ctx.save();
-    ctx.globalAlpha = 0.5 * a;
-    ctx.strokeStyle = "#fd6";
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.moveTo(s0.x, s0.y);
-    ctx.lineTo(d0.x, d0.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "#fd6";
-    ctx.beginPath();
-    ctx.arc(d0.x, d0.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  // Pending source pulse.
-  if (rally.pending) {
-    const p = toMap(rally.pending.x, rally.pending.y);
-    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
-    const srcR = (sourceRadius() * sx);
-    ctx.save();
-    ctx.globalAlpha = 0.3 + 0.3 * pulse;
-    ctx.strokeStyle = "#fd6";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, srcR, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = "#fd6";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
   for (const s of game.ships) {
     if (s.dead) continue;
     const px = x + s.pos.x * sx;
     const py = y + s.pos.y * sy;
     const isSpec = game.spectating && s.id === game.spectateTargetId;
-    const onRally = !s.isPlayer && s.rallyTarget;
-    ctx.fillStyle = onRally
-      ? "#fd6"
-      : (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
+    ctx.fillStyle = (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
     const r = (s.isPlayer || isSpec) ? 2.5
       : (s.klass === "station" ? 2.8
       : s.klass === "carrier" ? 2.6
@@ -474,35 +256,18 @@ function drawMinimap(ctx, game, viewW, viewH, input) {
     ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fill();
   }
-
-  // Hint banner above the minimap when a source tap is pending.
-  if (rally.pending) {
-    ctx.fillStyle = "#fd6";
-    ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText("RALLY: tap destination", x + mapW, y - 6);
-    ctx.textAlign = "left";
-  }
 }
 
 // Beams are rendered in the world transform (called from main.js).
-// Heavy lasers sustain for ~3 seconds; brightness scales with the
-// fraction of beam life remaining so it fades toward the cutoff. A
-// per-frame jitter on width makes the sustained beam visibly "live"
-// instead of static.
 export function drawBeams(ctx, game) {
   if (!game.beams || game.beams.length === 0) return;
-  const now = performance.now();
   for (const beam of game.beams) {
-    const life = beam.duration > 0 ? beam.ttl / beam.duration : 1;
-    // Bright in the middle of the beam, fades out near the tail.
-    const alpha = Math.max(0.35, Math.min(1, 0.65 + 0.5 * life));
-    const jitter = 0.85 + 0.15 * Math.sin(now * 0.06 + (beam.ownerId || 0));
+    const alpha = Math.max(0.2, Math.min(1, beam.ttl / 0.45));
     const hit = beam.hit || endPoint(beam);
     // Outer glow.
     ctx.globalAlpha = 0.4 * alpha;
     ctx.strokeStyle = beam.color;
-    ctx.lineWidth = 14 * jitter;
+    ctx.lineWidth = 12;
     ctx.beginPath();
     ctx.moveTo(beam.origin.x, beam.origin.y);
     ctx.lineTo(hit.x, hit.y);
@@ -510,7 +275,7 @@ export function drawBeams(ctx, game) {
     // Core.
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 3.5 * jitter;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(beam.origin.x, beam.origin.y);
     ctx.lineTo(hit.x, hit.y);

@@ -84,10 +84,7 @@ export const RACES = {
     cruiser: {
       hp: 320, maxSpeed: 100,
       armor: { max: 180 },
-      // Reaver cruisers cycle their missiles faster but lose some
-      // siege weight — they're aggressive artillery, not patient.
-      missilePods: { cooldown: 10.0, damage: 26 },
-      siegeMissile: { cooldown: 14.0, damage: 200 },
+      weapon: { damage: 20, cooldown: 0.65 },
     },
     battleship: {
       hp: 770, shield: { max: 400 }, armor: { max: 400 },
@@ -146,9 +143,9 @@ export const RACES = {
       missilePods: { count: 3 },
     },
     battleship: {
-      hp: 1500, maxSpeed: 56,
+      hp: 1500, maxSpeed: 28,
       shield: { max: 750 }, armor: { max: 850, wearRate: 0.4 },
-      pdCannons: { count: 5 },
+      pdCannons: { count: 8 },
     },
     carrier: {
       hp: 1500, maxSpeed: 35,
@@ -212,7 +209,7 @@ export const RACES = {
       hp: 950,
       shield: { max: 1100, regen: 40, regenDelay: 4 },
       armor: { max: 550 },
-      heavyLaser: { damage: 220, cooldown: 4.5, arc: Math.PI * 0.7 },
+      heavyLaser: { damage: 220, cooldown: 4.0, arc: Math.PI * 0.7 },
     },
     carrier: {
       hp: 1000,

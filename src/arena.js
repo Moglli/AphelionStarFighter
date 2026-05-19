@@ -20,37 +20,13 @@ export const MAP_SIZES = [
 ];
 
 // Mutate ARENA in place so all consumers (game.arena reference, etc.)
-// pick up the new bounds. Lays out spawn zones for 2, 3, and 4
-// factions so the game can pick whichever the menu selected.
+// pick up the new bounds.
 export function setArenaSize(w, h) {
   ARENA.width = w;
   ARENA.height = h;
   ARENA.bounds = { minX: 0, maxX: w, minY: 0, maxY: h };
-  // 2-faction layout: left vs right.
   ARENA.spawn.blue = { x: w * 0.10, y: h / 2, w: w * 0.13, h: h * 0.84 };
   ARENA.spawn.red  = { x: w * 0.90, y: h / 2, w: w * 0.13, h: h * 0.84 };
-  // 3-faction layout: triangle (player at bottom-left, hostiles top-mid
-  // and bottom-right).
-  ARENA.spawn3 = {
-    blue:  { x: w * 0.12, y: h * 0.82, w: w * 0.16, h: h * 0.30 },
-    red:   { x: w * 0.50, y: h * 0.15, w: w * 0.16, h: h * 0.30 },
-    green: { x: w * 0.88, y: h * 0.82, w: w * 0.16, h: h * 0.30 },
-  };
-  // 4-faction layout: four corners.
-  ARENA.spawn4 = {
-    blue:   { x: w * 0.12, y: h * 0.82, w: w * 0.16, h: h * 0.30 },
-    red:    { x: w * 0.88, y: h * 0.18, w: w * 0.16, h: h * 0.30 },
-    green:  { x: w * 0.12, y: h * 0.18, w: w * 0.16, h: h * 0.30 },
-    yellow: { x: w * 0.88, y: h * 0.82, w: w * 0.16, h: h * 0.30 },
-  };
-}
-
-// Return the spawn zone map for the requested faction count. Defaults
-// to the legacy 2-faction layout when N is anything else.
-export function spawnZonesFor(factions) {
-  if (factions === 3 && ARENA.spawn3) return ARENA.spawn3;
-  if (factions === 4 && ARENA.spawn4) return ARENA.spawn4;
-  return { blue: ARENA.spawn.blue, red: ARENA.spawn.red };
 }
 
 // Build a starfield: a few parallax layers of points sprinkled across the arena.
@@ -101,6 +77,18 @@ export function drawArenaBounds(ctx) {
   ctx.strokeRect(ARENA.bounds.minX, ARENA.bounds.minY,
     ARENA.bounds.maxX - ARENA.bounds.minX,
     ARENA.bounds.maxY - ARENA.bounds.minY);
+
+  // Faint spawn zone outlines.
+  ctx.setLineDash([8, 8]);
+  ctx.strokeStyle = "rgba(80,180,255,0.25)";
+  rectFromZone(ctx, ARENA.spawn.blue);
+  ctx.strokeStyle = "rgba(255,120,90,0.25)";
+  rectFromZone(ctx, ARENA.spawn.red);
+  ctx.setLineDash([]);
+}
+
+function rectFromZone(ctx, z) {
+  ctx.strokeRect(z.x - z.w / 2, z.y - z.h / 2, z.w, z.h);
 }
 
 export function randomSpawnPos(zone) {
