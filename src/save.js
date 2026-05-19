@@ -54,6 +54,7 @@ const DEFAULT_SAVE = Object.freeze({
     mode: "arena",
     klass: "fighter",
     race: "terran",
+    opponent: "random",
     mapSize: "medium",
   },
   settings: {

@@ -107,6 +107,10 @@ export function startGame(game, opts = {}) {
   game.spectateTargetId = null;
   game.alliedRace = RACES[opts.race] ? opts.race : "terran";
   game.playerKlass = opts.klass || "fighter";
+  // Player's chosen opponent race for arena mode. "random" (or anything
+  // not a valid race key) means "pick at match start". Other modes
+  // currently ignore this and pick their own hostile race.
+  game.opponentRace = RACES[opts.opponent] ? opts.opponent : "random";
   game.mode = modeKey;
   game.score = 0;
   game.kills = 0;

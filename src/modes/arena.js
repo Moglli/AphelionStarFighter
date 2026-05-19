@@ -13,7 +13,7 @@
  *   `null` to keep playing. Called every tick.
  */
 
-import { randomRaceKey } from "../races.js";
+import { RACES, randomRaceKey } from "../races.js";
 
 export const arenaMode = {
   key: "arena",
@@ -21,7 +21,10 @@ export const arenaMode = {
   tagline: "Full fleet vs. fleet",
 
   setup(game, { spawnRoster, promotePlayer }) {
-    game.hostileRace = randomRaceKey();
+    // Honor the player's pick from the start menu. "random" (or any
+    // unknown key) falls back to a random choice so the silhouettes
+    // still vary across matches.
+    game.hostileRace = RACES[game.opponentRace] ? game.opponentRace : randomRaceKey();
     spawnRoster(game);
     if (!game.spectating) promotePlayer(game, game.playerKlass);
   },
