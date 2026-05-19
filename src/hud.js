@@ -420,15 +420,23 @@ function drawMinimap(ctx, game, viewW, viewH, input) {
 }
 
 // Beams are rendered in the world transform (called from main.js).
+// Heavy lasers sustain for ~3 seconds; brightness scales with the
+// fraction of beam life remaining so it fades toward the cutoff. A
+// per-frame jitter on width makes the sustained beam visibly "live"
+// instead of static.
 export function drawBeams(ctx, game) {
   if (!game.beams || game.beams.length === 0) return;
+  const now = performance.now();
   for (const beam of game.beams) {
-    const alpha = Math.max(0.2, Math.min(1, beam.ttl / 0.45));
+    const life = beam.duration > 0 ? beam.ttl / beam.duration : 1;
+    // Bright in the middle of the beam, fades out near the tail.
+    const alpha = Math.max(0.35, Math.min(1, 0.65 + 0.5 * life));
+    const jitter = 0.85 + 0.15 * Math.sin(now * 0.06 + (beam.ownerId || 0));
     const hit = beam.hit || endPoint(beam);
     // Outer glow.
     ctx.globalAlpha = 0.4 * alpha;
     ctx.strokeStyle = beam.color;
-    ctx.lineWidth = 12;
+    ctx.lineWidth = 14 * jitter;
     ctx.beginPath();
     ctx.moveTo(beam.origin.x, beam.origin.y);
     ctx.lineTo(hit.x, hit.y);
@@ -436,7 +444,7 @@ export function drawBeams(ctx, game) {
     // Core.
     ctx.globalAlpha = alpha;
     ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.5 * jitter;
     ctx.beginPath();
     ctx.moveTo(beam.origin.x, beam.origin.y);
     ctx.lineTo(hit.x, hit.y);

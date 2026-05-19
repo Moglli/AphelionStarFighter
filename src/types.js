@@ -87,7 +87,8 @@
 
 /**
  * @typedef {"cannon"|"broadside"|"missile"|"laser"} WeaponSoundKind
- * @typedef {"shield"|"armor"|"hull"} HitLayer
+ * @typedef {"shield"|"armor"|"subsystem"|"hull"} HitLayer
+ * @typedef {"gun"|"engine"|"missile"|"laser"} SubsystemKind
  */
 
 /**
@@ -96,6 +97,7 @@
  * @property {{ ship: object, killer: object|null, byPlayer: boolean }} shipDestroyed
  * @property {{ ship: object }} playerDestroyed
  * @property {{ ship: object, layer: HitLayer, amount: number, byPlayer: boolean }} hit
+ * @property {{ ship: object, kind: SubsystemKind, byPlayer: boolean }} subsystemDestroyed
  * @property {{ amount: number, source: object, target: object }} damageDealt
  * @property {{ mode: GameMode, winner: "blue"|"red", durationSeconds: number, score: number }} matchEnded
  * @property {{ wave: number, spawnCount: number }} waveStarted

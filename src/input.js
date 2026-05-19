@@ -279,6 +279,7 @@ export class StartMenu {
     this.raceRects = [];
     this.fleetRects = [];
     this.factionRects = [];
+    this.opponentRects = [];
     this.startRect = null;
     const sel = saveStore.get().menuSelection;
     this.selectedMode = MODES[sel.mode] ? sel.mode : "arena";
@@ -287,6 +288,10 @@ export class StartMenu {
     this.selectedRace = RACES[sel.race] ? sel.race : "terran";
     this.selectedFleet = FLEET_OPTIONS.find(o => o.key === sel.fleetMul) ? sel.fleetMul : "medium";
     this.selectedFactions = [2, 3, 4].includes(sel.factions) ? sel.factions : 2;
+    // Opponent selection: "random" picks a hostile race at match start.
+    // Used only by arena mode; waves picks its own random, daily is seeded.
+    this.selectedOpponent = (sel.opponent === "random" || RACES[sel.opponent])
+      ? sel.opponent : "random";
     this.justStarted = null;
     this.hangarRequested = false;
     this.customRequested = false;
@@ -301,15 +306,17 @@ export class StartMenu {
   layout(viewW, viewH) {
     const chipH = 50;
     const gapX = 12;
-    const rowGap = 22;
-    const titleY = Math.max(60, viewH / 2 - 260);
+    // Tightened spacing so the extra opponent row still fits inside a
+    // 600px-tall viewport. Each inter-row gap is chipH + rowGap + 8 ≈ 74.
+    const rowGap = 16;
+    const titleY = Math.max(48, viewH / 2 - 280);
 
     // Mode row.
     const modeKeys = MODE_KEYS;
     const mn = modeKeys.length;
     const modeBtnW = Math.min(160, (viewW - 60) / mn - gapX);
     const modeRowW = mn * modeBtnW + (mn - 1) * gapX;
-    const modeY = titleY + 80;
+    const modeY = titleY + 64;
     const modeStartX = (viewW - modeRowW) / 2;
     this.modeRects = modeKeys.map((k, i) => ({
       key: k, label: MODES[k].label, sub: MODES[k].tagline || "",
@@ -321,7 +328,7 @@ export class StartMenu {
     const cn = CLASS_ORDER.length;
     const classBtnW = Math.min(110, (viewW - 40) / cn - gapX);
     const classRowW = cn * classBtnW + (cn - 1) * gapX;
-    const classY = modeY + chipH + rowGap + 16;
+    const classY = modeY + chipH + rowGap + 8;
     const classStartX = (viewW - classRowW) / 2;
     this.classRects = CLASS_ORDER.map((k, i) => ({
       key: k, label: CLASSES[k].name,
@@ -334,7 +341,7 @@ export class StartMenu {
     const sn = sizeOpts.length;
     const sizeBtnW = Math.min(160, (viewW - 80) / sn - gapX);
     const sizeRowW = sn * sizeBtnW + (sn - 1) * gapX;
-    const sizeY = classY + chipH + rowGap + 16;
+    const sizeY = classY + chipH + rowGap + 8;
     const sizeStartX = (viewW - sizeRowW) / 2;
     this.sizeRects = sizeOpts.map((o, i) => ({
       key: o.key, label: o.label, mapW: o.mapW, mapH: o.mapH,
@@ -347,7 +354,7 @@ export class StartMenu {
     const rn = raceKeys.length;
     const raceBtnW = Math.min(130, (viewW - 60) / rn - gapX);
     const raceRowW = rn * raceBtnW + (rn - 1) * gapX;
-    const raceY = sizeY + chipH + rowGap + 16;
+    const raceY = sizeY + chipH + rowGap + 8;
     const raceStartX = (viewW - raceRowW) / 2;
     this.raceRects = raceKeys.map((k, i) => ({
       key: k, label: RACES[k].name,
@@ -394,6 +401,33 @@ export class StartMenu {
     this.customRect = {
       x: rowX + sideBtnW + gap + startW + gap,
       y: startY, w: sideBtnW, h: startH,
+    // Opponent row. Random + the four races; relevant only to arena mode
+    // (drawn muted otherwise so the disabled state is obvious).
+    const oppKeys = ["random", ...RACE_KEYS];
+    const on = oppKeys.length;
+    const oppBtnW = Math.min(120, (viewW - 60) / on - gapX);
+    const oppRowW = on * oppBtnW + (on - 1) * gapX;
+    const oppY = raceY + chipH + rowGap + 8;
+    const oppStartX = (viewW - oppRowW) / 2;
+    this.opponentRects = oppKeys.map((k, i) => ({
+      key: k,
+      label: k === "random" ? "Random" : RACES[k].name,
+      x: oppStartX + i * (oppBtnW + gapX),
+      y: oppY, w: oppBtnW, h: chipH,
+    }));
+
+    // START button + HANGAR button (sits to the left of START).
+    const startW = 220, startH = 56;
+    const startY = oppY + chipH + 28;
+    this.startRect = {
+      x: (viewW - startW) / 2,
+      y: startY,
+      w: startW, h: startH,
+    };
+    this.hangarRect = {
+      x: this.startRect.x - 150 - 16,
+      y: startY,
+      w: 150, h: startH,
     };
   }
 
@@ -457,6 +491,17 @@ export class StartMenu {
         events.emit("uiClick", { source: "menu" });
         this._persist();
         return;
+    // Opponent chips are interactive only in arena mode (the other modes
+    // pick their own hostile race). The chip rects always exist so the
+    // layout stays stable when switching modes.
+    if (this.selectedMode === "arena") {
+      for (const r of this.opponentRects) {
+        if (this._hit(r, x, y)) {
+          this.selectedOpponent = r.key;
+          events.emit("uiClick", { source: "menu" });
+          this._persist();
+          return;
+        }
       }
     }
     if (this.hangarRect && this._hit(this.hangarRect, x, y)) {
@@ -484,6 +529,7 @@ export class StartMenu {
       data.menuSelection.mode = this.selectedMode;
       data.menuSelection.klass = this.selectedKlass;
       data.menuSelection.race = this.selectedRace;
+      data.menuSelection.opponent = this.selectedOpponent;
       data.menuSelection.mapSize = this.selectedSize;
       data.menuSelection.fleetMul = this.selectedFleet;
       data.menuSelection.factions = this.selectedFactions;
@@ -503,6 +549,7 @@ export class StartMenu {
       mode: this.selectedMode,
       klass: this.selectedKlass,
       race: this.selectedRace,
+      opponent: this.selectedOpponent,
       mapW: size.mapW,
       mapH: size.mapH,
       fleetMul: fleet.mul,
@@ -577,6 +624,18 @@ export class StartMenu {
     for (const r of this.factionRects) {
       this._drawChip(ctx, r, r.key === this.selectedFactions,
         String(r.key), r.label.split(" — ")[1] || "");
+    // Opponent row. Heading hints at why it's greyed out for other modes.
+    const arenaOnly = this.selectedMode === "arena";
+    ctx.fillStyle = arenaOnly ? "#9bd" : "#566";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(
+      arenaOnly ? "OPPONENT" : "OPPONENT (arena only)",
+      viewW / 2, this.opponentRects[0].y - 12,
+    );
+    for (const r of this.opponentRects) {
+      const sub = r.key === "random" ? "Any race" : (RACES[r.key].tagline || "");
+      this._drawChip(ctx, r, r.key === this.selectedOpponent,
+        r.label, sub, !arenaOnly);
     }
 
     // HANGAR button.
@@ -654,18 +713,26 @@ export class StartMenu {
     ctx.fillText(`XP ${data.xp}`, pad, pad + 32);
   }
 
-  _drawChip(ctx, r, selected, label, sublabel) {
-    ctx.fillStyle = selected ? "rgba(40,90,140,0.95)" : "rgba(20,40,60,0.85)";
+  _drawChip(ctx, r, selected, label, sublabel, dim = false) {
+    if (dim) {
+      ctx.fillStyle = selected ? "rgba(40,55,75,0.7)" : "rgba(18,26,36,0.7)";
+    } else {
+      ctx.fillStyle = selected ? "rgba(40,90,140,0.95)" : "rgba(20,40,60,0.85)";
+    }
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = selected ? "#fff" : "#7df";
+    if (dim) {
+      ctx.strokeStyle = selected ? "#abc" : "#456";
+    } else {
+      ctx.strokeStyle = selected ? "#fff" : "#7df";
+    }
     ctx.lineWidth = selected ? 3 : 2;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.fillStyle = "#cef";
+    ctx.fillStyle = dim ? "#7a8a9a" : "#cef";
     ctx.font = "bold 15px system-ui, sans-serif";
     ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 1);
     if (sublabel) {
       ctx.font = "10px system-ui, sans-serif";
-      ctx.fillStyle = "#9bd";
+      ctx.fillStyle = dim ? "#566" : "#9bd";
       ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 14);
     }
   }

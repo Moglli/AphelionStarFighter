@@ -1,5 +1,5 @@
 import { SIDES } from "./classes.js";
-import { resolveSpec } from "./races.js";
+import { resolveSpec, RACES } from "./races.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
 import { events } from "./events.js";
@@ -98,6 +98,142 @@ export function getHull(race, klass) {
   return (HULLS[race] && HULLS[race][klass]) || HULLS.terran[klass];
 }
 
+// ---------------------------------------------------------------------------
+// Subsystem nodes — destructible weapon/engine emplacements that sit on the
+// hull. A projectile hit can route into a subsystem instead of straight to
+// hull HP; subsystems absorb damage up to their pool, and overflow falls
+// through to hull. Destroying a node disables the corresponding behavior
+// (engine kills propulsion; gun/missile/laser kill the matching weapon).
+//
+// `kind` is one of: "gun" | "engine" | "missile" | "laser".
+//   - gun:     forward / broadside cannons.
+//   - engine:  primary propulsion. Capitals stop dead; aircraft drift.
+//   - missile: missile-pod launchers (capital) or fighter missile rack.
+//   - laser:   heavy battleship beam emitter.
+//
+// Layout coords are in unit hull space ([-1, 1] roughly), same as HULLS.
+// `hpFrac` is the fraction of ship.hpMax that the node soaks before dying.
+// `r` is the local hit-radius in unit hull space.
+// ---------------------------------------------------------------------------
+const SUBSYSTEM_LAYOUTS = {
+  fighter: [
+    { kind: "engine", x: -0.55, y:  0.00, r: 0.30, hpFrac: 0.30 },
+    { kind: "gun",    x:  0.55, y:  0.00, r: 0.28, hpFrac: 0.25 },
+  ],
+  bomber: [
+    { kind: "engine",  x: -0.65, y:  0.00, r: 0.30, hpFrac: 0.30 },
+    { kind: "missile", x:  0.25, y:  0.00, r: 0.30, hpFrac: 0.30 },
+  ],
+  frigate: [
+    { kind: "engine", x: -0.75, y:  0.00, r: 0.30, hpFrac: 0.35 },
+    { kind: "gun",    x:  0.55, y:  0.00, r: 0.28, hpFrac: 0.30 },
+  ],
+  cruiser: [
+    { kind: "engine",  x: -0.80, y:  0.00, r: 0.30, hpFrac: 0.35 },
+    // Bow laser turret replaces the old forward gun.
+    { kind: "laser",   x:  0.65, y:  0.00, r: 0.22, hpFrac: 0.25 },
+    { kind: "missile", x: -0.20, y:  0.55, r: 0.22, hpFrac: 0.20 },
+    { kind: "missile", x: -0.20, y: -0.55, r: 0.22, hpFrac: 0.20 },
+  ],
+  battleship: [
+    { kind: "engine",  x: -0.85, y:  0.00, r: 0.28, hpFrac: 0.35 },
+    { kind: "laser",   x:  0.85, y:  0.00, r: 0.22, hpFrac: 0.30 },
+    { kind: "gun",     x: -0.20, y:  0.65, r: 0.20, hpFrac: 0.20 },
+    { kind: "gun",     x: -0.20, y: -0.65, r: 0.20, hpFrac: 0.20 },
+    { kind: "missile", x:  0.25, y:  0.55, r: 0.18, hpFrac: 0.15 },
+    { kind: "missile", x:  0.25, y: -0.55, r: 0.18, hpFrac: 0.15 },
+  ],
+  carrier: [
+    { kind: "engine", x: -0.85, y:  0.00, r: 0.30, hpFrac: 0.35 },
+  ],
+};
+
+export function createSubsystems(klass, hpMax) {
+  const layout = SUBSYSTEM_LAYOUTS[klass];
+  if (!layout) return [];
+  return layout.map((n) => {
+    const hp = Math.max(8, Math.round(n.hpFrac * hpMax));
+    return {
+      kind: n.kind,
+      x: n.x,
+      y: n.y,
+      r: n.r,
+      hp,
+      hpMax: hp,
+      destroyed: false,
+      flash: 0,  // visual: brief brighten after a hit
+    };
+  });
+}
+
+// Restore all subsystems to full health. Called when the player ship
+// is recycled by promotePlayer so respawn doesn't inherit prior damage.
+export function resetSubsystems(ship) {
+  if (!ship.subsystems) return;
+  for (const node of ship.subsystems) {
+    node.hp = node.hpMax;
+    node.destroyed = false;
+    node.flash = 0;
+  }
+}
+
+// True if the ship has any subsystem of the given kind (working or not).
+// Used by the renderer to suppress legacy decorations whose position
+// would collide with the destructible node visual.
+function shipHasSubsystem(ship, kind) {
+  if (!ship.subsystems) return false;
+  for (const node of ship.subsystems) {
+    if (node.kind === kind) return true;
+  }
+  return false;
+}
+
+// True if the ship has at least one working subsystem of the given kind
+// (or if no subsystems of that kind are defined for this class, so the
+// behavior should remain enabled by default).
+export function hasWorkingSubsystem(ship, kind) {
+  if (!ship.subsystems || ship.subsystems.length === 0) return true;
+  let foundAny = false;
+  for (const node of ship.subsystems) {
+    if (node.kind !== kind) continue;
+    foundAny = true;
+    if (!node.destroyed) return true;
+  }
+  return !foundAny;
+}
+
+// Find the closest non-destroyed subsystem whose hit-radius contains the
+// given world-space hit point. Returns null if no node is in range.
+// Hit-radius is in WORLD units (node.r * ship.spec.radius), so big nodes
+// on big hulls are easier to land on.
+export function findHitSubsystem(ship, hitPos) {
+  if (!ship.subsystems || ship.subsystems.length === 0) return null;
+  // Rotate hit point into ship-local space.
+  const dx = hitPos.x - ship.pos.x;
+  const dy = hitPos.y - ship.pos.y;
+  const ca = Math.cos(-ship.heading);
+  const sa = Math.sin(-ship.heading);
+  const lx = dx * ca - dy * sa;
+  const ly = dx * sa + dy * ca;
+  const r = ship.spec.radius;
+  let best = null;
+  let bestD2 = Infinity;
+  for (const node of ship.subsystems) {
+    if (node.destroyed) continue;
+    const nx = node.x * r;
+    const ny = node.y * r;
+    const nr = node.r * r;
+    const ddx = lx - nx;
+    const ddy = ly - ny;
+    const d2 = ddx * ddx + ddy * ddy;
+    if (d2 <= nr * nr && d2 < bestD2) {
+      bestD2 = d2;
+      best = node;
+    }
+  }
+  return best;
+}
+
 export function createShip({ klass, race = "terran", side, pos, heading = 0, controller }) {
   const spec = resolveSpec(race, klass);
   const ship = {
@@ -134,6 +270,9 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     pdCooldowns: spec.pdCannons ? new Array(spec.pdCannons.count).fill(0) : null,
     // Missile pod cooldowns.
     podCooldowns: spec.missilePods ? new Array(spec.missilePods.count).fill(0) : null,
+    // Siege missile cooldowns (one entry per launcher). Same plumbing as
+    // podCooldowns but for the cruiser's single heavy mass-driver.
+    siegeCooldowns: spec.siegeMissile ? new Array(spec.siegeMissile.count).fill(0) : null,
     // Heavy laser cooldown.
     laserCd: 0,
     // Cannon magazine (only used when spec.weapon.capacity is set).
@@ -174,6 +313,8 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     // independently, so the ship literally "chews" away during combat
     // long before its hp pool runs out.
     sprite: buildCells(klass),
+    // Destructible weapon/engine nodes on the hull. See SUBSYSTEM_LAYOUTS.
+    subsystems: createSubsystems(klass, spec.hp),
   };
   // Bind module-mount cells to the actual destructible module instances
   // so dropping a PD/pod/laser module also drops its mount cell.
@@ -753,10 +894,32 @@ export function updateShip(ship, dt, world) {
     ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
     ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
   } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
+  // Subsystem gates — read once per tick so the rest of update can branch
+  // cheaply. Ships without a subsystem of a kind treat it as "working".
+  const engineOk = hasWorkingSubsystem(ship, "engine");
+  const gunOk = hasWorkingSubsystem(ship, "gun");
+  const missileOk = hasWorkingSubsystem(ship, "missile");
+  const laserOk = hasWorkingSubsystem(ship, "laser");
+
+  // Fighters and bombers use an aircraft flight model: velocity is locked
+  // to nose direction at constant maxSpeed. They cannot strafe or
+  // snap-turn — the only way to change direction is to bank (rotate
+  // heading), which is turn-rate-limited. With engines blown, they coast
+  // and slowly decay so a kill becomes inevitable.
+  if (ship.klass === "fighter" || ship.klass === "bomber") {
+    if (engineOk) {
+      ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
+      ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
+    } else {
+      // Drift with mild drag.
+      ship.vel.x *= 0.995;
+      ship.vel.y *= 0.995;
+    }
+  } else if (engineOk && c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
     const t = V.clampLen(c.thrust, 1);
     ship.vel.x = t.x * s.maxSpeed;
     ship.vel.y = t.y * s.maxSpeed;
-  } else if (ship.isPlayer) {
+  } else if (engineOk && ship.isPlayer) {
     // Player never decelerates — keep flying at maxSpeed in current
     // direction; fall back to heading when there's no prior velocity
     // (game start / respawn).
@@ -768,6 +931,11 @@ export function updateShip(ship, dt, world) {
       ship.vel.x = Math.cos(ship.heading) * s.maxSpeed;
       ship.vel.y = Math.sin(ship.heading) * s.maxSpeed;
     }
+  } else if (!engineOk) {
+    // Engine down — coast with drag instead of snap-stopping so the wreck
+    // keeps drifting from its last burn.
+    ship.vel.x *= 0.99;
+    ship.vel.y *= 0.99;
   } else {
     ship.vel.x = 0;
     ship.vel.y = 0;
@@ -835,11 +1003,14 @@ export function updateShip(ship, dt, world) {
   tickParticles(ship, dt);
 
   // Primary weapon — branch by firing mode. "none" (carrier) has no
-  // primary armament; PD and replenishment handle it.
+  // primary armament; PD and replenishment handle it. Cooldowns still
+  // tick down with the gun destroyed (so it'd be ready instantly if
+  // somehow repaired in a future update), but the actual fire-emission
+  // is gated on gunOk.
   if (s.firingMode === "broadside") {
     ship.cooldownPort -= dt;
     ship.cooldownStarboard -= dt;
-    updateBroadsideFire(ship, world);
+    if (gunOk) updateBroadsideFire(ship, world);
   } else if (s.firingMode === "forward") {
     ship.cooldown -= dt;
     // Magazine reload: when empty, the timer ticks down and then refills.
@@ -852,7 +1023,7 @@ export function updateShip(ship, dt, world) {
       }
     }
     const hasAmmo = s.weapon.capacity == null || ship.weaponAmmo > 0;
-    if (c.firing && c.aim && ship.cooldown <= 0 && hasAmmo) {
+    if (gunOk && c.firing && c.aim && ship.cooldown <= 0 && hasAmmo) {
       fireForward(ship, world);
       ship.cooldown = s.weapon.cooldown;
       if (s.weapon.capacity != null) {
@@ -879,22 +1050,39 @@ export function updateShip(ship, dt, world) {
       ship.podCooldowns[i] = Math.max(0, ship.podCooldowns[i] - dt);
     }
   }
+  if (ship.siegeCooldowns) {
+    for (let i = 0; i < ship.siegeCooldowns.length; i++) {
+      ship.siegeCooldowns[i] = Math.max(0, ship.siegeCooldowns[i] - dt);
+    }
+  }
 
   // Fighter missile launch (player or AI). One-shot — flag is always cleared
   // after evaluation so a press while cooling isn't queued indefinitely.
+  // Gated on the missile subsystem so a fighter that's lost its rack
+  // can't fire even though missileCd ticked through.
   if (s.missile && c.firingMissile) {
-    if (ship.missileCd <= 0) {
+    if (missileOk && ship.missileCd <= 0) {
       fireFighterMissile(ship, world);
       ship.missileCd = s.missile.cooldown;
     }
     c.firingMissile = false;
   }
 
-  // Capital ship subsystems.
+  // Capital ship subsystems. PD turrets aren't on the destructible
+  // subsystem list (kept as a swarm so partial damage still mounts a
+  // partial defence); missile pods + heavy laser are.
   if (s.pdCannons) updatePDFire(ship, world);
-  if (s.missilePods) updateMissilePodFire(ship, world);
-  if (s.heavyLaser) updateHeavyLaser(ship, world);
+  if (s.missilePods && missileOk) updateMissilePodFire(ship, world);
+  if (s.siegeMissile && missileOk) updateSiegeMissileFire(ship, world);
+  if (s.heavyLaser && laserOk) updateHeavyLaser(ship, world);
   if (s.replenish) updateReplenishment(ship, dt, world);
+
+  // Decay subsystem hit-flashes.
+  if (ship.subsystems) {
+    for (const node of ship.subsystems) {
+      if (node.flash > 0) node.flash = Math.max(0, node.flash - dt * 4);
+    }
+  }
 
   if (ship.hp <= 0) ship.dead = true;
 }
@@ -1187,7 +1375,7 @@ function updateMissilePodFire(ship, world) {
     const launchHeading = lerpAngle(outward, toT, 0.4);
 
     const colors = pods.colors || { blue: "#fff", red: "#fc8" };
-    world.projectiles.push(createMissile({
+    const missile = createMissile({
       pos: origin,
       heading: launchHeading,
       damage: pods.damage,
@@ -1202,7 +1390,12 @@ function updateMissilePodFire(ship, world) {
       fromKlass: ship.klass,
       acquireRange: pods.acquireRange,
       initialTarget: target,
-    }));
+    });
+    // Tag cluster behaviour onto the missile so updateProjectile can
+    // bloom it into children on approach. Other classes' pods leave
+    // this undefined and behave as plain torpedoes.
+    if (pods.cluster) missile.cluster = pods.cluster;
+    world.projectiles.push(missile);
     ship.podCooldowns[i] = pods.cooldown;
     events.emit("weaponFired", { ship, kind: "missile" });
   }
@@ -1213,6 +1406,44 @@ function lerpAngle(a, b, t) {
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return a + d * t;
+}
+
+// ---------------------------------------------------------------------------
+// Siege missile launcher — the cruiser's heavy single-mass warhead.
+// Fires from the bow on its own (long) cooldown, gated on the missile
+// subsystem. Tough HP and big radius so PD has to spend a salvo on it.
+// ---------------------------------------------------------------------------
+function updateSiegeMissileFire(ship, world) {
+  const sm = ship.spec.siegeMissile;
+  for (let i = 0; i < ship.siegeCooldowns.length; i++) {
+    if (ship.siegeCooldowns[i] > 0) continue;
+    const target = pickPodTarget(ship, world, sm.acquireRange);
+    if (!target) continue;
+    const fwd = V.fromAngle(ship.heading);
+    const origin = {
+      x: ship.pos.x + fwd.x * (ship.spec.radius + 8),
+      y: ship.pos.y + fwd.y * (ship.spec.radius + 8),
+    };
+    const colors = sm.colors || { blue: "#fff", red: "#fc8" };
+    world.projectiles.push(createMissile({
+      pos: origin,
+      heading: ship.heading,
+      damage: sm.damage,
+      ttl: sm.ttl,
+      radius: sm.radius,
+      color: colors[ship.side],
+      side: ship.side,
+      ownerId: ship.id,
+      speed: sm.projectileSpeed,
+      turnRate: sm.turnRate,
+      hp: sm.hp,
+      fromKlass: ship.klass,
+      acquireRange: sm.acquireRange,
+      initialTarget: target,
+    }));
+    ship.siegeCooldowns[i] = sm.cooldown;
+    events.emit("weaponFired", { ship, kind: "missile" });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1303,14 +1534,18 @@ function updateHeavyLaser(ship, world) {
   if (!world.beams) world.beams = [];
   world.beams.push({
     origin,
-    target,       // the beam tracks the target while alive
+    target,                                  // beam re-acquires target each tick
     range: l.range,
+    // Damage budget for the whole beam, plus a per-second rate so the
+    // damage tick can stay frame-rate independent. dps × ttl ≈ damage.
     damage: l.damage,
+    dps: l.damage / l.beamDuration,
+    duration: l.beamDuration,
     ttl: l.beamDuration,
     color: l.beamColors[ship.side],
     side: ship.side,
     ownerId: ship.id,
-    applied: false,
+    hit: null,                               // updated each tick with current impact point
   });
   ship.laserCd = l.cooldown;
 }
@@ -1318,6 +1553,296 @@ function updateHeavyLaser(ship, world) {
 // ---------------------------------------------------------------------------
 // Rendering.
 // ---------------------------------------------------------------------------
+
+// Per-class engine port positions in unit hull space. Each port emits a
+// thrust plume that flickers slightly per frame; together they give a
+// sense of which way the ship is facing at a glance.
+const ENGINE_PORTS = {
+  fighter:    [[-0.65, 0.45], [-0.65, -0.45]],
+  bomber:     [[-0.78, 0.45], [-0.78, -0.45], [-0.6, 0]],
+  frigate:    [[-0.88, 0.45], [-0.88, -0.45], [-0.85, 0]],
+  cruiser:    [[-0.95, 0.55], [-0.95, -0.55], [-0.92, 0.2], [-0.92, -0.2]],
+  battleship: [[-0.95, 0.55], [-0.95, -0.55], [-0.95, 0.25], [-0.95, -0.25], [-0.93, 0]],
+  carrier:    [[-0.95, 0.3], [-0.95, -0.3], [-0.92, 0.12], [-0.92, -0.12]],
+};
+
+// Cockpit or bridge marker per class. Small ships get a front canopy;
+// capitals get an aft bridge tower. Coords are in unit hull space.
+const COCKPIT = {
+  fighter:    { x:  0.30, y: 0, r: 0.16, shape: "round" },
+  bomber:     { x:  0.20, y: 0, r: 0.18, shape: "round" },
+  frigate:    { x: -0.20, y: 0, w: 0.30, h: 0.30, shape: "tower" },
+  cruiser:    { x: -0.30, y: 0, w: 0.40, h: 0.40, shape: "tower" },
+  battleship: { x: -0.10, y: 0, w: 0.45, h: 0.50, shape: "tower" },
+  carrier:    { x: -0.55, y: 0, w: 0.35, h: 0.40, shape: "tower" },
+};
+
+// Trace the hull silhouette into the current path (no fill/stroke).
+function tracedHull(ctx, poly, r) {
+  ctx.beginPath();
+  ctx.moveTo(poly[0][0] * r, poly[0][1] * r);
+  for (let i = 1; i < poly.length; i++) {
+    ctx.lineTo(poly[i][0] * r, poly[i][1] * r);
+  }
+  ctx.closePath();
+}
+
+// Engine plumes — drawn before the hull so the hull's rear edge crisply
+// occludes the front of the plume. Plume length and brightness scale
+// with current speed so dead-stopped capitals don't blast exhaust.
+function drawEnginePlume(ctx, ship) {
+  const ports = ENGINE_PORTS[ship.klass];
+  if (!ports) return;
+  // No flame from a destroyed engine — the wreck render handles the
+  // smouldering aftermath separately.
+  if (!hasWorkingSubsystem(ship, "engine")) return;
+  const r = ship.spec.radius;
+  const speed = Math.hypot(ship.vel.x, ship.vel.y);
+  const speedFrac = ship.spec.maxSpeed > 0 ? Math.min(1, speed / ship.spec.maxSpeed) : 0;
+  if (speedFrac < 0.05) return;
+  // Each ship flickers with its own phase so a swarm doesn't pulse in lockstep.
+  const flicker = 0.85 + 0.15 * Math.sin(performance.now() * 0.012 + ship.id * 0.7);
+  // Allied ships burn cool blue; hostile burn red — same hue as the side tint.
+  const baseColor = ship.side === "blue" ? [120, 220, 255] : [255, 150, 100];
+  const len = r * (0.5 + 0.7 * speedFrac) * flicker;
+  const halfThick = Math.max(2, r * 0.08);
+
+  ctx.save();
+  ctx.translate(ship.pos.x, ship.pos.y);
+  ctx.rotate(ship.heading);
+  for (const [px, py] of ports) {
+    const x = px * r;
+    const y = py * r;
+    // Outer halo: large soft fade.
+    const grad = ctx.createLinearGradient(x, y, x - len, y);
+    grad.addColorStop(0, `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},0.7)`);
+    grad.addColorStop(1, `rgba(${baseColor[0]},${baseColor[1]},${baseColor[2]},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x, y - halfThick);
+    ctx.lineTo(x - len, y);
+    ctx.lineTo(x, y + halfThick);
+    ctx.closePath();
+    ctx.fill();
+    // Bright inner core.
+    ctx.fillStyle = `rgba(255,255,255,${(0.55 * flicker).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y - halfThick * 0.5);
+    ctx.lineTo(x - len * 0.55, y);
+    ctx.lineTo(x, y + halfThick * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Faint panel lines + race-accent spine. Caller must set up the hull
+// clip path so strokes don't leak past the silhouette.
+function drawHullDetails(ctx, ship, raceAccent) {
+  const r = ship.spec.radius;
+  // Panel lines: 1 transverse stripe for fighters/bombers, 2 for capitals.
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = 1;
+  const transverseX = (ship.klass === "fighter" || ship.klass === "bomber")
+    ? [-0.15]
+    : [-0.4, 0.1, 0.5];
+  for (const tx of transverseX) {
+    ctx.beginPath();
+    ctx.moveTo(tx * r, -r);
+    ctx.lineTo(tx * r,  r);
+    ctx.stroke();
+  }
+  // Race-accent spine: thin colored line down the centerline, gives a
+  // strong visual cue for race ID even when zoomed out.
+  ctx.strokeStyle = raceAccent;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.9, 0);
+  ctx.lineTo( r * 0.9, 0);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// Cockpit canopy (small ships) or bridge tower (capitals). Race accent
+// color so all four races are individually identifiable.
+function drawCockpit(ctx, ship, raceAccent) {
+  const cfg = COCKPIT[ship.klass];
+  if (!cfg) return;
+  const r = ship.spec.radius;
+  ctx.save();
+  if (cfg.shape === "round") {
+    // Dark socket + bright glass canopy on top.
+    ctx.fillStyle = "rgba(10,15,25,0.85)";
+    ctx.beginPath();
+    ctx.arc(cfg.x * r, cfg.y * r, cfg.r * r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = raceAccent;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.arc(cfg.x * r, cfg.y * r, cfg.r * r * 0.65, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  } else {
+    // Rectangular bridge tower with a lit window stripe.
+    const hw = cfg.w * 0.5 * r;
+    const hh = cfg.h * 0.5 * r;
+    ctx.fillStyle = "rgba(15,20,30,0.9)";
+    ctx.fillRect(cfg.x * r - hw, cfg.y * r - hh, cfg.w * r, cfg.h * r);
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cfg.x * r - hw, cfg.y * r - hh, cfg.w * r, cfg.h * r);
+    // Window band — race-accent slit.
+    ctx.fillStyle = raceAccent;
+    ctx.globalAlpha = 0.9;
+    ctx.fillRect(cfg.x * r - hw + 1, cfg.y * r - hh * 0.25, cfg.w * r - 2, hh * 0.4);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+// Per-subsystem-kind visual identity. Color carries kind ID; shape
+// reinforces it so colorblind players can still distinguish gun /
+// missile / laser / engine nodes.
+const SUBSYSTEM_COLOR = {
+  gun:     "#fc6",
+  missile: "#c8f",
+  laser:   "#fff",
+  engine:  "#7df",
+};
+
+// Draw destructible subsystem nodes on the hull. Healthy nodes glow in
+// their kind's color and tighten in tone as they take damage; destroyed
+// nodes go dark with a flickering ember and a sooty crater. Players
+// (and AI by stray fire) can deliberately aim at these to disable a
+// specific weapon or the engine.
+function drawSubsystems(ctx, ship) {
+  if (!ship.subsystems || ship.subsystems.length === 0) return;
+  const r = ship.spec.radius;
+  const now = performance.now();
+  for (const node of ship.subsystems) {
+    const x = node.x * r;
+    const y = node.y * r;
+    const nr = node.r * r;
+    if (node.destroyed) {
+      drawDestroyedNode(ctx, x, y, nr, node.kind, now, ship.id);
+    } else {
+      drawHealthyNode(ctx, x, y, nr, node);
+    }
+  }
+}
+
+function drawHealthyNode(ctx, x, y, nr, node) {
+  const color = SUBSYSTEM_COLOR[node.kind] || "#fff";
+  const dmg = 1 - node.hp / node.hpMax;
+  // Brightness softens as the node takes damage; hit-flash brightens.
+  const alpha = Math.min(1, (0.55 - 0.25 * dmg) + node.flash);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // Dark socket so the node reads against any hull tint.
+  ctx.fillStyle = "rgba(8,12,18,0.7)";
+  ctx.beginPath();
+  ctx.arc(x, y, nr * 0.95, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  if (node.kind === "missile") {
+    // Capsule pod: rounded rectangle with a cap.
+    const w = nr * 1.1, h = nr * 0.7;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 0.4, y - h * 0.5);
+    ctx.lineTo(x + w * 0.4, y - h * 0.5);
+    ctx.lineTo(x + w * 0.55, y);
+    ctx.lineTo(x + w * 0.4, y + h * 0.5);
+    ctx.lineTo(x - w * 0.4, y + h * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  } else if (node.kind === "gun") {
+    // Stubby barrel: thin rectangle.
+    ctx.fillRect(x - nr * 0.5, y - nr * 0.3, nr * 1.1, nr * 0.6);
+  } else if (node.kind === "laser") {
+    // Cross + bright core: focused emitter.
+    ctx.beginPath();
+    ctx.moveTo(x - nr * 0.85, y); ctx.lineTo(x + nr * 0.85, y);
+    ctx.moveTo(x, y - nr * 0.85); ctx.lineTo(x, y + nr * 0.85);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, nr * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+  } else { // engine
+    // Trapezoidal nozzle opening to the rear (-x direction).
+    ctx.beginPath();
+    ctx.moveTo(x + nr * 0.35, y - nr * 0.55);
+    ctx.lineTo(x + nr * 0.35, y + nr * 0.55);
+    ctx.lineTo(x - nr * 0.55, y + nr * 0.8);
+    ctx.lineTo(x - nr * 0.55, y - nr * 0.8);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawDestroyedNode(ctx, x, y, nr, kind, now, shipId) {
+  // Sooty crater.
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.85)";
+  ctx.beginPath();
+  ctx.arc(x, y, nr * 0.95, 0, Math.PI * 2);
+  ctx.fill();
+  // Cracks radiating outward — deterministic per (shipId, kind).
+  ctx.strokeStyle = "rgba(60,40,25,0.9)";
+  ctx.lineWidth = 1;
+  const kindSeed = kind === "engine" ? 1 : kind === "gun" ? 2 : kind === "missile" ? 3 : 4;
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + shipId * 0.31 + kindSeed * 0.7;
+    const len = nr * (0.7 + 0.25 * Math.sin(shipId * 2.3 + i));
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+    ctx.stroke();
+  }
+  // Ember glow that flickers — read as ongoing damage.
+  const flicker = 0.5 + 0.5 * Math.sin(now * 0.008 + shipId * 0.7 + kindSeed);
+  ctx.globalAlpha = 0.55 * flicker;
+  ctx.fillStyle = "#f63";
+  ctx.beginPath();
+  ctx.arc(x, y, nr * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.9 * flicker;
+  ctx.fillStyle = "#fc6";
+  ctx.beginPath();
+  ctx.arc(x, y, nr * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Deterministic scorch marks that fade in as the hull takes damage.
+// Positions seeded from ship.id so a given ship's scars are stable
+// across frames even though we don't carry per-ship state for them.
+function drawBattleScars(ctx, ship) {
+  const dmgFrac = 1 - (ship.hp / ship.hpMax);
+  if (dmgFrac <= 0.25) return;
+  const r = ship.spec.radius;
+  const maxMarks = ship.klass === "fighter" || ship.klass === "bomber" ? 3 : 7;
+  const count = Math.min(maxMarks, Math.floor(dmgFrac * maxMarks * 1.5));
+  ctx.fillStyle = "rgba(8,10,16,0.7)";
+  for (let i = 0; i < count; i++) {
+    // Cheap deterministic hash from (ship.id, i).
+    const h1 = Math.sin(ship.id * 12.9898 + i * 78.233) * 43758.5453;
+    const h2 = Math.sin(ship.id * 39.346  + i * 11.135) * 24634.6345;
+    const u = h1 - Math.floor(h1);
+    const v = h2 - Math.floor(h2);
+    const sx = (u * 1.6 - 0.8) * r;
+    const sy = (v * 1.4 - 0.7) * r;
+    const size = 1.5 + ((u + v) % 1) * 2.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 export function drawShip(ctx, ship) {
   const s = ship.spec;
   // Cosmetic override for the player ship: equipped hull-skin tint
@@ -1331,6 +1856,11 @@ export function drawShip(ctx, ship) {
   if (ship.puffs && ship.puffs.length > 0) {
     drawPuffs(ctx, ship);
   }
+  const raceAccent = (RACES[ship.race] && RACES[ship.race].accent) || tint;
+
+  // Engine plumes are drawn first so the hull occludes their forward
+  // edge and the exhaust appears to flow from behind the ship.
+  drawEnginePlume(ctx, ship);
 
   ctx.save();
   ctx.translate(ship.pos.x, ship.pos.y);
@@ -1389,6 +1919,24 @@ export function drawShip(ctx, ship) {
     }
     ctx.restore();
   }
+  // Hull silhouette — looked up per (race, klass).
+  const poly = getHull(ship.race, ship.klass);
+  tracedHull(ctx, poly, s.radius);
+  ctx.fill();
+  ctx.stroke();
+
+  // Interior detail layers — panel lines, spine, battle scars. All
+  // clipped to the hull so strokes don't bleed past the silhouette.
+  ctx.save();
+  tracedHull(ctx, poly, s.radius);
+  ctx.clip();
+  drawHullDetails(ctx, ship, raceAccent);
+  drawBattleScars(ctx, ship);
+  ctx.restore();
+
+  // Cockpit / bridge marker — drawn on top of the hull, unclipped, so
+  // tower silhouettes can protrude slightly past the hull edge.
+  drawCockpit(ctx, ship, raceAccent);
 
   // Carrier flight-deck stripe — a thin line down the centerline.
   if (ship.klass === "carrier") {
@@ -1557,7 +2105,20 @@ export function drawShip(ctx, ship) {
         ctx.fill();
       }
     }
+  // Heavy laser muzzle on the bow. Suppressed when the ship has a
+  // destructible laser subsystem at the same location — the subsystem
+  // node renders its own emitter glyph.
+  if (ship.spec.heavyLaser && !shipHasSubsystem(ship, "laser")) {
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(s.radius * 0.95, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
   }
+
+  // Destructible subsystem nodes — drawn after the legacy decorations
+  // so the destructible emplacements overlay any static muzzle/port
+  // glyphs that share a position with them.
+  drawSubsystems(ctx, ship);
 
   // Player indicator.
   if (ship.isPlayer) {

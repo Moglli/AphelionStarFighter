@@ -1,5 +1,9 @@
 import { ARENA, randomSpawnPos, createStarfield, setArenaSize, spawnZonesFor } from "./arena.js";
 import { createShip, updateShip, moduleWorldPos, recordDamageMark, emitPuff, emitSparks, damageCellsInRadius, pruneDisconnectedCells, shieldRadius, createWreckageChunks, updateWreck } from "./ship.js";
+import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
+import {
+  createShip, updateShip, findHitSubsystem, resetSubsystems, hasWorkingSubsystem,
+} from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey } from "./races.js";
@@ -123,6 +127,10 @@ export function startGame(game, opts = {}) {
   game.spectateTargetId = null;
   game.alliedRace = RACES[opts.race] ? opts.race : "terran";
   game.playerKlass = opts.klass || "fighter";
+  // Player's chosen opponent race for arena mode. "random" (or anything
+  // not a valid race key) means "pick at match start". Other modes
+  // currently ignore this and pick their own hostile race.
+  game.opponentRace = RACES[opts.opponent] ? opts.opponent : "random";
   game.mode = modeKey;
   game.score = 0;
   game.kills = 0;
@@ -367,6 +375,9 @@ function promotePlayer(game, klass) {
       candidate.weaponReloading = false;
       candidate.weaponReloadTimer = 0;
     }
+    // Subsystems were probably battered during the previous ownership;
+    // restore them so the player isn't punished for a respawn handoff.
+    resetSubsystems(candidate);
     ship = candidate;
   }
   // Apply equipped cosmetics. Renderer reads ship.cosmetics on draw.
@@ -874,7 +885,35 @@ function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
     }
   }
 
-  // Step 3: Hull.
+  // Step 3: Subsystem (if the hit point lands on a node). The node soaks
+  // incoming damage up to its remaining HP; overflow falls through to
+  // hull. Destroying a node fires `subsystemDestroyed` so audio /
+  // gameplay listeners can react, and dusts a small debris shower so
+  // the destruction reads visually.
+  if (hitPos && ship.subsystems && ship.subsystems.length > 0) {
+    const node = findHitSubsystem(ship, hitPos);
+    if (node) {
+      node.flash = 1;
+      if (remaining <= node.hp) {
+        node.hp -= remaining;
+        events.emit("hit", { ship, layer: "subsystem", amount: remaining, byPlayer });
+        spawnHitDebris(world, ship, hitPos, "subsystem", remaining);
+        return;
+      }
+      // Subsystem destroyed; overflow continues to hull.
+      const absorbed = node.hp;
+      node.hp = 0;
+      node.destroyed = true;
+      events.emit("subsystemDestroyed", { ship, kind: node.kind, byPlayer });
+      events.emit("hit", { ship, layer: "subsystem", amount: absorbed, byPlayer });
+      // Bigger fragment shower for a destroyed component.
+      spawnHitDebris(world, ship, hitPos, "subsystem", Math.max(20, absorbed));
+      remaining -= absorbed;
+      if (remaining <= 0) return;
+    }
+  }
+
+  // Step 4: Hull.
   ship.hp -= remaining;
   events.emit("hit", { ship, layer: "hull", amount: remaining, byPlayer });
   spawnHitDebris(world, ship, hitPos, "hull", remaining);
@@ -884,7 +923,7 @@ function applyDamage(ship, p, attacker = null, world = null, hitPos = null) {
 // for shield-layer hits (the shield ate it; nothing came off the hull).
 function spawnHitDebris(world, ship, hitPos, layer, amount) {
   if (!world || !hitPos) return;
-  if (layer !== "armor" && layer !== "hull") return;
+  if (layer !== "armor" && layer !== "hull" && layer !== "subsystem") return;
   // Scale fragments with the size of the bite the round took.
   // amount is raw damage post-shield. A fighter cannon round (~6 dmg)
   // shakes off one chip; a battleship broadside (~75 dmg) sheds a small
@@ -897,8 +936,12 @@ function spawnHitDebris(world, ship, hitPos, layer, amount) {
 }
 
 // ---------------------------------------------------------------------------
-// Beam ticking. Each beam applies its damage to the locked target on the
-// first frame it exists, then lingers as visual for `ttl` seconds.
+// Beam ticking. Heavy lasers are sustained beams: damage is spread over the
+// beam's full lifetime so dps = total / duration. Each tick we deal
+// (beam.dps * dt) to whatever target the beam is still locked onto, and
+// re-anchor the origin to the owner's current muzzle so the beam follows
+// the firing ship around. The beam dies early if the owner dies or loses
+// its laser subsystem mid-fire.
 // ---------------------------------------------------------------------------
 function applyAndAgeBeams(game, dt) {
   if (!game.beams || game.beams.length === 0) return;
@@ -929,12 +972,45 @@ function applyAndAgeBeams(game, dt) {
           }
           beam.hit = { x: t.pos.x, y: t.pos.y };
         } else {
+    // Re-anchor origin to the live owner so the beam tracks the firing
+    // ship's bow as it manoeuvres. If the owner is gone or has lost the
+    // laser subsystem since the beam started, kill the beam now.
+    const owner = beam.ownerId != null
+      ? game.ships.find((s) => s.id === beam.ownerId)
+      : null;
+    if (!owner || owner.dead || !hasWorkingSubsystem(owner, "laser")) {
+      beam.ttl = 0;
+      beam.hit = null;
+      continue;
+    }
+    const fwd = { x: Math.cos(owner.heading), y: Math.sin(owner.heading) };
+    beam.origin.x = owner.pos.x + fwd.x * owner.spec.radius * 0.9;
+    beam.origin.y = owner.pos.y + fwd.y * owner.spec.radius * 0.9;
+
+    const t = beam.target;
+    if (t && !t.dead) {
+      const dx = t.pos.x - beam.origin.x;
+      const dy = t.pos.y - beam.origin.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= beam.range * beam.range) {
+        const dmg = beam.dps * dt;
+        applyDamage(
+          t,
+          { damage: dmg, kind: "laser", fromKlass: "battleship" },
+          owner, game, { x: t.pos.x, y: t.pos.y },
+        );
+        if (t.hp <= 0) {
+          t.dead = true;
+          handleShipDestroyed(game, t, owner);
           beam.hit = null;
+        } else {
+          beam.hit = { x: t.pos.x, y: t.pos.y };
         }
       } else {
         beam.hit = null;
       }
-      beam.applied = true;
+    } else {
+      beam.hit = null;
     }
     beam.ttl -= dt;
   }

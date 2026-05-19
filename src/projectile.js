@@ -81,6 +81,21 @@ function updateMissile(m, dt, world) {
     m.targetId = target ? target.id : null;
   }
 
+  // Cluster bloom: when the parent missile is close enough to its
+  // current target, it splits into N smaller homing warheads and dies.
+  // Children fan out spatially but all home on the same target so PD
+  // can't cleanly pick off the whole package.
+  if (m.cluster && target) {
+    const dx = target.pos.x - m.pos.x;
+    const dy = target.pos.y - m.pos.y;
+    const bd = m.cluster.bloomDistance;
+    if (dx * dx + dy * dy <= bd * bd) {
+      spawnClusterChildren(m, target, world);
+      m.dead = true;
+      return;
+    }
+  }
+
   if (target) {
     // Lead intercept: aim at predicted future position.
     const dx = target.pos.x - m.pos.x;
@@ -107,6 +122,38 @@ function updateMissile(m, dt, world) {
   m.pos.y += m.vel.y * dt;
   m.ttl -= dt;
   if (m.ttl <= 0) m.dead = true;
+}
+
+// Spawn the N child warheads of a cluster missile. Children inherit the
+// parent's target so they all home on the same ship, but they fan out by
+// `cluster.childSpread` radians so they don't stack into a single point —
+// this gives them volume coverage against a moving target and forces PD
+// to spread its kills.
+function spawnClusterChildren(parent, target, world) {
+  const c = parent.cluster;
+  const count = c.count;
+  const spreadHalf = (c.childSpread != null ? c.childSpread : 0.6) * 0.5;
+  for (let i = 0; i < count; i++) {
+    const t = count > 1 ? (i / (count - 1)) - 0.5 : 0; // -0.5 .. +0.5
+    const heading = parent.heading + t * (spreadHalf * 2);
+    const color = c.childColors ? c.childColors[parent.side] : parent.color;
+    world.projectiles.push(createMissile({
+      pos: parent.pos,
+      heading,
+      damage: parent.damage,
+      ttl: c.childTtl,
+      radius: c.childRadius,
+      color,
+      side: parent.side,
+      ownerId: parent.ownerId,
+      speed: c.childSpeed,
+      turnRate: c.childTurnRate,
+      hp: c.childHp,
+      fromKlass: parent.fromKlass,
+      acquireRange: c.bloomDistance * 4,
+      initialTarget: target,
+    }));
+  }
 }
 
 function acquireMissileTarget(m, ships) {

@@ -3,7 +3,9 @@
 //   bomber     — strike bomber: slow capital killer with heavy missile pods.
 //                Fighters prioritise hunting them down before anything else.
 //   frigate    — anti-fighter escort: rapid forward gun + heavy PD wall
-//   cruiser    — strike cruiser: heavy guns + heavy torpedoes from standoff
+//   cruiser    — long-range artillery: cluster missiles + heavy siege
+//                missile + single-mount laser, plus PD for self-defence.
+//                No primary forward gun — fights from standoff range.
 //   battleship — dreadnought: slowest, massive HP, broadside barrage, heavy
 //                laser, missile pods, point-defence wall
 //   carrier    — fleet carrier: huge non-combatant capital. Defends only
@@ -164,30 +166,20 @@ export const CLASSES = {
   },
   cruiser: {
     name: "Cruiser",
-    role: "Strike Cruiser",
+    role: "Artillery",
     hp: 420,
-    maxSpeed: 80,
-    accel: 130,
+    maxSpeed: 75,
+    accel: 120,
     drag: 0.992,
     turnRate: 0.22,
     radius: 90,
     color: "#aaf",
-    firingMode: "forward",
-    // Slower-firing pair of heavy forward guns. Hits hard per shot but
-    // sustained DPS is below the frigate — the cruiser leans on torps.
-    weapon: {
-      damage: 28,
-      cooldown: 0.80,
-      projectileSpeed: 580,
-      range: 1050,
-      spread: 0.02,
-      muzzles: 2,
-      muzzleSpread: 55,
-      projectileRadius: 7,
-      projectileColors: { blue: "#5fc", red: "#fc3" },
-    },
-    shield: { max: 260, regen: 14, regenDelay: 5.0 },
-    armor: { max: 280, wearRate: 0.5 },
+    // No primary forward gun — the cruiser is a standoff artillery
+    // platform. It fights with cluster missiles, a heavy siege missile,
+    // and a single bow laser; PD covers close-in defence.
+    firingMode: "none",
+    shield: { max: 280, regen: 14, regenDelay: 5.0 },
+    armor: { max: 260, wearRate: 0.5 },
     pdCannons: {
       count: 2,
       damage: 3,
@@ -197,23 +189,70 @@ export const CLASSES = {
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
-    // Heavy torpedoes: slow, high damage, lots of hp so PD has to commit
-    // multiple rounds to kill one. The cruiser's defining weapon.
+    // Cluster missiles. The parent missile flies on a long arc toward
+    // its target, then "blooms" within `cluster.bloomDistance` of the
+    // target into N smaller homing warheads. Each warhead deals the
+    // pod's `damage` (so 5 children ≈ 150 dmg total if all hit). The
+    // parent is also fatter / tougher than a frigate's missile so PD
+    // has to commit some rounds to interrupt it before bloom.
     missilePods: {
       count: 2,
-      damage: 110,
-      cooldown: 11.0,
-      projectileSpeed: 220,
-      range: 2000,
-      ttl: 9.0,
+      damage: 30,
+      cooldown: 13.0,
+      projectileSpeed: 260,
+      range: 2400,
+      ttl: 12.0,
       turnRate: 1.4,
       hp: 12,
       radius: 10,
       acquireRange: 2200,
       colors: { blue: "#3df", red: "#f4a" },
+      hp: 4,
+      radius: 9,
+      acquireRange: 2600,
+      colors: { blue: "#5cf", red: "#f6a" },
+      cluster: {
+        count: 5,
+        bloomDistance: 320,
+        childSpeed: 380,
+        childTurnRate: 3.4,
+        childTtl: 2.5,
+        childHp: 1,
+        childRadius: 4,
+        childColors: { blue: "#9df", red: "#fb7" },
+        // Fan-out angle for the spread of children at bloom.
+        childSpread: 0.6,
+      },
     },
-    aiRange: 1050,
-    aiOrbit: 880,
+    // Siege missile: a single slow, massive-mass warhead. Tough hp so
+    // PD has to dedicate a salvo to bring it down. Devastating against
+    // any ship without armor; armored capitals still soak a lot of
+    // it because the existing wearRate path eats most of the damage.
+    siegeMissile: {
+      count: 1,
+      damage: 240,
+      cooldown: 18.0,
+      projectileSpeed: 180,
+      range: 2400,
+      ttl: 14.0,
+      turnRate: 0.8,
+      hp: 10,
+      radius: 13,
+      acquireRange: 2600,
+      colors: { blue: "#a5f", red: "#f3a" },
+    },
+    // Single-mount heavy laser. Same machinery as the battleship's beam
+    // but shorter range, lower damage, shorter sustain.
+    heavyLaser: {
+      damage: 90,
+      cooldown: 7.0,
+      range: 1700,
+      arc: Math.PI * 0.4,
+      beamDuration: 2.0,
+      beamColors: { blue: "#9ef", red: "#fc7" },
+    },
+    aiRange: 1800,
+    aiOrbit: 1500,
   },
   battleship: {
     name: "Battleship",
@@ -266,12 +305,16 @@ export const CLASSES = {
       colors: { blue: "#fff", red: "#fc8" },
     },
     heavyLaser: {
+      // `damage` is the total dealt over a full beam lifetime; spread
+      // evenly across `beamDuration` seconds (so dps = damage /
+      // beamDuration). Cooldown is measured from fire-time, so the
+      // recovery window between beams is (cooldown - beamDuration).
       damage: 180,
       cooldown: 5.0,
       range: 2400,
       // Firing arc from the bow (radians, half-angle).
       arc: Math.PI * 0.55,
-      beamDuration: 0.45,
+      beamDuration: 3.0,
       beamColors: { blue: "#9ef", red: "#fc7" },
     },
     aiRange: 1000,
