@@ -1492,7 +1492,7 @@ export function drawShip(ctx, ship, zoom = 1) {
       ctx.fillStyle = alive ? "#fff" : "rgba(60,40,30,0.75)";
       const a = (i / n) * Math.PI * 2;
       ctx.beginPath();
-      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 2, 0, Math.PI * 2);
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 3, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1600,7 +1600,10 @@ export function drawShip(ctx, ship, zoom = 1) {
     const frac = ship.shield / ship.shieldMax;
     const baseAlpha = 0.08 + 0.18 * frac;
     const alpha = Math.min(0.85, baseAlpha + ship.shieldFlash);
-    const shieldOffset = Math.max(6, s.radius * 0.18);
+    // Bigger stand-off after the defensive buff pass — the bubble reads
+    // as a wrap-around energy field instead of an outline. Floor of 8px
+    // keeps small-craft bubbles visible without overpowering the hull.
+    const shieldOffset = Math.max(8, s.radius * 0.22);
     const bubbleR = s.radius + shieldOffset;
     ctx.strokeStyle = "rgba(120, 220, 255, " + alpha.toFixed(3) + ")";
     ctx.lineWidth = 2 + ship.shieldFlash * 4;

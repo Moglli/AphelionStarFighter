@@ -122,6 +122,106 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Defensive systems buff pass: shields, armor, PD, stations
+
+**What changed**
+
+After the non-linear capital HP bump (BBs went 1100 → 4950) defenses
+hadn't kept pace — shields popped in seconds and the PD wall was thin
+enough that missile waves were getting through largely untouched.
+Coordinated buff across every defensive layer plus a matching visual
+scale-up:
+
+1. **Shields buffed across the board.** Max values ~1.6–1.8× higher,
+   regen ~30–50% faster, regenDelay shortened (notably 6.0 → 4.5s on
+   carrier, 5.5 → 4.5s on battleship) so layered defense rewards
+   sustained pressure breaks. Fighter shield doubled (24 → 40) since
+   it had become trivial under modern PD fire.
+2. **Capital armor toughened.** Max bumped ~1.5–1.6× and wearRate
+   dropped (BB 0.45 → 0.34, carrier 0.45 → 0.34, cruiser 0.50 → 0.38).
+   Plates now absorb a meaningfully larger fraction of incoming
+   damage per point of armor.
+3. **PD count + range + rate of fire bumped.** Carrier 8 → 14
+   turrets, BB 6 → 10, cruiser/frigate 4 → 6, bomber 1 → 2.
+   Cooldowns dropped ~15–20% across the line, range up ~20%, per-shot
+   damage up. PD is meaningfully harder to slip a missile past now;
+   PD_VS_SHIP_MUL stays at 0.22 so anti-ship damage isn't the buff —
+   anti-missile screen quality is.
+4. **Stations significantly buffed.** Base HP 600 → 950 (then 3× from
+   the tier multiplier → 2850 per node), shield 250 → 700, armor
+   300 → 780 / wearRate 0.36 → 0.30. Station radius 70 → 80 so the
+   silhouette reads as more imposing. Defend-mode endgame fights
+   were finishing in 30s; now they're genuine sieges.
+5. **Station-node weapon templates buffed too.** `PD_BASE`,
+   `MISSILES_BASE`, `LASER_BASE` in races.js each got a stat bump —
+   so every race's station nodes pick up the defensive improvements
+   without per-race edits. The race-specific overrides ride on top
+   of the new baselines and continue to differentiate races.
+6. **Visual upgrade to match.** Shield bubble offset factor 0.18 →
+   0.22 (floor 6 → 8) so the bubble reads as a wrap-around energy
+   field rather than an outline — capital bubbles get ~30px of
+   stand-off now. PD turret render radius 2 → 3 so the wall of PD
+   on a carrier is visibly a wall.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | shield/armor/pdCannons values per class. Station base hp/shield/armor/radius. |
+| `src/races.js` | `PD_BASE`, `MISSILES_BASE`, `LASER_BASE` template values bumped — propagates to every race's station-node spec via the `pd()` / `pods()` / `laser()` helpers. |
+| `src/ship.js` | Shield bubble offset formula updated. PD turret draw radius 2 → 3. |
+
+**Design decisions / gotchas**
+
+- **PD anti-ship multiplier (`PD_VS_SHIP_MUL = 0.22`) untouched.**
+  PD still chips ships ~22% of headline damage. Don't undo that with
+  the new damage values — the buff is anti-missile, not anti-ship.
+  If PD starts shredding fighters again, lower the multiplier
+  rather than reverting the damage numbers.
+- **Race overrides ride on top.** Hegemony's heavier PD specs
+  (`pd(6, { damage: 9 })`) still merge over the new base. Hegemony
+  capitals are now even tougher relative to Terran than before —
+  intentional, they're the tank race.
+- **`PD_BASE` change affects every station.** All four races' station
+  nodes get the buff for free because they layer mods on top of
+  `PD_BASE`. If you want a specific race's PD to feel different,
+  add explicit overrides to that race's station spec.
+- **Capital fights will be very long.** Combined with the HP_TIER_MUL
+  pass, a battleship has 4950 hull + 1050 armor + 950 shield.
+  Capital-on-capital brawls now take 90–150 seconds. Module
+  destruction remains the practical accelerator — buffed defenses
+  don't apply to module HP.
+- **Shield offset floor 6 → 8.** Fighters now get a 9px bubble
+  (radius 10 × 0.22 = 2.2 floored to 8). If a future class has
+  radius < 9 the floor kicks in; preserve it.
+- **Bomber PD upgraded to 2 turrets** but still labelled "Anti-missile
+  only in practice" — relies on PD_VS_SHIP_MUL to keep the
+  anti-fighter damage low. Don't add more turrets without
+  re-checking the bomber-vs-fighter balance.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Arena vs Hegemony. Watch a battleship duel: shields now hold
+  through a full broadside instead of popping mid-volley. Once
+  shields drop, armor visibly stripes off slowly. Total hull
+  death takes 90–150s of focused fire.
+- Pilot a fighter into a battleship's PD bubble: the 10 turrets
+  shred any missiles you tried to pre-launch from the same angle,
+  but your fighter only loses ~22% damage from the PD itself.
+- Defend mode vs any race: stations are visibly bigger and take
+  multiple capital salvos per node to crack. Each node has 7+ PD
+  turrets at their new range and rate. Match length is up.
+- Spectate a capital with the new bubble offset: the shield ring
+  is a clear wrap-around field, not an outline. PD turret stubs
+  on the hull are larger circles.
+
 ### 2026-05-20 — Procedural SFX + SFX mute + shield impact visual
 
 **What changed**

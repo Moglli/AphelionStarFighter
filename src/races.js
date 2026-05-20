@@ -16,16 +16,16 @@ import { CLASSES } from "./classes.js";
 // these slightly so a Hegemony PD bank feels different from a Voidsworn one.
 // ---------------------------------------------------------------------------
 const PD_BASE = {
-  damage: 7, cooldown: 0.22, projectileSpeed: 1000, range: 480,
+  damage: 9, cooldown: 0.18, projectileSpeed: 1040, range: 560,
   projectileRadius: 3, projectileColors: { blue: "#cef", red: "#fda" },
 };
 const MISSILES_BASE = {
-  damage: 65, cooldown: 8, projectileSpeed: 300, range: 2200,
-  ttl: 7.5, turnRate: 1.9, hp: 3, radius: 7, acquireRange: 2400,
+  damage: 80, cooldown: 7, projectileSpeed: 320, range: 2400,
+  ttl: 8.5, turnRate: 1.9, hp: 4, radius: 7, acquireRange: 2600,
   colors: { blue: "#fff", red: "#fc8" },
 };
 const LASER_BASE = {
-  damage: 200, cooldown: 5.0, range: 2400,
+  damage: 260, cooldown: 4.5, range: 2600,
   // Wide arc — stations can't snap-turn so the heavy beam covers a full
   // forward hemisphere.
   arc: Math.PI * 0.95,
