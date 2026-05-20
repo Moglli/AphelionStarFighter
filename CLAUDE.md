@@ -122,6 +122,104 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Engine fire + hull venting VFX scaling with damage
+
+**What changed**
+
+Damage feedback wasn't dramatic enough — modules emitted a thin smoke
+puff at half HP and that was about it. After the non-linear capital HP
+bump (BBs now take ~4× longer to kill), a wounded battleship needed to
+*look* wounded the whole time. Three coordinated additions:
+
+1. **Dedicated engine vent + fire plume.** Engine modules now route
+   through `spawnEnginePlumeVFX` which emits dark smoke + flame jets
+   *backward along the ship's heading*. Severity ramps from ~0.5 at
+   half HP to 1.0 when destroyed — at full severity the engine is
+   pumping black smoke and visibly burning, two fire flickers per
+   emission for a "jet of fire" read. Engine emission rates are
+   bumped (30 disabled / 12 damaged vs 22/7 for other modules) so
+   the rear of a wounded ship is unmistakably venting.
+2. **Hull-wide venting VFX.** Below 70% hull HP, every ship emits
+   smoke from random points on its silhouette at a rate that scales
+   linearly with damage. Above ~55% severity (≈ 36% HP) the vents
+   start sparking with fire. A critically damaged capital (≤15% HP)
+   is visibly burning across the hull, not just at the engine.
+3. **Module smoke + fire rates bumped.** Previous `DAMAGED_RATE`
+   3.5 / `DISABLED_RATE` 12 doubled to 7 / 22, and disabled-module
+   fire chance went 0.35 → 0.55 per emission. Smoke puffs are
+   bigger (5–12 px size vs 3.5–6 px) and last longer (1.1–1.9 s
+   vs 1–1.7 s).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/particles.js` | `createFire` now honors `opts.size` / `opts.speed` / `opts.ttl` so callers can tune flames for engine vs hit-spark use. `spawnContinuousSmoke` palette and sizes nudged up. Two new spawners: `spawnEnginePlumeVFX(particles, x, y, backwardAngle, severity)` and `spawnHullVentVFX(particles, x, y, outwardAngle, severity)`. |
+| `src/game.js` | `emitContinuousModuleVFX` rewritten: routes `engine-*` modules through the new engine spawner with `severity = m.disabled ? 1 : max(0.45, 1 - frac)` and `backward = ship.heading + π`; everything else still uses `spawnContinuousSmoke`. Added per-ship hull-vent loop that fires when `hp/hpMax < 0.70` at a rate scaling with severity. |
+
+**Design decisions / gotchas**
+
+- **Engine vents backward, not outward.** Smoke + fire spawn at the
+  engine nozzle position and drift along `ship.heading + π` so a
+  moving capital trails a visible plume behind it. If you ever
+  reorient engines (e.g. side-mounted maneuver thrusters), pass a
+  per-engine backward vector — don't fold it into the spawner.
+- **Hull vent points are sampled per-frame, not stored.** Each
+  vent emission picks a fresh random angle around `ship.pos`, so
+  smoke trails vary across the hull instead of pouring from a
+  fixed leak. If a specific "this section is breached" effect is
+  ever wanted, push a `ship.ventPoints` array and round-robin
+  through it.
+- **No off-screen culling.** Particle spawn rolls run for every
+  live ship every frame. The Poisson gate (`rate * dt`) caps the
+  actual spawn count — at peak (~250 ships in a Hegemony brawl,
+  half below 70% HP) you'd emit ~1000 hull-vent particles per
+  second across the whole battle. Manageable; add culling only
+  if you see frame-time regressions on mobile.
+- **Severity formula:** `(0.70 - hpFrac) / 0.60`. Linear; clamps
+  to [0,1]. Bump the divisor if you want vents to ramp up faster
+  (smaller number = earlier saturation). Keep the trigger at 0.70
+  — much earlier and ships look "broken" the moment they take a
+  scratch.
+- **Engine severity floor of 0.45.** Without it, an engine at 49%
+  HP would emit the same as one at 99% HP (both pass the < 0.5
+  gate). The floor ensures *any* engine in the damaged state
+  emits meaningful smoke instead of barely-there puffs.
+- **Hull-vent fires only above 0.45 severity** (≈ 43% HP).
+  Earlier-stage smoke without fire reads as "leaking" rather than
+  "burning" — important distinction. Don't lower the threshold
+  without doing a playtest pass.
+- **No new spawners for armor / shield damage.** Those layers
+  already have their own feedback (armor flake fragments, shield
+  flash). Adding ambient smoke at those levels would clutter the
+  visual.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Arena vs Hegemony. Find a battleship duel (spectate one with V).
+  Once a BB drops below ~70% hull, it should start trailing smoke
+  from random hull points. Below 40% the smoke turns black and
+  fires start flickering across the silhouette.
+- Aim cannon fire specifically at a battleship's engine module
+  (rear nozzles). After ~30 sec of focused fire the engine module
+  drops into damaged state — you should see a continuous dark
+  smoke + fire plume venting BACKWARD from that nozzle. When
+  it's destroyed, the plume turns into a heavy black smoke jet
+  with steady flame jets.
+- Spectate a critically-wounded carrier (≤ 20% HP): hull should
+  be visibly burning in multiple places, engine plumes pouring
+  smoke behind it. Reads as "this ship is about to die".
+- Fly a healthy fighter past an enemy frigate that's at 80% HP:
+  no ambient smoke yet (above the 0.70 threshold). Shoot it down
+  to 60% and the venting kicks in.
+
 ### 2026-05-20 — Pinch zoom + non-linear capital HP + crater-style hull damage
 
 **What changed**

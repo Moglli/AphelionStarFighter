@@ -9,6 +9,7 @@ import {
 } from "./modules.js";
 import {
   updateParticle, spawnHitSparks, spawnDestructionBurst, spawnContinuousSmoke,
+  spawnEnginePlumeVFX, spawnHullVentVFX,
   spawnArmorFlakes, spawnHullBreakoff,
 } from "./particles.js";
 import { damageCellsInRadius, killCellsForModule } from "./sprites.js";
@@ -643,23 +644,72 @@ export function restart(game) {
 // ---------------------------------------------------------------------------
 // Continuous module-state VFX. Each frame, for every damaged-but-alive
 // module emit a thin smoke puff at a low rate, and for every disabled
-// module emit thick dark smoke + occasional fire at a higher rate. The
-// per-frame coin flip uses dt so the average rate is framerate-stable.
+// module emit thick dark smoke + occasional fire at a higher rate.
+// Engine modules use a dedicated spawner that vents smoke + flame jets
+// backward along the ship's heading so the engine reads as "burning"
+// instead of just a generic smoking patch. Per-frame coin flip uses
+// dt so the average rate is framerate-stable.
+//
+// On top of per-module VFX, every ship below 70% hull HP emits hull
+// venting VFX (smoke + fires at higher severity) from random points
+// around its silhouette — visible damage at the ship level even when
+// no specific module has taken a hit.
 function emitContinuousModuleVFX(game, dt) {
-  // Smoke rates per second.
-  const DISABLED_RATE = 12;
-  const DAMAGED_RATE = 3.5;
+  // Smoke rates per second. Bumped from the previous 12 / 3.5 so the
+  // damage feedback is more dramatic; combined with the new engine +
+  // hull spawners a half-dead capital should be visibly trailing
+  // smoke from multiple sources.
+  const DISABLED_RATE = 22;
+  const DAMAGED_RATE  = 7;
+  // Engine module rates ride higher so the rear of a damaged ship is
+  // unmistakably venting plumes — engines are the primary "damage tell"
+  // the user asked for.
+  const ENGINE_DISABLED_RATE = 30;
+  const ENGINE_DAMAGED_RATE  = 12;
   for (const s of game.ships) {
-    if (s.dead || !s.modules) continue;
-    for (const m of s.modules) {
-      let rate = 0;
-      if (m.disabled) rate = DISABLED_RATE;
-      else if (m.hp / m.hpMax < 0.5) rate = DAMAGED_RATE;
-      else continue;
-      // Poisson-style: probability = rate * dt of one emission this frame.
-      if (Math.random() < rate * dt) {
+    if (s.dead) continue;
+    if (s.modules) {
+      for (const m of s.modules) {
+        const frac = m.hp / m.hpMax;
+        const isEngine = m.name && m.name.startsWith("engine-");
+        let rate = 0;
+        if (m.disabled) rate = isEngine ? ENGINE_DISABLED_RATE : DISABLED_RATE;
+        else if (frac < 0.5) rate = isEngine ? ENGINE_DAMAGED_RATE : DAMAGED_RATE;
+        else continue;
+        if (Math.random() >= rate * dt) continue;
         const wpos = moduleWorldPos(s, m.name);
-        if (wpos) spawnContinuousSmoke(game.particles, wpos.x, wpos.y, m.disabled);
+        if (!wpos) continue;
+        if (isEngine) {
+          // Severity 0.5 (lightly damaged) → 1.0 (disabled). Backward
+          // vector in world space is the heading flipped 180° — engines
+          // sit at the rear of the hull and vent rearward.
+          const severity = m.disabled ? 1.0 : Math.max(0.45, 1 - frac);
+          const backward = s.heading + Math.PI;
+          spawnEnginePlumeVFX(game.particles, wpos.x, wpos.y, backward, severity);
+        } else {
+          spawnContinuousSmoke(game.particles, wpos.x, wpos.y, m.disabled);
+        }
+      }
+    }
+    // Ship-wide hull venting once the hull is meaningfully damaged.
+    // Severity ramps from ~0 at 70% hp to ~1 at 10% hp; below that
+    // we cap so it doesn't go super-nuclear. Emission rate scales
+    // linearly with severity.
+    const hpFrac = s.hpMax > 0 ? s.hp / s.hpMax : 1;
+    if (hpFrac < 0.70) {
+      const severity = Math.max(0, Math.min(1, (0.70 - hpFrac) / 0.60));
+      const VENT_BASE_RATE = 9;        // smokes per second at full severity
+      const rate = VENT_BASE_RATE * severity;
+      if (Math.random() < rate * dt) {
+        // Pick a random point on the hull silhouette — angle around
+        // ship centre, radius slightly less than spec.radius so the
+        // smoke originates at the hull surface, not from inside.
+        const ang = Math.random() * Math.PI * 2;
+        const R = s.spec && s.spec.radius ? s.spec.radius : 14;
+        const r = R * (0.55 + Math.random() * 0.40);
+        const wx = s.pos.x + Math.cos(ang) * r;
+        const wy = s.pos.y + Math.sin(ang) * r;
+        spawnHullVentVFX(game.particles, wx, wy, ang, severity);
       }
     }
   }
