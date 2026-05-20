@@ -32,11 +32,15 @@ const ENGINE_MODULE = {
 };
 
 // Disc radius of an engine module (normalized to ship.spec.radius).
-// Tighter for classes with more plumes so adjacent discs don't overlap.
+// Bumped roughly 60% over the original layout — the previous battleship
+// engine radius (0.075 → 11.7px disc on a 156px hull) was too small to
+// reliably target during a strafing run. The new sizes are still
+// tighter than other modules so adjacent plumes don't merge into one
+// blob, but they're big enough to aim at.
 const ENGINE_RADIUS = {
-  fighter: 0.28, bomber: 0.26,
-  frigate: 0.18, cruiser: 0.11,
-  battleship: 0.075, carrier: 0.13,
+  fighter: 0.34, bomber: 0.32,
+  frigate: 0.26, cruiser: 0.18,
+  battleship: 0.13, carrier: 0.20,
 };
 
 // Offsets and radii are normalized to spec.radius (same convention as
@@ -197,7 +201,16 @@ export function moduleWorldPos(ship, name) {
   };
 }
 
-// Closest alive module whose disc contains a ship-local point.
+// Hit-zone inflation. The visible module disc draws at exact `m.radius`
+// (matches the icon layer in ship.js), but the *hit* radius is 20%
+// bigger so a near-miss still counts as a clip. Player explicitly
+// asked for nodes to be easier to hit; this keeps the visual honest
+// while making aim more forgiving. If you change this, also reconsider
+// auditModuleLayout's overlap threshold (currently 0.75) — overlap
+// between hit-radii is now ~1.2x the visual.
+const HIT_INFLATE = 1.20;
+
+// Closest alive module whose hit disc contains a ship-local point.
 export function findHitModuleLocal(ship, lx, ly) {
   if (!ship.modules) return null;
   const R = ship.spec.radius;
@@ -206,7 +219,7 @@ export function findHitModuleLocal(ship, lx, ly) {
     if (m.disabled) continue;
     const mx = m.offset.x * R;
     const my = m.offset.y * R;
-    const mr = m.radius * R;
+    const mr = m.radius * R * HIT_INFLATE;
     const dx = lx - mx, dy = ly - my;
     const d2 = dx * dx + dy * dy;
     if (d2 <= mr * mr && d2 < bestD2) {
@@ -226,7 +239,7 @@ export function findSplashModulesLocal(ship, lx, ly, blastWorld) {
     if (m.disabled) continue;
     const mx = m.offset.x * R;
     const my = m.offset.y * R;
-    const reach = m.radius * R + blastWorld;
+    const reach = m.radius * R * HIT_INFLATE + blastWorld;
     const dx = lx - mx, dy = ly - my;
     if (dx * dx + dy * dy <= reach * reach) out.push(m);
   }
