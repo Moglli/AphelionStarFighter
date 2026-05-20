@@ -167,6 +167,8 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     aiMissileCd: 0,
     // PD turret cooldowns (one per turret).
     pdCooldowns: spec.pdCannons ? new Array(spec.pdCannons.count).fill(0) : null,
+    // Ring-cannon cooldowns (frigates have 4 mounts firing independently).
+    ringCooldowns: spec.ringCannons ? new Array(spec.ringCannons.count).fill(0) : null,
     // Missile pod cooldowns.
     podCooldowns: spec.missilePods ? new Array(spec.missilePods.count).fill(0) : null,
     // Heavy laser cooldown.
@@ -284,25 +286,14 @@ export function updateShip(ship, dt, world) {
     const decay = Math.exp(-1.5 * dt);
     ship.vel.x *= decay;
     ship.vel.y *= decay;
-  } else if (ship.klass === "fighter" || ship.klass === "bomber") {
+  } else if (ship.klass !== "station") {
+    // Every combat ship — fighters, bombers, and now capitals — flies
+    // at constant max speed in its heading direction. AIs steer
+    // exclusively via c.aim; c.thrust is no longer consulted. This
+    // unifies the movement model and makes capital paths much easier
+    // to read on the minimap (no thrust-mediated jitter).
     ship.vel.x = Math.cos(ship.heading) * effMaxSpeed;
     ship.vel.y = Math.sin(ship.heading) * effMaxSpeed;
-  } else if (c.thrust && (c.thrust.x !== 0 || c.thrust.y !== 0)) {
-    const t = V.clampLen(c.thrust, 1);
-    ship.vel.x = t.x * effMaxSpeed;
-    ship.vel.y = t.y * effMaxSpeed;
-  } else if (ship.isPlayer) {
-    // Player never decelerates — keep flying at effMaxSpeed in current
-    // direction; fall back to heading when there's no prior velocity
-    // (game start / respawn).
-    const curLen = Math.hypot(ship.vel.x, ship.vel.y);
-    if (curLen > 1e-6) {
-      ship.vel.x = (ship.vel.x / curLen) * effMaxSpeed;
-      ship.vel.y = (ship.vel.y / curLen) * effMaxSpeed;
-    } else {
-      ship.vel.x = Math.cos(ship.heading) * effMaxSpeed;
-      ship.vel.y = Math.sin(ship.heading) * effMaxSpeed;
-    }
   } else {
     ship.vel.x = 0;
     ship.vel.y = 0;
@@ -351,6 +342,10 @@ export function updateShip(ship, dt, world) {
     ship.cooldownPort -= dt;
     ship.cooldownStarboard -= dt;
     updateBroadsideFire(ship, world, dt);
+  } else if (s.firingMode === "ring") {
+    // Ring-cannon frigates: cooldown decrement happens in the secondary
+    // subsystems block below alongside PD; firing dispatch happens there
+    // too. No primary-weapon work here.
   } else if (s.firingMode === "forward") {
     ship.cooldown -= dt;
     // Magazine reload: when empty, the timer ticks down and then refills.
@@ -419,6 +414,11 @@ export function updateShip(ship, dt, world) {
       ship.podCooldowns[i] = Math.max(0, ship.podCooldowns[i] - dt);
     }
   }
+  if (ship.ringCooldowns) {
+    for (let i = 0; i < ship.ringCooldowns.length; i++) {
+      ship.ringCooldowns[i] = Math.max(0, ship.ringCooldowns[i] - dt);
+    }
+  }
 
   // Fighter missile launch (player or AI). One-shot — flag is always cleared
   // after evaluation so a press while cooling isn't queued indefinitely.
@@ -432,6 +432,7 @@ export function updateShip(ship, dt, world) {
 
   // Capital ship subsystems.
   if (s.pdCannons) updatePDFire(ship, world);
+  if (s.ringCannons) updateRingFire(ship, world);
   if (s.missilePods) updateMissilePodFire(ship, world);
   if (s.heavyLaser) updateHeavyLaser(ship, world);
   if (s.replenish) updateReplenishment(ship, dt, world);
@@ -684,6 +685,83 @@ function pickPDTarget(turretPos, range2, side, world) {
     if (d2 < bestAnyD2) { bestAnyD2 = d2; bestAny = o; }
   }
   return bestBomber || bestFighter || bestAny;
+}
+
+// ---------------------------------------------------------------------------
+// Ring cannons (frigate). Four fixed mounts arranged at the cardinal
+// points of the hull (front / starboard / aft / port). Each fires
+// independently when an enemy lies inside its arc + range. Lead-aim
+// is computed per cannon; the projectile is tagged fromKlass:"frigate"
+// so the PD-vs-ship nerf doesn't apply.
+// ---------------------------------------------------------------------------
+const RING_MOUNT_FACINGS = [0, Math.PI / 2, Math.PI, -Math.PI / 2]; // front, stbd, aft, port
+
+function ringMountOrigin(ship, i) {
+  // Place each mount on the hull rim along its facing direction.
+  const localAng = RING_MOUNT_FACINGS[i];
+  const lx = Math.cos(localAng) * ship.spec.radius;
+  const ly = Math.sin(localAng) * ship.spec.radius;
+  const ca = Math.cos(ship.heading), sa = Math.sin(ship.heading);
+  return {
+    x: ship.pos.x + lx * ca - ly * sa,
+    y: ship.pos.y + lx * sa + ly * ca,
+  };
+}
+
+function pickRingTarget(ship, mountWorldAng, arc, range2, world) {
+  // Mount points outward at `mountWorldAng`; an enemy is in arc when
+  // the bearing from mount-to-enemy is within ±arc of that direction.
+  // Picks the nearest enemy that satisfies both checks; missiles and
+  // fighters are valid targets like any other.
+  const cosArc = Math.cos(arc);
+  let best = null, bestD2 = range2;
+  for (const o of world.ships) {
+    if (o.dead || o.side === ship.side) continue;
+    const dx = o.pos.x - ship.pos.x;
+    const dy = o.pos.y - ship.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > range2 || d2 < 1e-6) continue;
+    const d = Math.sqrt(d2);
+    const cosTheta = (dx * Math.cos(mountWorldAng) + dy * Math.sin(mountWorldAng)) / d;
+    if (cosTheta < cosArc) continue;
+    if (d2 < bestD2) { bestD2 = d2; best = o; }
+  }
+  return best;
+}
+
+function updateRingFire(ship, world) {
+  const rc = ship.spec.ringCannons;
+  const range2 = rc.range * rc.range;
+  for (let i = 0; i < ship.ringCooldowns.length; i++) {
+    if (ship.ringCooldowns[i] > 0) continue;
+    const mountWorldAng = ship.heading + RING_MOUNT_FACINGS[i];
+    const tgt = pickRingTarget(ship, mountWorldAng, rc.arc, range2, world);
+    if (!tgt) continue;
+    const origin = ringMountOrigin(ship, i);
+    // Lead-aim — same linear prediction as PD.
+    const tx = tgt.pos.x, ty = tgt.pos.y;
+    const tvx = tgt.vel ? tgt.vel.x : 0;
+    const tvy = tgt.vel ? tgt.vel.y : 0;
+    const rx = tx - origin.x, ry = ty - origin.y;
+    const tDist = Math.hypot(rx, ry);
+    const tT = tDist / rc.projectileSpeed;
+    const px = tx + tvx * tT, py = ty + tvy * tT;
+    const ang = Math.atan2(py - origin.y, px - origin.x);
+    const dir = V.fromAngle(ang);
+    world.projectiles.push(createProjectile({
+      pos: origin,
+      vel: { x: dir.x * rc.projectileSpeed, y: dir.y * rc.projectileSpeed },
+      damage: rc.damage,
+      ttl: rc.range / rc.projectileSpeed,
+      radius: rc.projectileRadius,
+      color: rc.projectileColors[ship.side],
+      side: ship.side,
+      ownerId: ship.id,
+      kind: "cannon",
+      fromKlass: "frigate",
+    }));
+    ship.ringCooldowns[i] = rc.cooldown;
+  }
 }
 
 function updatePDFire(ship, world) {

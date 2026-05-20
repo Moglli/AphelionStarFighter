@@ -25,20 +25,6 @@ function leadAim(shooter, target, speed) {
   };
 }
 
-// Find nearest enemy battleship — battleships prioritise dueling each other.
-function nearestEnemyBattleship(ship, ships) {
-  let best = null, bestD2 = Infinity;
-  for (const other of ships) {
-    if (other.dead || other.side === ship.side) continue;
-    if (other.klass !== "battleship") continue;
-    const dx = other.pos.x - ship.pos.x;
-    const dy = other.pos.y - ship.pos.y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < bestD2) { bestD2 = d2; best = other; }
-  }
-  return best;
-}
-
 function nearestEnemyOfClass(ship, ships, klass) {
   let best = null, bestD2 = Infinity;
   for (const other of ships) {
@@ -86,10 +72,15 @@ export function updateAI(ship, world, dt) {
 
   const c = ship.controller;
 
-  // Battleships duel each other; bombers hunt capitals.
+  // Battleships duel each other; if no enemy battleship is on the
+  // field they pick the next-largest live target. Cruisers prefer
+  // the largest enemy with missile-pod weight in mind. Bombers hunt
+  // capitals.
   let target = null;
   if (ship.klass === "battleship") {
-    target = nearestEnemyBattleship(ship, world.ships);
+    target = pickBattleshipTarget(ship, world.ships);
+  } else if (ship.klass === "cruiser") {
+    target = pickCruiserTarget(ship, world.ships);
   } else if (ship.klass === "bomber") {
     target = pickBomberTarget(ship, world.ships);
   }
@@ -124,8 +115,10 @@ export function updateAI(ship, world, dt) {
     bomberFlankAI(ship, target, dt, world);
   } else if (ship.klass === "battleship") {
     battleshipAI(ship, target, dt, world);
-  } else {
-    orbitAI(ship, target, dt, world);
+  } else if (ship.klass === "cruiser") {
+    cruiserAI(ship, target, dt, world);
+  } else if (ship.klass === "frigate") {
+    frigateAI(ship, target, dt, world);
   }
 
   applyAdmiralPosture(ship, world);
@@ -177,42 +170,6 @@ function applyAdmiralPosture(ship, world) {
     }
   }
   // "free" is the no-op — the per-class AI's outputs stand as-is.
-}
-
-// Steering force that pushes a capital ship away from any other capital it
-// is getting too close to (friendly or enemy). Buffer is just the hulls
-// plus a small margin, so engagement at orbit ranges is unaffected; only
-// near-collisions are nudged apart.
-function capitalSeparation(ship, ships) {
-  let ax = 0, ay = 0;
-  const myR = ship.spec.radius;
-  for (const o of ships) {
-    if (o.dead || o === ship) continue;
-    // Only capitals push each other apart. Small craft pass through.
-    if (o.klass === "fighter" || o.klass === "bomber") continue;
-    const dx = ship.pos.x - o.pos.x;
-    const dy = ship.pos.y - o.pos.y;
-    const sep = myR + o.spec.radius + 90;
-    const d2 = dx * dx + dy * dy;
-    if (d2 > sep * sep || d2 < 1e-6) continue;
-    const d = Math.sqrt(d2);
-    const strength = 1 - d / sep;
-    ax += (dx / d) * strength;
-    ay += (dy / d) * strength;
-  }
-  if (Math.abs(ax) < 1e-6 && Math.abs(ay) < 1e-6) return null;
-  return { x: ax, y: ay };
-}
-
-function blendThrustWithSeparation(thrust, sep, weight) {
-  if (!sep) return thrust;
-  const tx = thrust.x + sep.x * weight;
-  const ty = thrust.y + sep.y * weight;
-  const l = Math.hypot(tx, ty);
-  if (l <= 1e-6) return { x: 0, y: 0 };
-  // Re-normalize so thrust magnitude doesn't exceed 1 (which would clip
-  // back to maxSpeed inside the ship update anyway).
-  return l > 1 ? { x: tx / l, y: ty / l } : { x: tx, y: ty };
 }
 
 // ---------------------------------------------------------------------------
@@ -694,8 +651,36 @@ function bomberFlankAI(ship, target, dt, world) {
 }
 
 // ---------------------------------------------------------------------------
-// Battleship behaviour: rush enemy battleships nose-first; only turn to
-// broadside once within barrage range.
+// Target-priority tables. Battleships and cruisers prefer larger,
+// stationary, capital-class targets; the picker walks the table in
+// order and grabs the nearest live enemy of each class.
+// ---------------------------------------------------------------------------
+const BATTLESHIP_PRIORITY = ["battleship", "station", "carrier", "cruiser", "frigate", "bomber", "fighter"];
+const CRUISER_PRIORITY    = ["battleship", "carrier", "station", "cruiser", "frigate"];
+
+function pickByPriority(ship, ships, priority) {
+  for (const klass of priority) {
+    const t = nearestEnemyOfClass(ship, ships, klass);
+    if (t) return t;
+  }
+  return null;
+}
+
+function pickBattleshipTarget(ship, ships) {
+  return pickByPriority(ship, ships, BATTLESHIP_PRIORITY);
+}
+
+function pickCruiserTarget(ship, ships) {
+  return pickByPriority(ship, ships, CRUISER_PRIORITY);
+}
+
+// ---------------------------------------------------------------------------
+// Battleship behaviour: heading-locked. Press forward toward the target
+// until inside broadside range, then turn so the target sits ±broadsideArc
+// off the beam — the existing updateBroadsideFire system catches the
+// target in its arc and looses the multi-stage salvo. The aim transition
+// happens via heading rotation alone; the ship's translation falls out
+// of the heading.
 // ---------------------------------------------------------------------------
 function battleshipAI(ship, target, dt, world) {
   const c = ship.controller;
@@ -704,118 +689,108 @@ function battleshipAI(ship, target, dt, world) {
   const dist = V.len(rel);
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
 
-  const barrageRange = s.weapon.range;
-  const ENGAGE_DIST = barrageRange * 0.85;
+  // Cone of distances where the BB orbits broadside-on. ENTER is tighter
+  // than EXIT so we don't oscillate between rush and broadside when
+  // motion drifts us across the boundary.
+  const broadsideRange = s.weapon.range * 0.85;
   if (ship.battleshipMode === undefined) ship.battleshipMode = "rush";
-  if (ship.battleshipMode === "rush" && dist <= ENGAGE_DIST) {
+  if (ship.battleshipMode === "rush" && dist <= broadsideRange) {
     ship.battleshipMode = "broadside";
-  } else if (ship.battleshipMode === "broadside" && dist > barrageRange * 1.05) {
+  } else if (ship.battleshipMode === "broadside" && dist > s.weapon.range * 1.10) {
     ship.battleshipMode = "rush";
   }
 
-  const sep = capitalSeparation(ship, world ? world.ships : []);
-
   if (ship.battleshipMode === "rush") {
-    let thrust = { x: dir.x, y: dir.y };
-    // Separation has a hard floor under rush — we still want to close the
-    // distance, but not by ramming a friendly battleship along the way.
-    thrust = blendThrustWithSeparation(thrust, sep, 0.9);
-    c.thrust = thrust;
+    // Heading-locked press: aim at the target and motion follows.
     c.aim = { x: rel.x, y: rel.y };
-    c.firing = true;
-    c.firingMissile = false;
-    return;
-  }
-
-  const orbit = s.aiOrbit;
-  let thrust;
-  if (dist > orbit * 1.15) {
-    thrust = dir;
-  } else if (dist < orbit * 0.85) {
-    thrust = { x: -dir.x, y: -dir.y };
   } else {
-    const sign = (ship.id % 2 === 0) ? 1 : -1;
-    thrust = { x: -dir.y * sign, y: dir.x * sign };
+    // Broadside hold: pick whichever beam currently points more at the
+    // target, then steer that beam directly at it. The ship continues
+    // to trace a tangential arc at constant speed, naturally orbiting
+    // the target while firing.
+    const perpA = { x: -dir.y, y: dir.x };
+    const perpB = { x: dir.y, y: -dir.x };
+    const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+    c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
   }
-  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
-  c.thrust = thrust;
-
-  const perpA = { x: -dir.y, y: dir.x };
-  const perpB = { x: dir.y, y: -dir.x };
-  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-  c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
-  c.firing = true;
-  c.firingMissile = false;
+  c.firing = false;        // broadsides fire automatically via arc check
+  c.firingMissile = false; // missile pods auto-fire
 }
 
 // ---------------------------------------------------------------------------
-// Frigate / cruiser: orbit at preferred range. Heavy hulls hold position when
-// in the orbit band; lighter and broadside hulls strafe.
+// Cruiser behaviour: heading-locked. Aims at a moving "orbit slot" 90°
+// ahead on the orbit around the target. Far away the slot lies roughly
+// behind the target, producing a gentle curve in; closer in, the slot
+// is mostly perpendicular, tightening into a circular orbit. Missile
+// pods do the actual damage and auto-fire via updateMissilePodFire.
 // ---------------------------------------------------------------------------
-function orbitAI(ship, target, dt, world) {
+function cruiserAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
   const rel = V.sub(target.pos, ship.pos);
   const dist = V.len(rel);
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
-  const isBroadside = s.firingMode === "broadside";
 
-  const orbit = s.aiOrbit;
-  let thrust;
-  if (dist > orbit * 1.15) {
-    thrust = dir;
-  } else if (dist < orbit * 0.85) {
-    thrust = { x: -dir.x, y: -dir.y };
-  } else {
-    const shouldStrafe = isBroadside || ship.klass === "frigate";
-    if (shouldStrafe) {
-      const sign = (ship.id % 2 === 0) ? 1 : -1;
-      thrust = { x: -dir.y * sign, y: dir.x * sign };
-    } else {
-      thrust = { x: 0, y: 0 };
-    }
-  }
-  // Capitals nudge apart from each other so they don't clump on the same
-  // target and ram hulls.
-  const sep = capitalSeparation(ship, world ? world.ships : []);
-  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
-  c.thrust = thrust;
+  const orbitR = s.aiOrbit || 1500;
+  const sign = (ship.id % 2 === 0) ? 1 : -1;
+  const perpX = -dir.y * sign, perpY = dir.x * sign;
+  // Slot = target + perpendicular * orbit radius. Aim at slot.
+  const slotX = target.pos.x + perpX * orbitR;
+  const slotY = target.pos.y + perpY * orbitR;
+  c.aim = { x: slotX - ship.pos.x, y: slotY - ship.pos.y };
 
-  if (isBroadside) {
-    const perpA = { x: -dir.y, y: dir.x };
-    const perpB = { x: dir.y, y: -dir.x };
+  // Forward salvos still fire if the cruiser happens to be nose-on; the
+  // updateShip forward-fire dispatch checks c.firing + aim alignment.
+  if (s.weapon) {
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-    c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
-    c.firing = true;
+    const aimN = V.norm(c.aim);
+    const aligned = V.dot(fwd, aimN);
+    c.firing = dist <= s.weapon.range && aligned > 0.85;
   } else {
-    const leadVec = leadAim(ship, target, s.weapon.projectileSpeed);
-    c.aim = leadVec;
-    const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-    const aimNorm = V.norm(leadVec);
-    const aligned = V.dot(fwd, aimNorm);
-    c.firing = dist <= s.weapon.range && aligned > 0.9;
+    c.firing = false;
   }
-
   c.firingMissile = false;
 }
 
 // ---------------------------------------------------------------------------
-// Carrier behaviour: no offensive weapons, no target hunt. Faces the action
-// so the PD wall covers the threat axis, retreats from approaching enemy
-// capitals, and stays out of friendly capitals' way via separation.
+// Frigate behaviour: heading-locked. Strafe past the target at orbit
+// range. The four-cannon ring (updateRingFire) handles all the
+// shooting independently, so the AI here is purely steering — no
+// firing flags to manage.
+// ---------------------------------------------------------------------------
+function frigateAI(ship, target, dt, world) {
+  const c = ship.controller;
+  const s = ship.spec;
+  const rel = V.sub(target.pos, ship.pos);
+  const dist = V.len(rel);
+  const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
+
+  const orbitR = s.aiOrbit || 380;
+  const sign = (ship.id % 2 === 0) ? 1 : -1;
+  const perpX = -dir.y * sign, perpY = dir.x * sign;
+  // Same orbit-slot construction as the cruiser — far away the slot
+  // sits roughly behind the target so we curve in, then transitions
+  // to a circular strafe near orbitR.
+  const slotX = target.pos.x + perpX * orbitR;
+  const slotY = target.pos.y + perpY * orbitR;
+  c.aim = { x: slotX - ship.pos.x, y: slotY - ship.pos.y };
+
+  c.firing = false;
+  c.firingMissile = false;
+}
+
+// ---------------------------------------------------------------------------
+// Carrier behaviour: heading-locked motion at constant speed means the
+// carrier is always flying somewhere — aim away from the nearest
+// capital threat so it never closes the gap on an enemy battleship.
+// Far from any threat the aim falls back to a lateral strafe past the
+// nearest enemy so PD arcs still cover them.
 // ---------------------------------------------------------------------------
 function carrierAI(ship, world) {
   const c = ship.controller;
   c.firing = false;
   c.firingMissile = false;
 
-  // Face the nearest enemy so PD turrets get usable target geometry.
-  const enemy = nearestEnemy(ship, world.ships);
-  c.aim = enemy
-    ? { x: enemy.pos.x - ship.pos.x, y: enemy.pos.y - ship.pos.y }
-    : null;
-
-  // Retreat from approaching enemy capitals. Small craft are PD's job.
   let threat = null, threatD2 = Infinity;
   for (const o of world.ships) {
     if (o.dead || o.side === ship.side) continue;
@@ -825,20 +800,24 @@ function carrierAI(ship, world) {
     const d2 = dx * dx + dy * dy;
     if (d2 < threatD2) { threatD2 = d2; threat = o; }
   }
-  let thrust = { x: 0, y: 0 };
-  if (threat) {
-    const SAFE_DIST = 1500;
-    const d = Math.sqrt(threatD2);
-    if (d > 1e-6 && d < SAFE_DIST) {
-      thrust = {
-        x: (ship.pos.x - threat.pos.x) / d,
-        y: (ship.pos.y - threat.pos.y) / d,
-      };
-    }
+
+  const SAFE_DIST = 1500;
+  if (threat && Math.sqrt(threatD2) < SAFE_DIST) {
+    c.aim = { x: ship.pos.x - threat.pos.x, y: ship.pos.y - threat.pos.y };
+    return;
   }
-  const sep = capitalSeparation(ship, world.ships);
-  thrust = blendThrustWithSeparation(thrust, sep, 1.1);
-  c.thrust = thrust;
+
+  // No nearby capital threat — strafe perpendicular to the nearest
+  // enemy so the carrier's PD wall still has a usable target axis.
+  const enemy = nearestEnemy(ship, world.ships);
+  if (enemy) {
+    const dx = enemy.pos.x - ship.pos.x;
+    const dy = enemy.pos.y - ship.pos.y;
+    const sign = (ship.id % 2 === 0) ? 1 : -1;
+    c.aim = { x: -dy * sign, y: dx * sign };
+  } else {
+    c.aim = null;
+  }
 }
 
 // ---------------------------------------------------------------------------

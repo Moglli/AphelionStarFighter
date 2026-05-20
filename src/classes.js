@@ -133,17 +133,19 @@ export const CLASSES = {
     turnRate: 1.0,
     radius: 54,
     color: "#bdf",
-    firingMode: "forward",
-    // Triple-muzzle rapid forward battery: built for chewing through
-    // fighter packs at close-to-medium range.
-    weapon: {
-      damage: 6,
-      cooldown: 0.22,
+    // Four fixed cannon mounts arranged at the cardinal points of the
+    // hull (front / starboard / aft / port). Each fires independently
+    // when an enemy is inside its arc, so the frigate has effective
+    // 360° coverage when strafing past a target. firingMode is "ring"
+    // to bypass the forward / broadside dispatch in updateShip.
+    firingMode: "ring",
+    ringCannons: {
+      count: 4,
+      damage: 8,
+      cooldown: 0.30,
       projectileSpeed: 720,
-      range: 850,
-      spread: 0.04,
-      muzzles: 3,
-      muzzleSpread: 22,
+      range: 800,
+      arc: Math.PI / 3,   // ±60° around each mount's facing
       projectileRadius: 4.5,
       projectileColors: { blue: "#3af", red: "#f85" },
     },
