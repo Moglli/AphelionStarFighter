@@ -35,18 +35,69 @@ window.game = game; // for console smoke-testing
 const audio = new GameAudio();
 let musicWasPlaying = false; // tracks state for start/stop edge detection
 
-// Restore persisted music mute state and wire the Settings overlay
-// + the P key shortcut to both apply the change to the live audio
-// graph AND persist it through saveStore.
+// Restore persisted music + SFX mute states and wire the Settings
+// overlay + the P key shortcut (music only) to both apply the change
+// to the live audio graph AND persist it through saveStore.
 audio.setMuted(!!saveStore.get().settings.musicMuted);
+audio.setSfxMuted(!!saveStore.get().settings.sfxMuted);
 function applyMuteChange(muted) {
   audio.setMuted(muted);
   saveStore.update((d) => { d.settings.musicMuted = muted; });
 }
+function applySfxMuteChange(muted) {
+  audio.setSfxMuted(muted);
+  saveStore.update((d) => { d.settings.sfxMuted = muted; });
+}
 input.startMenu.setSettings(
-  () => ({ musicMuted: audio.isMuted() }),
-  (patch) => { if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted); },
+  () => ({ musicMuted: audio.isMuted(), sfxMuted: audio.isSfxMuted() }),
+  (patch) => {
+    if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted);
+    if (typeof patch.sfxMuted === "boolean") applySfxMuteChange(patch.sfxMuted);
+  },
 );
+
+// SFX routing: gameplay code emits weaponFired / hit / shipDestroyed
+// events with world-space positions; the camera-attenuated distance
+// drives volume so a battle on the far side of the map is muted while
+// a knife-fight at the player's position is at full volume.
+let _lastCamera = { x: 0, y: 0 };
+const SFX_RANGE = 1800;        // world units past which volume → 0
+const SFX_CANNON_PROB = 0.35;  // gate cannon emissions so brawls aren't a wall of sound
+function sfxAttenuation(x, y) {
+  const dx = x - _lastCamera.x;
+  const dy = y - _lastCamera.y;
+  const d = Math.hypot(dx, dy);
+  if (d >= SFX_RANGE) return 0;
+  // Soft inverse curve — louder up close, gentle falloff to range.
+  return Math.max(0, 1 - (d / SFX_RANGE) ** 1.3);
+}
+events.on("weaponFired", ({ x, y, kind, isPlayer }) => {
+  if (!audio.ctx) return;
+  // Player always plays full-volume cannon SFX. AI cannons probability-gated
+  // so a 200-ship brawl doesn't deafen the player.
+  if (!isPlayer && Math.random() > SFX_CANNON_PROB) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.04) return;
+  audio.sfxCannon({ volume: att, kind });
+});
+events.on("missileFired", ({ x, y, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.04) return;
+  audio.sfxMissile({ volume: att });
+});
+events.on("hit", ({ x, y, shielded, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y) * 0.7;
+  if (att <= 0.08) return;
+  audio.sfxHit({ shielded, volume: att });
+});
+events.on("shipDestroyed", ({ x, y, intensity }) => {
+  if (!audio.ctx) return;
+  const att = sfxAttenuation(x, y);
+  if (att <= 0.05) return;
+  audio.sfxExplosion({ volume: att, intensity: intensity || 0.6 });
+});
 
 // Admiral panel — reads and writes game.directives directly. The map
 // is allocated by modes/admiral.js at match start; null in other
@@ -210,7 +261,14 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-const ZOOM = 0.5;
+// Camera zoom. Default reads similar to the old fixed value so existing
+// gameplay (piloting a fighter) doesn't shift. In spectator and admiral
+// mode the user can pinch / scroll to zoom; the active value is read
+// each frame and applied to the world transform + ship draw.
+const DEFAULT_ZOOM = 0.5;
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 2.0;
+let zoom = DEFAULT_ZOOM;
 
 const FIXED_DT = 1 / 60;
 const MAX_ACCUM = 0.25;
@@ -272,6 +330,23 @@ function frame(now) {
       if (game.spectating) exitSpectate(game);
       else enterSpectate(game);
     }
+    // Camera zoom: pinch (touch) + wheel (mouse) feed a single delta
+    // pool. Spectator and admiral get to use it; piloting keeps the
+    // default zoom so the player isn't fighting muscle-memory aim at
+    // varying scales. Reset to default when leaving those modes so a
+    // zoomed-out admiral doesn't carry a wide view into the next match.
+    if (game.spectating || game.admiralMode) {
+      const dz = input.consumePinchDelta();
+      if (dz !== 0) {
+        zoom *= (1 + dz);
+        if (zoom < MIN_ZOOM) zoom = MIN_ZOOM;
+        else if (zoom > MAX_ZOOM) zoom = MAX_ZOOM;
+      }
+    } else if (zoom !== DEFAULT_ZOOM) {
+      zoom = DEFAULT_ZOOM;
+      input.consumePinchDelta(); // drop any pending input
+    }
+
     if (game.spectating) {
       if (input.consumeSpectateNext()) cycleSpectate(game, +1);
       if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
@@ -370,11 +445,15 @@ function draw() {
       : { x: ARENA.width / 2, y: ARENA.height / 2 };
   }
 
-  drawArena(ctx, game.starfield, camera, viewW, viewH, ZOOM);
+  _lastCamera.x = camera.x;
+  _lastCamera.y = camera.y;
+  audio.tickSfxBudget();
+
+  drawArena(ctx, game.starfield, camera, viewW, viewH, zoom);
 
   ctx.save();
   ctx.translate(viewW / 2, viewH / 2);
-  ctx.scale(ZOOM, ZOOM);
+  ctx.scale(zoom, zoom);
   ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
@@ -386,7 +465,7 @@ function draw() {
   if (game.particles) {
     for (const p of game.particles) if (p.kind === "smoke") drawParticle(ctx, p);
   }
-  for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, ZOOM);
+  for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, zoom);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
   // Persistent debris on top of live ships — fresh chunks visibly chip

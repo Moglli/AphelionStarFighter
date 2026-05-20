@@ -254,6 +254,427 @@ In-game:
 - Complete Act 3 boss → `meta.runsCompleted++`, `runsWon++`,
   `warProgress[bossFaction]++`. Reload page; counters persist.
 
+### 2026-05-20 — Defensive systems buff pass: shields, armor, PD, stations
+
+**What changed**
+
+After the non-linear capital HP bump (BBs went 1100 → 4950) defenses
+hadn't kept pace — shields popped in seconds and the PD wall was thin
+enough that missile waves were getting through largely untouched.
+Coordinated buff across every defensive layer plus a matching visual
+scale-up:
+
+1. **Shields buffed across the board.** Max values ~1.6–1.8× higher,
+   regen ~30–50% faster, regenDelay shortened (notably 6.0 → 4.5s on
+   carrier, 5.5 → 4.5s on battleship) so layered defense rewards
+   sustained pressure breaks. Fighter shield doubled (24 → 40) since
+   it had become trivial under modern PD fire.
+2. **Capital armor toughened.** Max bumped ~1.5–1.6× and wearRate
+   dropped (BB 0.45 → 0.34, carrier 0.45 → 0.34, cruiser 0.50 → 0.38).
+   Plates now absorb a meaningfully larger fraction of incoming
+   damage per point of armor.
+3. **PD count + range + rate of fire bumped.** Carrier 8 → 14
+   turrets, BB 6 → 10, cruiser/frigate 4 → 6, bomber 1 → 2.
+   Cooldowns dropped ~15–20% across the line, range up ~20%, per-shot
+   damage up. PD is meaningfully harder to slip a missile past now;
+   PD_VS_SHIP_MUL stays at 0.22 so anti-ship damage isn't the buff —
+   anti-missile screen quality is.
+4. **Stations significantly buffed.** Base HP 600 → 950 (then 3× from
+   the tier multiplier → 2850 per node), shield 250 → 700, armor
+   300 → 780 / wearRate 0.36 → 0.30. Station radius 70 → 80 so the
+   silhouette reads as more imposing. Defend-mode endgame fights
+   were finishing in 30s; now they're genuine sieges.
+5. **Station-node weapon templates buffed too.** `PD_BASE`,
+   `MISSILES_BASE`, `LASER_BASE` in races.js each got a stat bump —
+   so every race's station nodes pick up the defensive improvements
+   without per-race edits. The race-specific overrides ride on top
+   of the new baselines and continue to differentiate races.
+6. **Visual upgrade to match.** Shield bubble offset factor 0.18 →
+   0.22 (floor 6 → 8) so the bubble reads as a wrap-around energy
+   field rather than an outline — capital bubbles get ~30px of
+   stand-off now. PD turret render radius 2 → 3 so the wall of PD
+   on a carrier is visibly a wall.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | shield/armor/pdCannons values per class. Station base hp/shield/armor/radius. |
+| `src/races.js` | `PD_BASE`, `MISSILES_BASE`, `LASER_BASE` template values bumped — propagates to every race's station-node spec via the `pd()` / `pods()` / `laser()` helpers. |
+| `src/ship.js` | Shield bubble offset formula updated. PD turret draw radius 2 → 3. |
+
+**Design decisions / gotchas**
+
+- **PD anti-ship multiplier (`PD_VS_SHIP_MUL = 0.22`) untouched.**
+  PD still chips ships ~22% of headline damage. Don't undo that with
+  the new damage values — the buff is anti-missile, not anti-ship.
+  If PD starts shredding fighters again, lower the multiplier
+  rather than reverting the damage numbers.
+- **Race overrides ride on top.** Hegemony's heavier PD specs
+  (`pd(6, { damage: 9 })`) still merge over the new base. Hegemony
+  capitals are now even tougher relative to Terran than before —
+  intentional, they're the tank race.
+- **`PD_BASE` change affects every station.** All four races' station
+  nodes get the buff for free because they layer mods on top of
+  `PD_BASE`. If you want a specific race's PD to feel different,
+  add explicit overrides to that race's station spec.
+- **Capital fights will be very long.** Combined with the HP_TIER_MUL
+  pass, a battleship has 4950 hull + 1050 armor + 950 shield.
+  Capital-on-capital brawls now take 90–150 seconds. Module
+  destruction remains the practical accelerator — buffed defenses
+  don't apply to module HP.
+- **Shield offset floor 6 → 8.** Fighters now get a 9px bubble
+  (radius 10 × 0.22 = 2.2 floored to 8). If a future class has
+  radius < 9 the floor kicks in; preserve it.
+- **Bomber PD upgraded to 2 turrets** but still labelled "Anti-missile
+  only in practice" — relies on PD_VS_SHIP_MUL to keep the
+  anti-fighter damage low. Don't add more turrets without
+  re-checking the bomber-vs-fighter balance.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Arena vs Hegemony. Watch a battleship duel: shields now hold
+  through a full broadside instead of popping mid-volley. Once
+  shields drop, armor visibly stripes off slowly. Total hull
+  death takes 90–150s of focused fire.
+- Pilot a fighter into a battleship's PD bubble: the 10 turrets
+  shred any missiles you tried to pre-launch from the same angle,
+  but your fighter only loses ~22% damage from the PD itself.
+- Defend mode vs any race: stations are visibly bigger and take
+  multiple capital salvos per node to crack. Each node has 7+ PD
+  turrets at their new range and rate. Match length is up.
+- Spectate a capital with the new bubble offset: the shield ring
+  is a clear wrap-around field, not an outline. PD turret stubs
+  on the hull are larger circles.
+
+### 2026-05-20 — Procedural SFX + SFX mute + shield impact visual
+
+**What changed**
+
+The game shipped with procedural music but no combat SFX. Three
+coordinated additions: an SFX synth layer in `GameAudio`, gameplay
+event hooks that drive it (with camera-attenuated volume), and a
+proper shield-hit visual (outward ripple + localized bubble arc) so
+shield absorbs read as more than a brightness bump.
+
+1. **Procedural SFX layer.** Four voices: `sfxCannon` (square zap,
+   pitch profile differs for capital vs fighter rounds), `sfxMissile`
+   (filtered-noise woosh), `sfxHit` (bright triangle ping for
+   shielded, low-filtered noise + sub-thump for hull), and
+   `sfxExplosion` (long lowpass noise + sub kick). Each goes through
+   a separate `sfxGain` bus that the menu can mute independently of
+   music. Per-frame voice budget caps spawn rate so a 200-ship brawl
+   doesn't melt the compressor.
+2. **Gameplay event hooks.** `weaponFired`, `missileFired`, `hit`
+   (shielded vs hull), `shipDestroyed` events emitted from ship.js
+   firing paths and game.js `applyDamage` / wreck-spawn loop.
+   `main.js` subscribes and routes to `audio.sfx*` with distance
+   attenuation from the active camera. Player events bypass
+   attenuation; AI cannons are probability-gated (35%) so battle
+   chatter sounds present without overwhelming.
+3. **Shield impact visual.** Two layers — an outward shockwave +
+   sparks at the impact point (tinted shield-blue, white on bubble
+   collapse), plus a per-hit localized arc flare on the bubble that
+   rotates with the ship. Up to 6 active flares per ship; each
+   fades over 0.45s. Replaces the previous "just brighten the whole
+   bubble" feedback so missile salvos light up the shield from
+   multiple directions visibly.
+4. **Settings overlay** got an SFX toggle row below the existing
+   music toggle. Panel height bumped 220 → 300. Toggle row uses a
+   shared `_drawAudioToggleRow` helper. `settings.sfxMuted` added to
+   the save schema (deep-merges into existing saves at boot).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/audio.js` | New `sfxGain` bus + `sfxMuted` state. Methods `setSfxMuted`/`isSfxMuted`. Four SFX voices: `sfxCannon` / `sfxMissile` / `sfxHit` / `sfxExplosion`. Per-frame voice budget (`_sfxBudget` / `tickSfxBudget`). |
+| `src/events.js` | (unchanged — existing pub/sub bus is the dispatch layer) |
+| `src/main.js` | Wired sfx-mute through saveStore + settings overlay. `events.on(...)` listeners for weaponFired/missileFired/hit/shipDestroyed route to audio with camera-attenuated volume. `_lastCamera` + `audio.tickSfxBudget()` updated each frame in `draw()`. |
+| `src/ship.js` | `events.emit("weaponFired", ...)` from `fireForward`, `emitBroadside`, `updateRingFire` (per-shot). `events.emit("missileFired", ...)` from missile-pod + fighter missile paths. New `shieldHits: []` on every ship; ticked down each frame in `updateShip`. `drawShip` paints localized arc flares on the bubble from `ship.shieldHits`. |
+| `src/game.js` | `events.emit("hit", ...)` from `applyDamage` (shielded vs hull variants). `events.emit("shipDestroyed", ...)` from the wreck-spawn loop with intensity scaled by hull radius. New `recordShieldHit(ship, p)` stashes ship-local angle. Shield-absorb path calls `spawnShieldImpact` to spawn the ripple + sparks. |
+| `src/particles.js` | New `spawnShieldImpact(particles, x, y, cost, collapsed)` — outward shockwave + sparks, second ring on collapse. |
+| `src/save.js` | `settings.sfxMuted: false` default. |
+| `src/input.js` | Settings overlay panel height 220 → 300; new `sfxToggle` rect + click handler; `_drawAudioToggleRow` helper used for both rows. `_settingsGet` typed expanded to include `sfxMuted`. |
+
+**Design decisions / gotchas**
+
+- **`sfxGain` is a separate bus from music.** Don't fold the SFX
+  voices through the existing `compressor` directly — the per-bus
+  mute lets the menu silence one without the other, which is the
+  whole point of giving SFX its own toggle.
+- **Per-frame voice budget = 6.** A single broadside is 9 shells
+  fired over 0.45s; without the cap that's 9 cannons in one frame
+  for each of N firing ships. The budget gates voice creation at
+  the audio layer, not the event layer — events still fire (cheap),
+  but only the first 6 hit the synth each frame.
+- **AI weapon SFX is probability-gated at 35%.** This is the
+  cheapest knob if the SFX mix gets too noisy in big brawls. Drop
+  it to 0.2 for quieter background chatter; raise to 0.5 if the
+  battle sounds too sparse.
+- **Player events bypass attenuation.** The player's own cannons,
+  missile launches, and hits taken always play at full volume —
+  `isPlayer: true` short-circuits the distance falloff. If you
+  ever add player-on-player multiplayer this needs to become "own
+  pov" attenuation.
+- **`shieldHits` array bounded at 6.** Older entries shift out
+  when a 7th lands. 6 is enough for a missile salvo to visibly
+  paint the bubble from multiple angles without the bubble
+  becoming pure white.
+- **`recordShieldHit` localizes by `-ship.heading`.** The stored
+  angle is ship-local so the arc rides with a manoeuvring capital
+  instead of decaling in world space. Don't store world angles
+  here — a turning battleship would smear arc flares around the
+  bubble over the 0.45s lifetime.
+- **`spawnShieldImpact` is gated on `particles &&` in `applyDamage`.**
+  Beam ticks (which also call applyDamage) may not have particles
+  available; the guard keeps them safe. A beam continuously
+  re-records shield hits per tick which lights up the bubble
+  steadily under sustained fire — feels right.
+- **Settings overlay uses the new chrome family** (rgba(8,16,28,0.92)
+  + #5af border + accent rule) to match the rest of the HUD; the
+  prior dialog look was the only panel still on the old style.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Start any match. Fly a fighter. Hold fire — cannon zaps fire at
+  the cooldown rate. Distance attenuation: shoot, then turn 90° and
+  fly away; AI cannons in the brawl behind you fade with distance.
+- Take fire on the shield: each absorb should produce a localized
+  bright arc on the bubble pointing roughly at the incoming
+  projectile, plus a small outward ripple where it hit. A missile
+  salvo absorbed by the shield should light up the bubble from
+  multiple directions simultaneously.
+- Watch the shield collapse: the final hit (that strips the
+  bubble) spawns a second wider ring + more sparks.
+- Take a hull hit through stripped shield: a low metallic thunk
+  plays. Capital ship dies nearby: rumble explosion attenuated
+  by camera distance.
+- Open Settings (top-right menu chip). Two toggle rows now: MUSIC
+  and SFX. Flip SFX off — gun and hit SFX stop instantly; music
+  keeps playing. Flip music off — soundtrack drops, SFX continues.
+- Mute persists across reloads — saved via saveStore.
+
+### 2026-05-20 — Engine fire + hull venting VFX scaling with damage
+
+**What changed**
+
+Damage feedback wasn't dramatic enough — modules emitted a thin smoke
+puff at half HP and that was about it. After the non-linear capital HP
+bump (BBs now take ~4× longer to kill), a wounded battleship needed to
+*look* wounded the whole time. Three coordinated additions:
+
+1. **Dedicated engine vent + fire plume.** Engine modules now route
+   through `spawnEnginePlumeVFX` which emits dark smoke + flame jets
+   *backward along the ship's heading*. Severity ramps from ~0.5 at
+   half HP to 1.0 when destroyed — at full severity the engine is
+   pumping black smoke and visibly burning, two fire flickers per
+   emission for a "jet of fire" read. Engine emission rates are
+   bumped (30 disabled / 12 damaged vs 22/7 for other modules) so
+   the rear of a wounded ship is unmistakably venting.
+2. **Hull-wide venting VFX.** Below 70% hull HP, every ship emits
+   smoke from random points on its silhouette at a rate that scales
+   linearly with damage. Above ~55% severity (≈ 36% HP) the vents
+   start sparking with fire. A critically damaged capital (≤15% HP)
+   is visibly burning across the hull, not just at the engine.
+3. **Module smoke + fire rates bumped.** Previous `DAMAGED_RATE`
+   3.5 / `DISABLED_RATE` 12 doubled to 7 / 22, and disabled-module
+   fire chance went 0.35 → 0.55 per emission. Smoke puffs are
+   bigger (5–12 px size vs 3.5–6 px) and last longer (1.1–1.9 s
+   vs 1–1.7 s).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/particles.js` | `createFire` now honors `opts.size` / `opts.speed` / `opts.ttl` so callers can tune flames for engine vs hit-spark use. `spawnContinuousSmoke` palette and sizes nudged up. Two new spawners: `spawnEnginePlumeVFX(particles, x, y, backwardAngle, severity)` and `spawnHullVentVFX(particles, x, y, outwardAngle, severity)`. |
+| `src/game.js` | `emitContinuousModuleVFX` rewritten: routes `engine-*` modules through the new engine spawner with `severity = m.disabled ? 1 : max(0.45, 1 - frac)` and `backward = ship.heading + π`; everything else still uses `spawnContinuousSmoke`. Added per-ship hull-vent loop that fires when `hp/hpMax < 0.70` at a rate scaling with severity. |
+
+**Design decisions / gotchas**
+
+- **Engine vents backward, not outward.** Smoke + fire spawn at the
+  engine nozzle position and drift along `ship.heading + π` so a
+  moving capital trails a visible plume behind it. If you ever
+  reorient engines (e.g. side-mounted maneuver thrusters), pass a
+  per-engine backward vector — don't fold it into the spawner.
+- **Hull vent points are sampled per-frame, not stored.** Each
+  vent emission picks a fresh random angle around `ship.pos`, so
+  smoke trails vary across the hull instead of pouring from a
+  fixed leak. If a specific "this section is breached" effect is
+  ever wanted, push a `ship.ventPoints` array and round-robin
+  through it.
+- **No off-screen culling.** Particle spawn rolls run for every
+  live ship every frame. The Poisson gate (`rate * dt`) caps the
+  actual spawn count — at peak (~250 ships in a Hegemony brawl,
+  half below 70% HP) you'd emit ~1000 hull-vent particles per
+  second across the whole battle. Manageable; add culling only
+  if you see frame-time regressions on mobile.
+- **Severity formula:** `(0.70 - hpFrac) / 0.60`. Linear; clamps
+  to [0,1]. Bump the divisor if you want vents to ramp up faster
+  (smaller number = earlier saturation). Keep the trigger at 0.70
+  — much earlier and ships look "broken" the moment they take a
+  scratch.
+- **Engine severity floor of 0.45.** Without it, an engine at 49%
+  HP would emit the same as one at 99% HP (both pass the < 0.5
+  gate). The floor ensures *any* engine in the damaged state
+  emits meaningful smoke instead of barely-there puffs.
+- **Hull-vent fires only above 0.45 severity** (≈ 43% HP).
+  Earlier-stage smoke without fire reads as "leaking" rather than
+  "burning" — important distinction. Don't lower the threshold
+  without doing a playtest pass.
+- **No new spawners for armor / shield damage.** Those layers
+  already have their own feedback (armor flake fragments, shield
+  flash). Adding ambient smoke at those levels would clutter the
+  visual.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Arena vs Hegemony. Find a battleship duel (spectate one with V).
+  Once a BB drops below ~70% hull, it should start trailing smoke
+  from random hull points. Below 40% the smoke turns black and
+  fires start flickering across the silhouette.
+- Aim cannon fire specifically at a battleship's engine module
+  (rear nozzles). After ~30 sec of focused fire the engine module
+  drops into damaged state — you should see a continuous dark
+  smoke + fire plume venting BACKWARD from that nozzle. When
+  it's destroyed, the plume turns into a heavy black smoke jet
+  with steady flame jets.
+- Spectate a critically-wounded carrier (≤ 20% HP): hull should
+  be visibly burning in multiple places, engine plumes pouring
+  smoke behind it. Reads as "this ship is about to die".
+- Fly a healthy fighter past an enemy frigate that's at 80% HP:
+  no ambient smoke yet (above the 0.70 threshold). Shoot it down
+  to 60% and the venting kicks in.
+
+### 2026-05-20 — Pinch zoom + non-linear capital HP + crater-style hull damage
+
+**What changed**
+
+Four coordinated player-facing changes:
+
+1. **Pinch zoom in spectator and admiral mode.** Two-finger pinch on
+   touch + scroll-wheel on desktop both feed a single zoom delta.
+   Clamped to `[0.15, 2.0]`; default `0.5`. Piloting keeps the default
+   zoom so muscle-memory aim isn't disrupted, and leaving spectator /
+   admiral resets the zoom so it doesn't carry into the next match.
+2. **Non-linear hull-HP scaling by class tier.** Capitals were too
+   brittle — a battleship crumbled in ~30 s of focused fire which made
+   big ships feel small. New multiplier curve (fighter 1.0, bomber
+   1.3, frigate 2.0, cruiser 3.0, BB 4.5, carrier 4.5, station 3.0)
+   ramps superlinearly so a Terran battleship goes from 1100 → ~4950
+   hull and Hegemony's tank battleship from 1500 → ~6750. Module
+   destruction (laser, missile pods, broadsides) becomes the practical
+   way to disable a capital instead of grinding hull.
+3. **Floating rind removed.** The translucent rust overlay + bright
+   orange dot on wounded cells, AND the hot-orange rim around
+   hull-hole scars, both read as a "floating rind" hovering above the
+   silhouette. Both gone. Wounded cells now go straight from pristine
+   sprite to punched-out void; the hit-flash + crater scars carry the
+   feedback. Armor-flake patches also toned down to a muted gray.
+4. **Hull-hole scars rendered as crater nodes.** Same visual language
+   as a destroyed module: dark sooty rim, irregular dark bore, a
+   charred inner accent on larger holes. Combined with the existing
+   dead-cell void rendering, hull damage now reads as discrete "big
+   holes" similar to a destroyed laser / missile bay node.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/races.js` | `HP_TIER_MUL` table + `resolveSpec` multiplies merged spec's `hp` by the class tier after race overrides deep-merge. Station gets the multiplier on the base spec (it bypasses the race-mods branch). |
+| `src/ship.js` | `drawScar` for `hull-hole`: replaced the hot-orange rim with a dark sooty rim + charred inner disc. Armor-flake palette muted. Wounded-cell halo block (rust overlay + orange dot at hp==1) deleted entirely. |
+| `src/input.js` | `InputManager` tracks `_touches` map of live touch pointers + `_pinchPrevDist` baseline + `_pendingZoomDelta`. `onDown`/`onMove`/`onUp` log + update + drop touches; two-finger move accumulates zoom delta. Wheel listener feeds the same delta pool. New `consumePinchDelta()` + `_touchDistance()` helpers. |
+| `src/main.js` | `const ZOOM = 0.5` → `let zoom = DEFAULT_ZOOM (0.5)` with `MIN_ZOOM = 0.15` / `MAX_ZOOM = 2.0`. Frame loop consumes pinch delta only when `game.spectating || game.admiralMode`, applies to zoom, clamps. Resets zoom + drops any pending delta when not in those modes. Render path threads `zoom` (was `ZOOM`) through to `drawArena` + ship draws. |
+
+**Design decisions / gotchas**
+
+- **Zoom only applies in spectator + admiral.** Piloting keeps the
+  default — aim feel depends on a known scale and we don't want
+  fights to be at a different zoom every time. If we ever support
+  player-pilot zoom, make the change opt-in via a settings toggle so
+  existing muscle memory isn't disrupted.
+- **Pinch baseline drops on a finger lift.** When the second finger
+  goes up the next two-finger gesture starts fresh from a new
+  baseline — otherwise the zoom would lurch when re-engaging.
+- **Wheel delta is normalised by 500.** Typical wheel notch is 100px
+  → 0.2 delta → ~22% zoom per notch. Tweak if it feels too coarse
+  or too fine; don't try to make it match macOS smooth-scroll exactly
+  (different per-OS deltaY scaling will fight you).
+- **HP tier multiplier is applied AFTER race deep-merge.** Race
+  overrides like Hegemony BB 1500 / Reavers BB 770 are preserved
+  proportionally; both ride on top of the same 4.5× capital
+  multiplier. If you ever want race-specific tier multipliers, add
+  a `hpMul` field to the race spec and multiply by `(mods.hpMul ||
+  HP_TIER_MUL[klass])` here.
+- **Cell-hull-cost wasn't scaled.** Each cell death still drains
+  `ship.hp` by 0.25–1.0 depending on class. After the 4.5× BB
+  multiplier, ~700 alive cells × 1.0 cost ≈ 700 HP drainable via
+  cells — only 14% of the 4950 hull. Most hull HP now drains via
+  direct damage (the line `ship.hp -= remaining` in `applyDamage`).
+  This is intentional: the cell voids are decorative and visible
+  damage will outpace HP bar drop on capitals (you'll see the swiss
+  cheese before the bar empties). If that becomes a complaint,
+  bump `CELL_HULL_COST` for capitals proportionally — but watch
+  out for double-counting since `applyDamage` already drains hull
+  directly.
+- **`drawScar` accent on bigger craters is `r > 4` gated.** Below
+  that the secondary disc would just be 1–2 pixels and look like
+  noise. Don't lower the threshold without verifying on fighters.
+- **Armor-flake gray softened, not removed.** Armor damage still
+  needs SOME visual to read; the muted gray patch is "scratched
+  plate" without painting attention back to the area. Hull craters
+  do the heavy lifting now.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Arena → press V to spectate. Pinch to zoom in/out on a phone; scroll
+  the wheel on desktop. The zoom should be smooth and clamped — past
+  ~2× the view fills the screen, below ~0.15× ships become invisible
+  dots so the clamps cut in.
+- Pinch to zoom out, then press V to exit spectate. Zoom should snap
+  back to the default piloting view automatically.
+- Pick **Admiral** mode → start. The admiral panel is at the bottom;
+  pinch / scroll zooms the world while you're still controlling
+  fleets — useful for picking out which capital is in trouble.
+- Battleship-on-battleship duel: a clean broadside-to-broadside
+  exchange used to end in ~30 s; now expect 90–120 s of fire to chew
+  through shield → armor → 4950 hull. Module destruction is the
+  shortcut — kill the laser / missile bays / broadsides one by one.
+- Take damage on a battleship hull: holes appear as dark sooty
+  craters, not orange-rimmed rinds. The cell grid still punches dark
+  voids alongside the craters.
+- Fly into a frigate's PD bubble: cells take chip damage but the
+  surface stays clean (no rust overlay) until cells start dying and
+  punching dark voids.
+
 ### 2026-05-20 — Custom Match: slider-driven roster redesign
 
 **What changed**

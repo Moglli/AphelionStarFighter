@@ -49,7 +49,7 @@ export const CLASSES = {
       capacity: 30,
       reloadTime: 0.6,
     },
-    shield: { max: 24, regen: 8, regenDelay: 3.0 },
+    shield: { max: 40, regen: 11, regenDelay: 2.5 },
     missile: {
       damage: 28,
       cooldown: 7.0,
@@ -90,7 +90,7 @@ export const CLASSES = {
       capacity: 24,
       reloadTime: 1.2,
     },
-    shield: { max: 80, regen: 12, regenDelay: 2.5 },
+    shield: { max: 130, regen: 16, regenDelay: 2.2 },
     // No armor — bombers are still light craft.
     // Heavy missile pods are the bomber's reason to exist. Each pod is
     // tougher than a frigate's missile (more hp) so it survives some PD.
@@ -109,14 +109,14 @@ export const CLASSES = {
       acquireRange: 2100,
       colors: { blue: "#9cf", red: "#fa6" },
     },
-    // Single light PD turret. Anti-missile only in practice — the
-    // global PD_VS_SHIP_MUL nerf keeps it from chipping enemy hulls.
+    // Twin light PD turrets. Anti-missile only in practice — the
+    // global PD_VS_SHIP_MUL nerf keeps them from chipping enemy hulls.
     pdCannons: {
-      count: 1,
-      damage: 5,
-      cooldown: 0.30,
-      projectileSpeed: 950,
-      range: 320,
+      count: 2,
+      damage: 7,
+      cooldown: 0.24,
+      projectileSpeed: 980,
+      range: 400,
       projectileRadius: 2,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -149,16 +149,16 @@ export const CLASSES = {
       projectileRadius: 4.5,
       projectileColors: { blue: "#3af", red: "#f85" },
     },
-    shield: { max: 90, regen: 8, regenDelay: 4.0 },
-    armor: { max: 100, wearRate: 0.55 },
+    shield: { max: 150, regen: 11, regenDelay: 3.5 },
+    armor: { max: 160, wearRate: 0.42 },
     // Heavy PD screen — frigates' primary contribution to a fleet is
     // killing inbound missiles and harassing fighters.
     pdCannons: {
-      count: 4,
-      damage: 6,
-      cooldown: 0.26,
-      projectileSpeed: 980,
-      range: 380,
+      count: 6,
+      damage: 8,
+      cooldown: 0.22,
+      projectileSpeed: 1000,
+      range: 460,
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -207,14 +207,14 @@ export const CLASSES = {
       projectileColors: { blue: "#5fc", red: "#fc3" },
       salvo: { shotsPerVolley: 4, intraShotDelay: 0.10 },
     },
-    shield: { max: 260, regen: 14, regenDelay: 5.0 },
-    armor: { max: 280, wearRate: 0.5 },
+    shield: { max: 420, regen: 18, regenDelay: 4.0 },
+    armor: { max: 440, wearRate: 0.38 },
     pdCannons: {
-      count: 4,
-      damage: 6,
-      cooldown: 0.25,
-      projectileSpeed: 1000,
-      range: 420,
+      count: 6,
+      damage: 8,
+      cooldown: 0.21,
+      projectileSpeed: 1020,
+      range: 520,
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -267,14 +267,14 @@ export const CLASSES = {
       projectileColors: { blue: "#a3f", red: "#f25" },
       salvo: { shotsPerVolley: 3, intraShotDelay: 0.15 },
     },
-    shield: { max: 600, regen: 22, regenDelay: 5.5 },
-    armor: { max: 650, wearRate: 0.45 },
+    shield: { max: 950, regen: 32, regenDelay: 4.5 },
+    armor: { max: 1050, wearRate: 0.34 },
     pdCannons: {
-      count: 6,
-      damage: 7,
-      cooldown: 0.22,
-      projectileSpeed: 1000,
-      range: 460,
+      count: 10,
+      damage: 9,
+      cooldown: 0.18,
+      projectileSpeed: 1040,
+      range: 560,
       projectileRadius: 3,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -340,14 +340,14 @@ export const CLASSES = {
     color: "#9bf",
     // "none" = no primary weapon. The carrier defends with PD only.
     firingMode: "none",
-    shield: { max: 550, regen: 20, regenDelay: 6.0 },
-    armor: { max: 600, wearRate: 0.45 },
+    shield: { max: 900, regen: 28, regenDelay: 4.5 },
+    armor: { max: 950, wearRate: 0.34 },
     pdCannons: {
-      count: 8,          // densest PD wall in the fleet
-      damage: 7,
-      cooldown: 0.22,
-      projectileSpeed: 1000,
-      range: 480,
+      count: 14,         // densest PD wall in the fleet
+      damage: 9,
+      cooldown: 0.18,
+      projectileSpeed: 1040,
+      range: 580,
       projectileRadius: 3,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
@@ -364,21 +364,23 @@ export const CLASSES = {
   station: {
     // Base station node — immobile, no built-in weapons. Per-race node
     // specs in races.js layer on the heavy-laser / missile-pod / PD that
-    // each node carries.
+    // each node carries. Defense archetype: massive HP + shield + armor
+    // + dense PD per node, intended to be the toughest single targets
+    // in the game (Defend mode's victory condition is wiping them).
     name: "Station",
     role: "Defense Platform",
-    hp: 600,
+    hp: 950,
     maxSpeed: 0,
     accel: 0,
     drag: 1,
     // Nodes rotate slowly so heavy-laser arcs and missile-pod launch
     // geometry can still track the nearest enemy.
     turnRate: 0.06,
-    radius: 70,
+    radius: 80,
     color: "#9bf",
     firingMode: "none",
-    shield: { max: 250, regen: 8, regenDelay: 5.0 },
-    armor: { max: 300, wearRate: 0.5 },
+    shield: { max: 700, regen: 18, regenDelay: 3.5 },
+    armor: { max: 780, wearRate: 0.30 },
     aiRange: 0,
     aiOrbit: 0,
   },

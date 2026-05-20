@@ -6,6 +6,7 @@ import { getSprite, ENGINES, ENGINE_X, buildCells, killCellsForModule } from "./
 import {
   buildModules, pdTurretToModuleName, podToModuleName, pickBomberAimModule,
 } from "./modules.js";
+import { events } from "./events.js";
 
 let nextId = 1;
 
@@ -156,6 +157,7 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     shieldMax: spec.shield ? spec.shield.max : 0,
     shieldHitTimer: 0, // counts up since last hit; regen kicks in past regenDelay
     shieldFlash: 0,    // visual: brief brighten when hit
+    shieldHits: [],    // localized arc flares from recent absorbs
     // Armor plating (big ships only). Never regenerates. Sits between
     // shield and hull and absorbs damage at spec.armor.wearRate.
     armor: spec.armor ? spec.armor.max : 0,
@@ -335,6 +337,16 @@ export function updateShip(ship, dt, world) {
   }
   if (ship.shieldFlash > 0) ship.shieldFlash = Math.max(0, ship.shieldFlash - dt * 4);
   if (ship.armorFlash > 0) ship.armorFlash = Math.max(0, ship.armorFlash - dt * 4);
+  // Tick down per-hit shield-arc flares — recorded in game.js
+  // applyDamage when a shield absorbs a projectile. Each entry holds
+  // an angle in ship-local space + a ttl; drop entries that age out
+  // so the array stays bounded.
+  if (ship.shieldHits && ship.shieldHits.length > 0) {
+    for (let i = ship.shieldHits.length - 1; i >= 0; i--) {
+      ship.shieldHits[i].ttl -= dt;
+      if (ship.shieldHits[i].ttl <= 0) ship.shieldHits.splice(i, 1);
+    }
+  }
   if (ship.modules) {
     for (const m of ship.modules) {
       if (m.flash > 0) m.flash = Math.max(0, m.flash - dt * 4);
@@ -523,6 +535,10 @@ function fireForward(ship, world) {
       fromKlass: ship.klass,
     }));
   }
+  events.emit("weaponFired", {
+    x: ship.pos.x, y: ship.pos.y,
+    kind: ship.klass, isPlayer: ship.isPlayer,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -635,6 +651,10 @@ function emitBroadside(ship, world, sideVec, fwd) {
       fromKlass: ship.klass,
     }));
   }
+  events.emit("weaponFired", {
+    x: ship.pos.x, y: ship.pos.y,
+    kind: ship.klass, isPlayer: ship.isPlayer,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +786,10 @@ function updateRingFire(ship, world) {
       fromKlass: "frigate",
     }));
     ship.ringCooldowns[i] = rc.cooldown;
+    events.emit("weaponFired", {
+      x: origin.x, y: origin.y,
+      kind: "frigate", isPlayer: ship.isPlayer,
+    });
   }
 }
 
@@ -899,6 +923,10 @@ function updateMissilePodFire(ship, world) {
       cluster: pods.cluster || null,
     }));
     ship.podCooldowns[i] = pods.cooldown;
+    events.emit("missileFired", {
+      x: origin.x, y: origin.y,
+      isPlayer: ship.isPlayer,
+    });
   }
 }
 
@@ -947,6 +975,10 @@ function fireFighterMissile(ship, world) {
     acquireRange: m.acquireRange,
     initialTarget: target,
   }));
+  events.emit("missileFired", {
+    x: origin.x, y: origin.y,
+    isPlayer: ship.isPlayer,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,9 +1106,11 @@ function drawScar(ctx, sc) {
   ctx.translate(sc.lx, sc.ly);
   ctx.rotate(sc.seed * Math.PI * 2);
   if (sc.kind === "armor-flake") {
-    // Light scratched-metal chip — bright patch with a dark seam.
-    ctx.fillStyle = "rgba(190,190,200,0.55)";
-    ctx.strokeStyle = "rgba(30,30,40,0.7)";
+    // Subtle scratched plate — muted gray with a dark seam, no rim
+    // halo. Reads as a chip in the armor without drawing the eye
+    // away from the actual hole / module craters.
+    ctx.fillStyle = "rgba(140,148,160,0.45)";
+    ctx.strokeStyle = "rgba(20,24,32,0.55)";
     ctx.lineWidth = 0.6;
     ctx.beginPath();
     const n = 6;
@@ -1091,13 +1125,19 @@ function drawScar(ctx, sc) {
     ctx.fill();
     ctx.stroke();
   } else {
-    // Hull hole — hot orange rim, dark irregular bore.
-    ctx.strokeStyle = "rgba(255,130,50,0.7)";
-    ctx.lineWidth = Math.max(0.8, r * 0.25);
+    // Hull hole — sooty crater in the same visual language as a
+    // destroyed module node: dark irregular bore, dark sooty rim,
+    // optional charred inner ring for bigger holes. No bright orange
+    // ring (that read as a "floating rind" hovering above the hull).
+    // Dark sooty outer ring — subtle, just enough to seat the crater
+    // in the hull surface.
+    ctx.strokeStyle = "rgba(20,16,18,0.75)";
+    ctx.lineWidth = Math.max(0.6, r * 0.18);
     ctx.beginPath();
-    ctx.arc(0, 0, r * 1.05, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 1.04, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    // Crater fill — irregular dark polygon.
+    ctx.fillStyle = "rgba(0,0,0,0.92)";
     ctx.beginPath();
     const n = 7;
     for (let i = 0; i < n; i++) {
@@ -1109,6 +1149,14 @@ function drawScar(ctx, sc) {
     }
     ctx.closePath();
     ctx.fill();
+    // Charred inner accent for larger craters — a slightly darker
+    // off-centre disc that gives depth without painting a halo.
+    if (r > 4) {
+      ctx.fillStyle = "rgba(40,28,24,0.55)";
+      ctx.beginPath();
+      ctx.arc(r * 0.15, r * 0.1, r * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.restore();
 }
@@ -1397,25 +1445,10 @@ export function drawShip(ctx, ship, zoom = 1) {
         ctx.fillRect(cell.lx - halfW, cell.ly - halfH, padW, padH);
       }
     }
-    // Wounded-cell halo: cells that took damage but didn't die yet show
-    // a translucent rust overlay with a small orange dot at hp==1.
-    // Skipped at far zoom (detail==false) — the halo is invisible at
-    // that scale and we save the full-grid walk on every ship.
-    const cellHpMax = ship.cellHpMax || 1;
-    if (detail && cellHpMax > 1) {
-      ctx.fillStyle = "rgba(80,40,20,0.45)";
-      for (const cell of ship.cells) {
-        if (cell.culled || cell.dead) continue;
-        if (cell.hp >= cellHpMax) continue;
-        ctx.fillRect(cell.lx - halfW, cell.ly - halfH, cw, ch);
-      }
-      ctx.fillStyle = "rgba(255,140,40,0.8)";
-      for (const cell of ship.cells) {
-        if (cell.culled || cell.dead) continue;
-        if (cell.hp !== 1) continue;
-        ctx.fillRect(cell.lx - 0.5, cell.ly - 0.5, 1, 1);
-      }
-    }
+    // Wounded-cell halo intentionally removed: the prior rust overlay +
+    // orange dot read as a "floating rind" hovering over the hull. Cells
+    // now go straight from pristine sprite to punched-out void; the
+    // hit-flash below + scar craters carry the damage feedback.
     // Bright rim around the freshest chip so a hit reads visibly even
     // before the chunk has finished tearing out.
     let anyFlash = false;
@@ -1464,7 +1497,7 @@ export function drawShip(ctx, ship, zoom = 1) {
       ctx.fillStyle = alive ? "#fff" : "rgba(60,40,30,0.75)";
       const a = (i / n) * Math.PI * 2;
       ctx.beginPath();
-      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 2, 0, Math.PI * 2);
+      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 3, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1566,17 +1599,50 @@ export function drawShip(ctx, ship, zoom = 1) {
   // Offset scales with hull radius so capital ships get a visible
   // stand-off bubble — a flat +6px hugs a battleship at 156px so
   // tightly it looks like an outline. Floor of 6px keeps the small
-  // craft (fighter/bomber) bubble unchanged.
+  // craft (fighter/bomber) bubble unchanged. Per-hit arc flares ride
+  // on top so impacts read at the spot they actually land.
   if (ship.shieldMax > 0 && ship.shield > 0) {
     const frac = ship.shield / ship.shieldMax;
     const baseAlpha = 0.08 + 0.18 * frac;
     const alpha = Math.min(0.85, baseAlpha + ship.shieldFlash);
-    const shieldOffset = Math.max(6, s.radius * 0.18);
+    // Bigger stand-off after the defensive buff pass — the bubble reads
+    // as a wrap-around energy field instead of an outline. Floor of 8px
+    // keeps small-craft bubbles visible without overpowering the hull.
+    const shieldOffset = Math.max(8, s.radius * 0.22);
+    const bubbleR = s.radius + shieldOffset;
     ctx.strokeStyle = "rgba(120, 220, 255, " + alpha.toFixed(3) + ")";
     ctx.lineWidth = 2 + ship.shieldFlash * 4;
     ctx.beginPath();
-    ctx.arc(ship.pos.x, ship.pos.y, s.radius + shieldOffset, 0, Math.PI * 2);
+    ctx.arc(ship.pos.x, ship.pos.y, bubbleR, 0, Math.PI * 2);
     ctx.stroke();
+
+    // Per-hit arc flare: a short, bright arc of the bubble centred
+    // on the impact angle. Multiple recent hits stack so a missile
+    // salvo lights up the shield from several directions at once.
+    // Ship-local angle → world by rotating with ship.heading; render
+    // in world space directly (we're outside the ctx.save/restore
+    // of the rotated ship frame here).
+    if (ship.shieldHits && ship.shieldHits.length > 0) {
+      for (const h of ship.shieldHits) {
+        const t = h.ttl / h.maxTtl; // 1 at fresh, → 0 at expire
+        // Arc width shrinks as the flare ages; brightness too.
+        const half = 0.35 * t + 0.10;
+        const worldAng = ship.heading + h.ang;
+        const a0 = worldAng - half;
+        const a1 = worldAng + half;
+        ctx.strokeStyle = "rgba(220, 245, 255, " + (0.85 * t).toFixed(3) + ")";
+        ctx.lineWidth = 4 + 6 * t;
+        ctx.beginPath();
+        ctx.arc(ship.pos.x, ship.pos.y, bubbleR, a0, a1);
+        ctx.stroke();
+        // Inner brighter core line.
+        ctx.strokeStyle = "rgba(255, 255, 255, " + (0.6 * t).toFixed(3) + ")";
+        ctx.lineWidth = 1.5 + 2 * t;
+        ctx.beginPath();
+        ctx.arc(ship.pos.x, ship.pos.y, bubbleR, a0 + half * 0.3, a1 - half * 0.3);
+        ctx.stroke();
+      }
+    }
   }
 
   // HP bar (with an armor strip stacked above for capitals).

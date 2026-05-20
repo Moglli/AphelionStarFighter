@@ -69,15 +69,20 @@ export function createDebris(x, y, opts = {}) {
 }
 
 export function createFire(x, y, opts = {}) {
-  const ttl = 0.45 + Math.random() * 0.45;
+  // Defaults match the legacy short flame flicker used by hit sparks +
+  // destruction bursts. Engine and hull-vent VFX pass larger size /
+  // longer ttl so sustained damage actually reads as fire, not a quick
+  // pop.
+  const ttl = opts.ttl != null ? opts.ttl : (0.45 + Math.random() * 0.45);
   const ang = opts.angle != null ? opts.angle : Math.random() * Math.PI * 2;
-  const sp = 18 + Math.random() * 45;
+  const sp = opts.speed != null ? opts.speed : (18 + Math.random() * 45);
+  const size = opts.size != null ? opts.size : (2.2 + Math.random() * 3);
+  const sizeGrowth = opts.sizeGrowth != null ? opts.sizeGrowth : -1.6;
   return {
     kind: "fire",
     pos: { x, y },
     vel: { x: Math.cos(ang) * sp, y: Math.sin(ang) * sp },
-    size: 2.2 + Math.random() * 3,
-    sizeGrowth: -1.6,
+    size, sizeGrowth,
     ttl, maxTtl: ttl,
     dead: false,
   };
@@ -304,19 +309,139 @@ export function spawnContinuousSmoke(particles, x, y, isDisabled) {
   if (isDisabled) {
     particles.push(createSmoke(x, y, {
       color: "rgba(25,25,30,",
-      size: 6 + Math.random() * 4,
-      ttl: 2.0 + Math.random() * 1.2,
-      sizeGrowth: 10 + Math.random() * 10,
-      speed: 15 + Math.random() * 20,
+      size: 7 + Math.random() * 5,
+      ttl: 2.2 + Math.random() * 1.4,
+      sizeGrowth: 12 + Math.random() * 12,
+      speed: 15 + Math.random() * 22,
     }));
-    if (Math.random() < 0.35) particles.push(createFire(x, y));
+    if (Math.random() < 0.55) {
+      particles.push(createFire(x, y, {
+        size: 3.5 + Math.random() * 3,
+        ttl: 0.6 + Math.random() * 0.5,
+      }));
+    }
   } else {
     particles.push(createSmoke(x, y, {
-      color: "rgba(110,110,120,",
-      size: 3.5 + Math.random() * 2.5,
-      ttl: 1.0 + Math.random() * 0.7,
-      sizeGrowth: 6 + Math.random() * 6,
-      speed: 12 + Math.random() * 18,
+      color: "rgba(95,95,105,",
+      size: 4 + Math.random() * 3,
+      ttl: 1.1 + Math.random() * 0.8,
+      sizeGrowth: 7 + Math.random() * 8,
+      speed: 12 + Math.random() * 20,
     }));
+  }
+}
+
+// Engine venting plume: thick smoke pouring out the rear of a damaged
+// engine nozzle, laced with fire when the engine is critically damaged
+// or destroyed. `backwardAngle` is the world-space direction the engine
+// vents toward (typically ship.heading + π). Severity 0..1 drives plume
+// size, fire frequency, and smoke darkness — at >=0.85 (disabled) the
+// vent is black and burning, at ~0.5 it's a gray exhaust trail.
+export function spawnEnginePlumeVFX(particles, x, y, backwardAngle, severity) {
+  const ang = backwardAngle + (Math.random() - 0.5) * 0.55;
+  const sp = 28 + severity * 30 + Math.random() * 30;
+  const dark = severity > 0.75;
+  particles.push(createSmoke(x, y, {
+    color: dark
+      ? "rgba(18,16,18,"
+      : (severity > 0.45 ? "rgba(55,50,55," : "rgba(100,95,100,"),
+    angle: ang,
+    speed: sp,
+    size: 5 + severity * 7 + Math.random() * 3,
+    sizeGrowth: 10 + severity * 14,
+    ttl: 1.4 + severity * 1.6 + Math.random() * 0.5,
+  }));
+  // Fire flickers: a flame jet escaping the cracked nozzle. Rate +
+  // size both scale with severity. Above 0.7 we sometimes spawn two
+  // flames per emission for a believable "jet of fire" read.
+  const fireChance = 0.15 + severity * 0.7;
+  if (Math.random() < fireChance) {
+    const flameSpeed = sp * 1.2;
+    const flameSize = 3 + severity * 3.5 + Math.random() * 2;
+    particles.push(createFire(x, y, {
+      angle: ang + (Math.random() - 0.5) * 0.3,
+      speed: flameSpeed,
+      size: flameSize,
+      ttl: 0.5 + severity * 0.6,
+    }));
+    if (severity > 0.7 && Math.random() < 0.5) {
+      particles.push(createFire(x, y, {
+        angle: ang + (Math.random() - 0.5) * 0.5,
+        speed: flameSpeed * 0.8,
+        size: flameSize * 0.7,
+        ttl: 0.4 + severity * 0.4,
+      }));
+    }
+  }
+}
+
+// Shield impact VFX. Outward shockwave + 4-6 sparks at the bubble
+// hit point, tinted shield-blue (or shield-collapse white when the
+// final hit drops the shield). `cost` scales the ring growth + spark
+// count so a small fighter ping feels different from a missile slam.
+export function spawnShieldImpact(particles, x, y, cost, collapsed = false) {
+  const size = Math.max(6, Math.min(28, 6 + cost * 0.18));
+  particles.push(createShockwave(x, y, {
+    size: 4,
+    growth: size * 18,
+    color: collapsed ? "rgba(220,230,255," : "rgba(120,200,255,",
+    ttl: 0.36 + Math.random() * 0.08,
+  }));
+  if (collapsed) {
+    // Second ring expands faster + longer to mark the bubble drop.
+    particles.push(createShockwave(x, y, {
+      size: 8,
+      growth: size * 28,
+      color: "rgba(180,220,255,",
+      ttl: 0.5,
+    }));
+  }
+  const sparkCount = collapsed ? 10 : (cost > 30 ? 6 : 3);
+  for (let i = 0; i < sparkCount; i++) {
+    particles.push(createSpark(x, y, {
+      color: collapsed ? "#e8f4ff" : "#bce8ff",
+      speed: 120 + Math.random() * 160,
+    }));
+  }
+}
+
+// Hull venting damage VFX: smoke + occasional fire from a hull point on
+// the silhouette edge. Used for ship-wide HP-low ambient damage so a
+// half-dead capital visibly trails smoke from breached compartments.
+// `outwardAngle` is the world-space direction from ship centre to the
+// vent point — smoke drifts outward along this vector. Severity 0..1
+// drives smoke darkness, fire chance, and emission size.
+export function spawnHullVentVFX(particles, x, y, outwardAngle, severity) {
+  const ang = outwardAngle + (Math.random() - 0.5) * 0.9;
+  const sp = 16 + severity * 18 + Math.random() * 18;
+  particles.push(createSmoke(x, y, {
+    color: severity > 0.7
+      ? "rgba(22,20,22,"
+      : (severity > 0.4 ? "rgba(65,60,65," : "rgba(110,108,115,"),
+    angle: ang,
+    speed: sp,
+    size: 3.5 + severity * 5 + Math.random() * 2,
+    sizeGrowth: 6 + severity * 12,
+    ttl: 1.0 + severity * 1.4 + Math.random() * 0.4,
+  }));
+  // Fire only appears once the ship is seriously hurt — below 60% hp
+  // (severity > ~0.45). Above 85% severity (critical) a second flame
+  // sometimes spawns so the burning hull looks genuinely on fire.
+  const fireChance = severity > 0.45 ? (severity - 0.35) * 0.85 : 0;
+  if (Math.random() < fireChance) {
+    particles.push(createFire(x, y, {
+      angle: ang,
+      speed: sp * 0.9,
+      size: 2.5 + severity * 3 + Math.random() * 1.5,
+      ttl: 0.55 + severity * 0.7,
+    }));
+    if (severity > 0.85 && Math.random() < 0.4) {
+      particles.push(createFire(x, y, {
+        angle: ang + (Math.random() - 0.5) * 0.7,
+        speed: sp * 0.6,
+        size: 2 + Math.random() * 2,
+        ttl: 0.5 + Math.random() * 0.4,
+      }));
+    }
   }
 }
