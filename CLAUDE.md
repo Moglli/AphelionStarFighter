@@ -122,6 +122,85 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Per-type module art + capital-scale shield standoff
+
+**What changed**
+
+Modules were still rendering as flat colored discs after the
+chip-damage rework — readable but lacked identity. And the shield
+bubble used a fixed `+6px` offset that hugged a battleship's hull
+so tightly it looked like an outline.
+
+1. **Per-type module art.** Each module kind now renders a distinct
+   icon inside its hit disc so the player can tell at a glance what
+   they're targeting: a long forward barrel + glowing lens for
+   `laser`, a 2x2 silo grid (rotated 180° for `missile-aft`) for
+   missile launchers, a casing with three perpendicular cannon
+   barrels for `broadside-port/stbd`, an animated dual-barrel
+   turret on an octagonal base for `pd-*`, a hazard-striped bay
+   door with a launch chevron for `hangar`, a tube with cross-hair
+   fins and inner glow for `torpedo-bay`, and a dark nozzle ring
+   for `engine-*` (the visible plume already identifies it). The
+   icon orientation respects the module's position on the hull —
+   broadside cannons point outward, missile-fwd silos point
+   forward, etc.
+2. **Capital-scale shield bubble.** Shield offset now scales with
+   hull radius: `Math.max(6, s.radius * 0.18)`. Fighters and
+   bombers keep the existing 6px floor; capitals get a clear
+   stand-off (battleship +28px, carrier +32px) so the bubble
+   reads as a *bubble* instead of an outline.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/ship.js` | Added `moduleKind()` classifier, `moduleBodyColor()` / `moduleAccentColor()` HP-keyed palettes, and seven `drawXArt()` helpers (laser, missile, broadside, pd, hangar, torpedo, engine). `drawModuleArt()` dispatches by kind. The existing chip-damage stages (crack chord, wedge cut, red-hot core) now paint *over* the icon. Shield arc offset switched from flat `+6` to `Math.max(6, s.radius * 0.18)`. |
+
+**Design decisions / gotchas**
+
+- **All icons drawn in ship-local coords centered on the module.**
+  `drawModuleArt` does its own `ctx.save / translate(mx,my) /
+  restore` so each `drawXArt` helper writes in module-local space
+  with the ship's +x forward axis. Chip-damage chrome stays in
+  ship-local space at `(mx, my)` so it composites correctly.
+- **PD turret rotation uses `performance.now()` + ship.id phase.**
+  A swarm of 50 PD nests would otherwise spin in lockstep and look
+  mechanical. The phase is `ship.id * 0.37` rad — coprime enough
+  with the rotation period to avoid clustering.
+- **Cell-grid wounded halo and module icons both ignore detail
+  gating intentionally for the icon body.** Only the chip-damage
+  CHROME (cracks/wedge/red-hot core) is gated on
+  `screenRadius >= 12px`. The icon shape itself draws at any zoom
+  — it's the primary visual differentiator and roughly the same
+  cost as the old single disc.
+- **Shield offset floor of 6px preserves small-craft bubble.**
+  Don't lower the floor below 4 or fighters lose their visible
+  shield ring entirely.
+- **Damage chrome obscures icons on critically damaged modules.**
+  This is intentional — a module showing a red-hot core glow
+  should *not* still look like a clean laser barrel. If you add
+  more icon detail later (e.g. cooling fins, ammo counters), keep
+  it in the base layer so it gets covered by the same chrome.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Pick arena, START, spectate (`V`) onto a battleship: laser barrel
+  visible up front, port/starboard broadsides with cannon rows, four
+  engine nozzles aft, two PD turrets that visibly rotate over time.
+- Spectate a carrier: the hangar bay shows a yellow-striped lip
+  and a chevron pointing forward.
+- Spectate a cruiser: the central torpedo-bay shows the cross-hair
+  fins + inner glow.
+- For all capitals: the shield bubble is now visibly outside the
+  hull, not hugging it.
+
 ### 2026-05-20 — Bigger modules, chip-damage VFX, pixel hulls per class
 
 **What changed**

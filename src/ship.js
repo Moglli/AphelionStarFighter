@@ -946,6 +946,216 @@ function drawScar(ctx, sc) {
   ctx.restore();
 }
 // ---------------------------------------------------------------------------
+// Module visual identity. Each kind draws a small distinctive sub-icon
+// inside the module's hit disc so the player can read at a glance which
+// systems are still online: a long forward barrel for laser, silo grid
+// for missile launchers, perpendicular cannon row for broadsides, an
+// animated turret for PD, a wide bay door for hangars, a single big
+// tube for torpedoes. Engines stay minimal — the visible plume already
+// identifies them.
+//
+// All draws happen in ship-local space; the caller has already done
+// ctx.translate(ship.pos) + ctx.rotate(ship.heading). Inside this
+// helper we further translate to (mx, my) so each icon can be written
+// in module-local coordinates with the ship's +x forward axis.
+function moduleKind(name) {
+  if (name.startsWith("engine-")) return "engine";
+  if (name.startsWith("pd-")) return "pd";
+  if (name.startsWith("broadside-")) return "broadside";
+  if (name.startsWith("missile-")) return "missile";
+  if (name === "laser") return "laser";
+  if (name === "hangar") return "hangar";
+  if (name === "torpedo-bay") return "torpedo";
+  return "unknown";
+}
+
+// Material palette — module body fill keyed by HP fraction. Each icon
+// uses these so chip damage reads consistently across types.
+function moduleBodyColor(frac) {
+  if (frac > 0.66) return "rgba(170,200,225,0.85)";
+  if (frac > 0.33) return "rgba(220,180,110,0.88)";
+  return "rgba(230,120,80,0.92)";
+}
+function moduleAccentColor(frac) {
+  // Slightly darker than the body — gives the icon internal depth.
+  if (frac > 0.66) return "rgba(70,100,135,0.95)";
+  if (frac > 0.33) return "rgba(120,80,40,0.95)";
+  return "rgba(120,50,30,0.95)";
+}
+
+function drawLaserArt(ctx, mr, frac) {
+  // Round base + long forward barrel + glowing red lens at the muzzle.
+  const body = moduleBodyColor(frac);
+  const accent = moduleAccentColor(frac);
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.95, 0, Math.PI * 2); ctx.fill();
+  // Barrel: rectangle pointing in +x.
+  const barrelLen = mr * 1.6;
+  const barrelW = mr * 0.45;
+  ctx.fillStyle = accent;
+  ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
+  // Muzzle lens — small inset glowing red disc at the barrel tip.
+  ctx.fillStyle = "rgba(255,80,50,0.95)";
+  ctx.beginPath(); ctx.arc(barrelLen - mr * 0.18, 0, mr * 0.22, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "rgba(255,200,160,0.9)";
+  ctx.beginPath(); ctx.arc(barrelLen - mr * 0.18, 0, mr * 0.09, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawMissileArt(ctx, mr, facing, frac) {
+  // Square casing + 2x2 grid of silo openings, optionally flipped to
+  // point backward for missile-aft. The casing rotates with `facing`.
+  ctx.save();
+  ctx.rotate(facing);
+  const body = moduleBodyColor(frac);
+  const accent = moduleAccentColor(frac);
+  ctx.fillStyle = body;
+  const s = mr * 1.5;
+  ctx.fillRect(-s / 2, -s / 2, s, s);
+  // 2x2 silo openings.
+  ctx.fillStyle = accent;
+  const silo = mr * 0.32;
+  const off = mr * 0.4;
+  for (const dx of [-off, off]) for (const dy of [-off, off]) {
+    ctx.beginPath(); ctx.arc(dx, dy, silo, 0, Math.PI * 2); ctx.fill();
+  }
+  // Inner gleam in each silo — a single bright dot suggests a warhead.
+  ctx.fillStyle = "rgba(255,210,140,0.9)";
+  for (const dx of [-off, off]) for (const dy of [-off, off]) {
+    ctx.beginPath(); ctx.arc(dx, dy, silo * 0.35, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawBroadsideArt(ctx, mr, ySign, frac) {
+  // Long casing parallel to the ship's spine (x-axis) with 3 cannon
+  // barrels poking out perpendicular toward the hull's port/starboard
+  // side. ySign is +1 (starboard) or -1 (port).
+  const body = moduleBodyColor(frac);
+  const accent = moduleAccentColor(frac);
+  ctx.fillStyle = body;
+  ctx.fillRect(-mr * 1.1, -mr * 0.45, mr * 2.2, mr * 0.9);
+  // Three cannon barrels evenly along the casing.
+  ctx.fillStyle = accent;
+  const barrelW = mr * 0.28;
+  const barrelLen = mr * 0.9;
+  for (const xPos of [-mr * 0.7, 0, mr * 0.7]) {
+    ctx.fillRect(xPos - barrelW / 2, ySign > 0 ? 0 : -barrelLen, barrelW, barrelLen);
+    // Muzzle tip
+    ctx.save();
+    ctx.fillStyle = "rgba(40,30,30,0.95)";
+    ctx.fillRect(xPos - barrelW / 2, ySign > 0 ? barrelLen - mr * 0.15 : -barrelLen, barrelW, mr * 0.15);
+    ctx.restore();
+  }
+}
+
+function drawPdArt(ctx, mr, ship, frac) {
+  // Octagonal base + a small turret cap that rotates over time. Each
+  // ship's turret has a unique phase (seeded by ship.id) so a swarm of
+  // PD nests don't spin in lockstep.
+  const body = moduleBodyColor(frac);
+  const accent = moduleAccentColor(frac);
+  // Base — octagon.
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    const x = Math.cos(a) * mr * 0.95;
+    const y = Math.sin(a) * mr * 0.95;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  // Rotating turret cap.
+  const t = performance.now() / 1000;
+  const phase = ((ship.id || 0) * 0.37) % (Math.PI * 2);
+  ctx.save();
+  ctx.rotate(t * 1.5 + phase);
+  ctx.fillStyle = accent;
+  // Twin barrels.
+  const bw = mr * 0.22, bl = mr * 1.1;
+  ctx.fillRect(0, -mr * 0.35 - bw / 2, bl, bw);
+  ctx.fillRect(0,  mr * 0.35 - bw / 2, bl, bw);
+  // Dome cap.
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.45, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawHangarArt(ctx, mr, frac) {
+  // Wide rectangular bay door opening forward, dark interior with a
+  // single chevron arrow pointing out, yellow hazard strip along the
+  // lip.
+  const body = moduleBodyColor(frac);
+  ctx.fillStyle = body;
+  const w = mr * 1.9, h = mr * 1.4;
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  // Bay interior — black void.
+  ctx.fillStyle = "rgba(0,0,0,0.85)";
+  ctx.fillRect(-w / 2 + mr * 0.18, -h / 2 + mr * 0.18, w - mr * 0.36, h - mr * 0.36);
+  // Hazard stripe along the forward lip.
+  ctx.fillStyle = "rgba(240,200,50,0.95)";
+  ctx.fillRect(w / 2 - mr * 0.18, -h / 2, mr * 0.12, h);
+  // Chevron pointing forward — single triangle.
+  ctx.fillStyle = "rgba(220,230,255,0.85)";
+  ctx.beginPath();
+  ctx.moveTo(mr * 0.55, 0);
+  ctx.lineTo(-mr * 0.2, -mr * 0.42);
+  ctx.lineTo(-mr * 0.2, mr * 0.42);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawTorpedoArt(ctx, mr, frac) {
+  // Single large forward-facing tube with crosshair fins, glowing
+  // inner ring suggesting an armed warhead.
+  const body = moduleBodyColor(frac);
+  const accent = moduleAccentColor(frac);
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.95, 0, Math.PI * 2); ctx.fill();
+  // Cross-hair fins.
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = Math.max(1, mr * 0.12);
+  ctx.beginPath();
+  ctx.moveTo(-mr * 0.85, 0); ctx.lineTo(mr * 0.85, 0);
+  ctx.moveTo(0, -mr * 0.85); ctx.lineTo(0, mr * 0.85);
+  ctx.stroke();
+  // Tube opening — dark center.
+  ctx.fillStyle = "rgba(20,10,15,0.95)";
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.5, 0, Math.PI * 2); ctx.fill();
+  // Inner glow.
+  ctx.fillStyle = "rgba(120,200,255,0.65)";
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.22, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawEngineArt(ctx, mr, frac) {
+  // Engines are visually carried by their plumes; the disc itself
+  // just needs to look like a nozzle mouth — a thick dark ring.
+  ctx.strokeStyle = moduleAccentColor(frac);
+  ctx.lineWidth = Math.max(1.2, mr * 0.35);
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.7, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = "rgba(20,15,25,0.85)";
+  ctx.beginPath(); ctx.arc(0, 0, mr * 0.45, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawModuleArt(ctx, m, mx, my, mr, frac, ship) {
+  ctx.save();
+  ctx.translate(mx, my);
+  switch (moduleKind(m.name)) {
+    case "laser":     drawLaserArt(ctx, mr, frac); break;
+    case "missile":   drawMissileArt(ctx, mr, m.name === "missile-aft" ? Math.PI : 0, frac); break;
+    case "broadside": drawBroadsideArt(ctx, mr, m.offset.y >= 0 ? 1 : -1, frac); break;
+    case "pd":        drawPdArt(ctx, mr, ship, frac); break;
+    case "hangar":    drawHangarArt(ctx, mr, frac); break;
+    case "torpedo":   drawTorpedoArt(ctx, mr, frac); break;
+    case "engine":    drawEngineArt(ctx, mr, frac); break;
+    default:
+      ctx.fillStyle = moduleBodyColor(frac);
+      ctx.beginPath(); ctx.arc(0, 0, mr, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 export function drawShip(ctx, ship, zoom = 1) {
   const s = ship.spec;
   const tint = SIDES[ship.side].primary;
@@ -1101,17 +1311,18 @@ export function drawShip(ctx, ship, zoom = 1) {
     ctx.fill();
   }
 
-  // Module markers. Each module is rendered as a colored disc sized to
-  // its actual hit radius (multiplier 0.85, not the old 0.55 pip) so the
-  // visible target matches the hit zone you're aiming at. Progressive
-  // chip-damage states make rising damage readable before destruction:
-  //   stage 0 (>80% hp)  pristine
+  // Module markers. Each module renders a type-specific icon inside its
+  // hit disc (laser barrel, missile silos, broadside cannons, PD turret,
+  // hangar bay, torpedo tube, engine nozzle) so the player can read at
+  // a glance which systems are still online. Progressive chip-damage
+  // chrome paints over the icon as HP drops:
+  //   stage 0 (>80% hp)  pristine icon
   //   stage 1 (>55% hp)  hairline crack chord across the disc
-  //   stage 2 (>30% hp)  stage 1 + chipped rim wedge, darker inner
+  //   stage 2 (>30% hp)  stage 1 + chipped rim wedge + darker inner
   //   stage 3 (>0%  hp)  red-hot core gradient (also drives smoke VFX)
-  //   stage 4 (=0% hp)   existing crater + soot ring (disabled)
-  // Detail (cracks / wedge / core) only paints when this ship's screen
-  // radius is >=12px — far-zoomed-out ships in a 250-ship brawl skip it.
+  //   stage 4 (=0% hp)   crater + soot ring (disabled)
+  // Crack/wedge/core only paint when this ship's screen radius is >=12px
+  // — far-zoomed-out ships in a 250-ship brawl skip them.
   if (ship.modules) {
     for (const m of ship.modules) {
       const mx = m.offset.x * s.radius;
@@ -1126,11 +1337,7 @@ export function drawShip(ctx, ship, zoom = 1) {
         continue;
       }
       const frac = m.hp / m.hpMax;
-      const baseColor = frac > 0.66 ? "rgba(180,220,255,0.55)"
-                      : frac > 0.33 ? "rgba(255,220,140,0.7)"
-                                    : "rgba(255,140,90,0.82)";
-      ctx.fillStyle = baseColor;
-      ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+      drawModuleArt(ctx, m, mx, my, mr, frac, ship);
       if (detail) {
         // Deterministic angle seed from the module name so cracks/wedges
         // sit in the same place each frame without storing per-module state.
@@ -1189,14 +1396,19 @@ export function drawShip(ctx, ship, zoom = 1) {
   ctx.restore();
 
   // Shield bubble. Visible when shield > 0, brighter on hit-flash.
+  // Offset scales with hull radius so capital ships get a visible
+  // stand-off bubble — a flat +6px hugs a battleship at 156px so
+  // tightly it looks like an outline. Floor of 6px keeps the small
+  // craft (fighter/bomber) bubble unchanged.
   if (ship.shieldMax > 0 && ship.shield > 0) {
     const frac = ship.shield / ship.shieldMax;
     const baseAlpha = 0.08 + 0.18 * frac;
     const alpha = Math.min(0.85, baseAlpha + ship.shieldFlash);
+    const shieldOffset = Math.max(6, s.radius * 0.18);
     ctx.strokeStyle = "rgba(120, 220, 255, " + alpha.toFixed(3) + ")";
     ctx.lineWidth = 2 + ship.shieldFlash * 4;
     ctx.beginPath();
-    ctx.arc(ship.pos.x, ship.pos.y, s.radius + 6, 0, Math.PI * 2);
+    ctx.arc(ship.pos.x, ship.pos.y, s.radius + shieldOffset, 0, Math.PI * 2);
     ctx.stroke();
   }
 
