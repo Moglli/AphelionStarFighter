@@ -271,18 +271,22 @@ export function spawnHullBreakoff(particles, x, y, damage, tint, outwardAngle = 
 
 // Module-just-destroyed burst: shockwave + heavy sparks + debris + initial
 // smoke puff + fire flickers. Radius is in world units, used to scale the
-// shockwave and number of particles for big-vs-small modules.
-export function spawnDestructionBurst(particles, x, y, radius = 20) {
+// shockwave and number of particles for big-vs-small modules. `intensity`
+// scales the shockwave growth, spark count, and debris count — caller
+// passes ~1.4 for armored capitals so their module deaths read as
+// dramatic events vs the standard fighter-engine pop.
+export function spawnDestructionBurst(particles, x, y, radius = 20, intensity = 1) {
   particles.push(createShockwave(x, y, {
     size: radius * 0.5,
-    growth: Math.max(220, radius * 14),
+    growth: Math.max(220, radius * 14 * intensity),
     color: "rgba(255,180,80,",
   }));
-  const sparkCount = 12 + Math.floor(radius * 0.3);
+  const sparkCount = Math.floor((12 + radius * 0.3) * intensity);
   for (let i = 0; i < sparkCount; i++) {
     particles.push(createSpark(x, y, { color: "#ffd870" }));
   }
-  for (let i = 0; i < 9; i++) particles.push(createDebris(x, y));
+  const debrisCount = Math.floor(9 * intensity);
+  for (let i = 0; i < debrisCount; i++) particles.push(createDebris(x, y));
   for (let i = 0; i < 5; i++) {
     particles.push(createSmoke(x, y, {
       color: "rgba(40,40,45,",

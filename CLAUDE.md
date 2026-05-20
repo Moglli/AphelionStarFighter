@@ -122,6 +122,111 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Bigger modules, chip-damage VFX, pixel hulls per class
+
+**What changed**
+
+Damage feedback was hard to read: tiny module discs that didn't
+match their hit zones, and a one-shot-per-cell hull grid that meant
+fighters and battleships eroded at the same rate. Three coordinated
+passes:
+
+1. **Modules bigger + targetable.** Every static module in
+   `MODULES` got its radius bumped ~35% so the disc you see is
+   the hit zone you're aiming at. The drawShip render multiplier
+   went from `0.55` to `0.85` for the same reason — the visible
+   disc was previously much smaller than the underlying hit
+   radius. A dev-only `auditModuleLayout()` runs once at module
+   load and `console.warn`s if any two discs overlap by more than
+   25% of their combined radii (gated on `import.meta.env.DEV`
+   so prod pays nothing).
+
+2. **Progressive chip-damage states on modules.** Modules now
+   render across 5 visual stages tied to HP fraction:
+   `0` pristine → `1` hairline crack chord (>55%) → `2` chipped
+   wedge + darker inner (>30%) → `3` red-hot core radial gradient
+   (>0%) → `4` existing crater + soot ring (disabled). Crossing
+   into a worse stage fires a one-shot extra spark burst plus
+   continuous-smoke puff so the transition reads as a discrete
+   event rather than a slow color drift. Capital module deaths
+   now use `intensity=1.4` on `spawnDestructionBurst` (bigger
+   shockwave, more sparks/debris) so they feel dramatic vs.
+   fighter engine pops.
+
+3. **Pixel-based hulls with per-class HP.** The destructible cell
+   grid resolution roughly 4x finer (battleship 16×8 → 40×22,
+   cruiser 14×7 → 32×18, fighter 6×4 → 12×8, etc.) so chunks chew
+   out at a believable "pixel" scale. Each cell now carries a
+   class-scaled HP (`CELL_HP`: fighter 1, frigate 2, cruiser 3,
+   BB/carrier 4, station 5) and a `CELL_HULL_COST` per kill
+   (fighter 0.25 → station 1.0) that deducts from `ship.hp` so
+   the HP bar erodes smoothly with the silhouette.
+   `damageCellsInRadius` was rewritten to take a damage *budget*
+   that drills inner-cells-first (chip on small hits, tight
+   chunks on big hits) and is capped at 1.2× remaining damage by
+   the caller. A `deadCells[]` cache on each ship lets `drawShip`
+   render voids without walking the full grid each frame; a new
+   "wounded-cell halo" pass paints a translucent rust overlay +
+   orange dot at hp=1 on alive-but-damaged cells (only when the
+   ship's screen radius >=12px, to skip cost on far zoom).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/modules.js` | All MODULES radii bumped ~35%; offsets nudged to clear overlap. Added `auditModuleLayout()` + one-shot self-call. |
+| `src/sprites.js` | `CELL_GRID` rows/cols 3-4x finer per class. New `CELL_HP` + `CELL_HULL_COST` tables. `buildCells` returns `cellHpMax`/`cellHullCost`. `damageCellsInRadius` rewritten: budget-based, inner-first bucket pass, pushes to `ship.deadCells`, drains `ship.hp` by `cellHullCost` per kill. `killCellsForModule` also pushes to `deadCells` and zeros `cell.hp`. |
+| `src/ship.js` | `createShip` stashes `cellHpMax`, `cellHullCost`, empty `deadCells[]` on the ship. `drawShip(ctx, ship, zoom)` gained a `zoom` arg + `detail` gate; module render uses 0.85 multiplier + progressive chip stages; dead-cells iterate `ship.deadCells` cache; wounded-cell halo overlay for damaged-but-alive cells. |
+| `src/main.js` | Passes `ZOOM` through to `drawShip` so the detail-gate has accurate screen radius. |
+| `src/game.js` | `applyDamage` passes `remaining * 1.2` budget to `damageCellsInRadius`; tracks module damage-stage transitions via new `moduleStage()` helper and fires spark+smoke on cross; capital module deaths use `intensity=1.4` on the burst. |
+| `src/particles.js` | `spawnDestructionBurst(..., intensity=1)` scales shockwave growth, spark count, debris count. |
+
+**Design decisions / gotchas**
+
+- **`cell.hpMax` no longer stored per-cell** — uniform across a
+  ship, kept on `ship.cellHpMax`. If you add a future per-cell
+  modifier (e.g., armored prow), reintroduce it as a field on
+  the cell, but never as `hpMax` (that'd shadow the ship
+  convention used elsewhere for module/ship HP).
+- **Budget cap is in `applyDamage` (`remaining * 1.2`),
+  NOT in `damageCellsInRadius`.** The 1.2 leaves a small spill
+  margin so a hit that lands one pixel off-centre still drains
+  the expected number of cells. If you raise this, beam ticks
+  will start punching ribbons straight through capitals.
+- **Damage-stage thresholds are duplicated** in `drawShip`
+  (visual) and `moduleStage()` (transition VFX) — keep them in
+  lockstep. Worth extracting into a shared helper if a third
+  consumer appears.
+- **Wounded-cell halo skips at `screenRadius < 12px`** — a 250-
+  ship brawl on a phone otherwise grinds in fill-time on tints
+  the eye can't see. If you change the camera ZOOM, retune this
+  threshold rather than removing it.
+- **`auditModuleLayout()` runs once at module load** and
+  self-suppresses outside Vite dev builds via
+  `import.meta.env.DEV`. Confirmed zero overlaps after the
+  current radius bumps — but if you tweak offsets, watch the
+  dev console.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Pick arena, START, and spectate-cycle (`V`) to a battleship.
+- Fire at the prow: pixels chip out at the impact point in
+  small clusters (1 cell on glancing fighter rounds, 5-10 on
+  heavier shots). HP bar drains in lockstep.
+- Aim at a named module (laser, broadside, PD): the disc you
+  see *is* the hit zone. Watch the disc develop a crack, then
+  a wedge cut, then a red-hot core as it nears destruction;
+  each stage transition fires a spark + smoke puff.
+- Watch a capital ship die: module deaths produce noticeably
+  bigger shockwaves than fighter-engine pops.
+
 ### 2026-05-19 — Fighters/bombers stop dodging; per-capital fighter escorts; bombers flank
 
 **What changed**
@@ -164,7 +269,6 @@ the gun arc anyway.
 |---|---|
 | `src/ai.js` | `bigShipDanger(ship, ships, excludeTarget)` accepts an exclusion. `flybyAI` passes `target`, drops the inPdZone-forced break-off, drops the firing-suppress on danger, bumps approach timeout to 16 s, lowers REGROUP_DIST + MIN_BREAK_TIME, danger weight 1.95 → 0.55. `bomberStandoffAI` renamed to `bomberFlankAI`; rewritten to fly to a perpendicular-aft flank slot, then face target. Bomber danger weight 2.20 → 0.85, also excludes target. `updateAI` dispatch updated to call `bomberFlankAI`. |
 | `src/game.js` | `ESCORT_SIZE` map added. `spawnCapitalWithEscort(game, klass, side, race, zone, facing)` replaces `spawnCarrierWithEscort` and handles all escortable classes uniformly. Escort ring radius widened so 15 fighters around a battleship don't overlap at spawn. Escorts tagged with `escortOf: capital.id` for future HUD/debug. Old per-spec `escortSize` lookup is gone — `ESCORT_SIZE[klass]` is the single source of truth. |
-| `src/classes.js`, `src/races.js` | Removed dead `escortSize` fields (carrier base spec, Reavers carrier, Voidsworn carrier). |
 
 **Design decisions / gotchas**
 

@@ -206,6 +206,12 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     ship.cells = grid.cells;
     ship.cellW = grid.cellW;
     ship.cellH = grid.cellH;
+    ship.cellHpMax = grid.cellHpMax;
+    ship.cellHullCost = grid.cellHullCost;
+    // Flat list of cells that have been destroyed — populated by
+    // damageCellsInRadius / killCellsForModule and iterated in drawShip
+    // instead of walking the full grid every frame looking for voids.
+    ship.deadCells = [];
     if (ship.modules) {
       // For each module, bind every still-unbound live cell whose centre
       // sits inside the module's disc to that module. Multiple discs may
@@ -940,9 +946,15 @@ function drawScar(ctx, sc) {
   ctx.restore();
 }
 // ---------------------------------------------------------------------------
-export function drawShip(ctx, ship) {
+export function drawShip(ctx, ship, zoom = 1) {
   const s = ship.spec;
   const tint = SIDES[ship.side].primary;
+  // Screen-pixel radius of this ship after the camera transform. Used to
+  // gate cheap detail like module damage-stage chrome and wounded-cell
+  // halos — far-zoomed-out ships in a 250-ship brawl drop those passes
+  // to save fill-time on details the eye can't resolve at this scale.
+  const screenRadius = s.radius * zoom;
+  const detail = screenRadius >= 12;
   ctx.save();
   ctx.translate(ship.pos.x, ship.pos.y);
   ctx.rotate(ship.heading);
@@ -1000,10 +1012,32 @@ export function drawShip(ctx, ship) {
     // void instead of leaving thin sliver lines between them.
     const padW = cw + 1;
     const padH = ch + 1;
-    ctx.fillStyle = "#000";
-    for (const cell of ship.cells) {
-      if (!cell.dead) continue;
-      ctx.fillRect(cell.lx - halfW, cell.ly - halfH, padW, padH);
+    // Dead cells via the per-ship cache — typically far smaller than
+    // walking the full grid (~600 cells avg) each frame.
+    if (ship.deadCells && ship.deadCells.length > 0) {
+      ctx.fillStyle = "#000";
+      for (const cell of ship.deadCells) {
+        ctx.fillRect(cell.lx - halfW, cell.ly - halfH, padW, padH);
+      }
+    }
+    // Wounded-cell halo: cells that took damage but didn't die yet show
+    // a translucent rust overlay with a small orange dot at hp==1.
+    // Skipped at far zoom (detail==false) — the halo is invisible at
+    // that scale and we save the full-grid walk on every ship.
+    const cellHpMax = ship.cellHpMax || 1;
+    if (detail && cellHpMax > 1) {
+      ctx.fillStyle = "rgba(80,40,20,0.45)";
+      for (const cell of ship.cells) {
+        if (cell.culled || cell.dead) continue;
+        if (cell.hp >= cellHpMax) continue;
+        ctx.fillRect(cell.lx - halfW, cell.ly - halfH, cw, ch);
+      }
+      ctx.fillStyle = "rgba(255,140,40,0.8)";
+      for (const cell of ship.cells) {
+        if (cell.culled || cell.dead) continue;
+        if (cell.hp !== 1) continue;
+        ctx.fillRect(cell.lx - 0.5, cell.ly - 0.5, 1, 1);
+      }
     }
     // Bright rim around the freshest chip so a hit reads visibly even
     // before the chunk has finished tearing out.
@@ -1067,34 +1101,78 @@ export function drawShip(ctx, ship) {
     ctx.fill();
   }
 
-  // Module markers. Alive modules show a faint accent disc that hue-shifts
-  // toward red as HP drops; destroyed modules show a black crater + soot
-  // ring. Hit flashes briefly outline the module in white. Markers are
-  // drawn inside the rotated frame so their (offset.x, offset.y) align
-  // with the hull geometry.
+  // Module markers. Each module is rendered as a colored disc sized to
+  // its actual hit radius (multiplier 0.85, not the old 0.55 pip) so the
+  // visible target matches the hit zone you're aiming at. Progressive
+  // chip-damage states make rising damage readable before destruction:
+  //   stage 0 (>80% hp)  pristine
+  //   stage 1 (>55% hp)  hairline crack chord across the disc
+  //   stage 2 (>30% hp)  stage 1 + chipped rim wedge, darker inner
+  //   stage 3 (>0%  hp)  red-hot core gradient (also drives smoke VFX)
+  //   stage 4 (=0% hp)   existing crater + soot ring (disabled)
+  // Detail (cracks / wedge / core) only paints when this ship's screen
+  // radius is >=12px — far-zoomed-out ships in a 250-ship brawl skip it.
   if (ship.modules) {
     for (const m of ship.modules) {
       const mx = m.offset.x * s.radius;
       const my = m.offset.y * s.radius;
-      const mr = m.radius * s.radius * 0.55;
+      const mr = m.radius * s.radius * 0.85;
       if (m.disabled) {
         ctx.fillStyle = "rgba(0,0,0,0.85)";
         ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = "rgba(120,60,40,0.7)";
         ctx.lineWidth = 1.2;
         ctx.stroke();
-      } else {
-        const frac = m.hp / m.hpMax;
-        const color = frac > 0.66 ? "rgba(180,220,255,0.45)"
-                    : frac > 0.33 ? "rgba(255,220,140,0.65)"
-                                  : "rgba(255,140,90,0.78)";
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
-        if (m.flash > 0) {
-          ctx.strokeStyle = "rgba(255,255,255," + m.flash.toFixed(2) + ")";
-          ctx.lineWidth = 1.5;
+        continue;
+      }
+      const frac = m.hp / m.hpMax;
+      const baseColor = frac > 0.66 ? "rgba(180,220,255,0.55)"
+                      : frac > 0.33 ? "rgba(255,220,140,0.7)"
+                                    : "rgba(255,140,90,0.82)";
+      ctx.fillStyle = baseColor;
+      ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+      if (detail) {
+        // Deterministic angle seed from the module name so cracks/wedges
+        // sit in the same place each frame without storing per-module state.
+        let seed = 0;
+        for (let i = 0; i < m.name.length; i++) seed = (seed * 31 + m.name.charCodeAt(i)) | 0;
+        const crackAng = (seed & 0xffff) / 0xffff * Math.PI;
+        if (frac <= 0.80) {
+          // Stage 1+: hairline crack across the disc.
+          const cx = Math.cos(crackAng) * mr * 0.95;
+          const cy = Math.sin(crackAng) * mr * 0.95;
+          ctx.strokeStyle = "rgba(20,20,25,0.85)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(mx - cx, my - cy);
+          ctx.lineTo(mx + cx, my + cy);
           ctx.stroke();
         }
+        if (frac <= 0.55) {
+          // Stage 2+: chipped wedge cut out of the rim + darker inner disc.
+          ctx.fillStyle = "rgba(0,0,0,0.55)";
+          ctx.beginPath();
+          ctx.arc(mx, my, mr, crackAng + 1.9, crackAng + 2.5);
+          ctx.lineTo(mx, my);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = "rgba(80,40,30,0.45)";
+          ctx.beginPath(); ctx.arc(mx, my, mr * 0.55, 0, Math.PI * 2); ctx.fill();
+        }
+        if (frac <= 0.30) {
+          // Stage 3: red-hot core showing through the breached casing.
+          const g = ctx.createRadialGradient(mx, my, 0, mx, my, mr);
+          g.addColorStop(0, "rgba(255,210,120,0.95)");
+          g.addColorStop(0.45, "rgba(255,110,40,0.7)");
+          g.addColorStop(1, "rgba(255,40,20,0)");
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      if (m.flash > 0) {
+        ctx.strokeStyle = "rgba(255,255,255," + m.flash.toFixed(2) + ")";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.stroke();
       }
     }
   }

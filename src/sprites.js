@@ -224,14 +224,47 @@ function drawSchematic(ctx, race, klass, side, R) {
 // chunks read at the right scale. Cell size is then derived from
 // spec.radius so the grid spans the silhouette regardless of which
 // class-specific radius the ship instance happens to have.
+//
+// Grid bumped to ~2-3px per cell at typical zoom (the "pixel-based hull"
+// feel) without sliding into per-pixel cost. ~600 avg cells × 250 ships
+// ≈ 150k cells fleet-wide — 4-10x current resolution, comfortably
+// inside canvas2D budget when we only iterate the dead-cells cache.
 const CELL_GRID = {
-  fighter:    { cols:  6, rows:  4 },
-  bomber:     { cols:  7, rows:  5 },
-  frigate:    { cols: 10, rows:  6 },
-  cruiser:    { cols: 14, rows:  7 },
-  battleship: { cols: 16, rows:  8 },
-  carrier:    { cols: 18, rows: 10 },
-  station:    { cols: 12, rows: 12 },
+  fighter:    { cols: 12, rows:  8 },
+  bomber:     { cols: 14, rows: 10 },
+  frigate:    { cols: 22, rows: 14 },
+  cruiser:    { cols: 32, rows: 18 },
+  battleship: { cols: 40, rows: 22 },
+  carrier:    { cols: 48, rows: 26 },
+  station:    { cols: 36, rows: 36 },
+};
+
+// Per-class cell HP. Heavier hulls take multiple cannon hits before a
+// pixel finally pops, so a fighter strafing a battleship chips slowly
+// while another battleship's broadside shears chunks. Stored once on
+// the ship as `cellHpMax` so per-cell records only need the current hp
+// value (uint8 fits comfortably).
+export const CELL_HP = {
+  fighter:    1,
+  bomber:     1,
+  frigate:    2,
+  cruiser:    3,
+  battleship: 4,
+  carrier:    4,
+  station:    5,
+};
+
+// Per-class hull-HP cost per cell death. Couples pixel erosion to the
+// scalar ship.hp so the HP bar drains smoothly with chip damage — keeps
+// AI / HUD code (which reads ship.hp) working unchanged.
+export const CELL_HULL_COST = {
+  fighter:    0.25,
+  bomber:     0.25,
+  frigate:    0.5,
+  cruiser:    0.5,
+  battleship: 1.0,
+  carrier:    1.0,
+  station:    1.0,
 };
 
 // Build a per-ship cell grid in ship-local coordinates. The bounding
@@ -246,6 +279,8 @@ export function buildCells(klass, R) {
   if (!spec) return null;
   const cols = spec.cols;
   const rows = spec.rows;
+  const cellHpMax = CELL_HP[klass] || 1;
+  const cellHullCost = CELL_HULL_COST[klass] || 0.5;
   // Per-axis cell size — slightly wider than tall on most hulls because
   // ships are elongated bow-to-stern. Picking the cell size as 2R/cols
   // makes the grid span the silhouette along the long axis; the row
@@ -271,11 +306,10 @@ export function buildCells(klass, R) {
       const inside = (nx * nx + ny * ny) <= 1.0;
       cells[r * cols + c] = {
         lx, ly, row: r, col: c,
-        // One-shot kill keeps the visible-chunks feedback immediate —
-        // we'd otherwise need two hits before a cell goes dark, which
-        // hides the loss under shield/armor flicker.
-        hp: 1,
-        hpMax: 1,
+        // Per-class HP via cellHpMax on the ship — capitals chip slowly
+        // while fighters' skin pops in a single hit. Only the current
+        // hp is stored per cell; the max is uniform across the ship.
+        hp: cellHpMax,
         culled: !inside,    // never alive — not part of the silhouette
         dead: false,        // killed by damage — draws as a void
         // Module binding is set in ship.js after createShip — the
@@ -285,34 +319,62 @@ export function buildCells(klass, R) {
       };
     }
   }
-  return { cells, cellW, cellH, cols, rows, halfX, halfY };
+  return { cells, cellW, cellH, cols, rows, halfX, halfY, cellHpMax, cellHullCost };
 }
 
-// Kill every live cell whose centre falls within `radius` of (lx, ly).
-// Returns the number of cells removed plus a list of newly-destroyed
-// module names so the caller can fire the matching destruction VFX.
-// Each cell takes at most one hp per call, so a single low-damage hit
-// chips a cell, and a heavy hit clears a whole cluster.
-export function damageCellsInRadius(ship, lx, ly, radius, hpDrain = 1) {
-  if (!ship.cells || ship.cells.length === 0) {
-    return { destroyed: 0, modulesDestroyed: [] };
+// Apply a damage budget to cells whose centre falls within `radius` of
+// (lx, ly). Inner cells take damage first (full hpMax each), spillover
+// goes to outer cells. This means a small chip eats one pixel, a heavy
+// shot shears a tight cluster, and you can't vaporise half a ship with
+// a single hit (budget is capped by the caller). Cells that drop to 0
+// hp flip to `dead`, are pushed onto ship.deadCells for cheap iteration
+// at draw time, and deduct cellHullCost from ship.hp so the HP bar
+// erodes smoothly along with the silhouette.
+//
+// `budget` is the total damage to deal across the affected cells. The
+// caller (game.js) clamps this at ~remaining*1.2 so a single huge beam
+// tick can't punch through half a battleship in one frame.
+export function damageCellsInRadius(ship, lx, ly, radius, budget = 1) {
+  if (!ship.cells || ship.cells.length === 0 || budget <= 0) {
+    return { destroyed: 0 };
   }
+  const cellHpMax = ship.cellHpMax || 1;
+  const hullCost = ship.cellHullCost || 0;
   const r2 = radius * radius;
-  let destroyed = 0;
-  const modulesDestroyed = [];
+  const innerR2 = (radius * 0.5) * (radius * 0.5);
+  // Bucket candidates into inner (closer than half-radius) and outer.
+  // Inner cells absorb the damage first so a hit on the impact point
+  // actually punches through pixels rather than spreading thin.
+  const inner = [];
+  const outer = [];
   for (const cell of ship.cells) {
     if (cell.culled || cell.dead) continue;
     const dx = cell.lx - lx;
     const dy = cell.ly - ly;
-    if (dx * dx + dy * dy > r2) continue;
-    cell.hp -= hpDrain;
-    cell.flash = 1;
-    if (cell.hp <= 0) {
-      cell.dead = true;
-      destroyed++;
-    }
+    const d2 = dx * dx + dy * dy;
+    if (d2 > r2) continue;
+    (d2 <= innerR2 ? inner : outer).push(cell);
   }
-  return { destroyed, modulesDestroyed };
+  let remaining = budget;
+  let destroyed = 0;
+  const drainBucket = (bucket) => {
+    for (const cell of bucket) {
+      if (remaining <= 0) break;
+      const take = cell.hp <= remaining ? cell.hp : remaining;
+      cell.hp -= take;
+      remaining -= take;
+      cell.flash = 1;
+      if (cell.hp <= 0 && !cell.dead) {
+        cell.dead = true;
+        destroyed++;
+        if (ship.deadCells) ship.deadCells.push(cell);
+        if (hullCost > 0) ship.hp -= hullCost;
+      }
+    }
+  };
+  drainBucket(inner);
+  if (remaining > 0) drainBucket(outer);
+  return { destroyed };
 }
 
 // Kill every live cell bound to a given module (called when the module
@@ -325,7 +387,9 @@ export function killCellsForModule(ship, moduleName) {
     if (cell.culled || cell.dead) continue;
     if (cell.moduleName === moduleName) {
       cell.dead = true;
+      cell.hp = 0;
       count++;
+      if (ship.deadCells) ship.deadCells.push(cell);
     }
   }
   return count;

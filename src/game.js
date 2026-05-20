@@ -577,6 +577,18 @@ function computeModuleTargets(ship, p) {
   return hit ? [{ module: hit, weight: 1.0 }] : null;
 }
 
+// Module HP fraction → damage stage 0-4. Mirrors the thresholds used by
+// drawShip's progressive chip rendering so the visual stage and the
+// transition-VFX trigger stay in lockstep.
+function moduleStage(hp, hpMax) {
+  if (hp <= 0)          return 4;
+  const f = hp / hpMax;
+  if (f > 0.80)         return 0;
+  if (f > 0.55)         return 1;
+  if (f > 0.30)         return 2;
+  return 3;
+}
+
 function applyDamage(ship, p, moduleTargets = null, particles = null) {
   let remaining = p.damage;
 
@@ -625,24 +637,39 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
 
   // Step 3a: Chew the destructible cell grid at the hit point. Radius
   // scales with damage so a glancing fighter round chips a single cell
-  // and a cruiser shell or missile rips out a cluster. This is what
-  // gives the silhouette its visibly missing chunks.
+  // and a cruiser shell or missile rips out a cluster. With per-class
+  // cell HP > 1 the budget approach drills inner-cells-first: a small
+  // hit chips one pixel, a heavy hit shears a tight chunk. The 1.2x
+  // cap prevents a single 200-dmg beam tick from punching a hole
+  // straight through a battleship.
   if (ship.cells && p && p.pos) {
     const local = worldToLocal(ship, p.pos.x, p.pos.y);
     const chewR = chewRadius(ship, remaining);
-    damageCellsInRadius(ship, local.x, local.y, chewR, 1);
+    damageCellsInRadius(ship, local.x, local.y, chewR, remaining * 1.2);
   }
 
   if (moduleTargets && moduleTargets.length > 0) {
     for (const { module, weight } of moduleTargets) {
       if (module.disabled) continue;
       const dmg = remaining * weight;
+      // Damage-stage tracking: each module steps through stages 0-4 as
+      // its HP drops (matches drawShip's progressive chip rendering).
+      // When we cross into a worse stage, fire a one-shot spark + smoke
+      // puff so the transition reads as a discrete event rather than a
+      // slow color drift.
+      const prevStage = moduleStage(module.hp, module.hpMax);
       module.hp -= dmg;
+      const newStage = moduleStage(module.hp, module.hpMax);
       module.flash = Math.min(1, module.flash + 0.6);
-      // VFX: hit sparks at the module's live world position.
       if (particles) {
         const wpos = moduleWorldPos(ship, module.name);
-        if (wpos) spawnHitSparks(particles, wpos.x, wpos.y, 4);
+        if (wpos) {
+          spawnHitSparks(particles, wpos.x, wpos.y, 4);
+          if (newStage > prevStage && newStage < 4) {
+            spawnHitSparks(particles, wpos.x, wpos.y, 6);
+            spawnContinuousSmoke(particles, wpos.x, wpos.y, false);
+          }
+        }
       }
       if (module.hp <= 0) {
         module.disabled = true;
@@ -657,7 +684,10 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
           const wpos = moduleWorldPos(ship, module.name);
           if (wpos) {
             const moduleRadiusWorld = module.radius * ship.spec.radius;
-            spawnDestructionBurst(particles, wpos.x, wpos.y, moduleRadiusWorld);
+            // Capital module deaths read 40% bigger — bigger shockwave,
+            // more sparks/debris — than fighter engine pops.
+            const intensity = ship.spec.armorMax > 0 ? 1.4 : 1.0;
+            spawnDestructionBurst(particles, wpos.x, wpos.y, moduleRadiusWorld, intensity);
           }
         }
       }

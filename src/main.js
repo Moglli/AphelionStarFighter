@@ -237,7 +237,7 @@ function draw() {
   if (game.particles) {
     for (const p of game.particles) if (p.kind === "smoke") drawParticle(ctx, p);
   }
-  for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship);
+  for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, ZOOM);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
   // Sparks / fire / debris / shockwaves render on top of ships and beams
