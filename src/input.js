@@ -338,10 +338,10 @@ export class AdmiralPanel {
     if (!directives) return;
     const p = this.panelRect;
     ctx.save();
-    ctx.fillStyle = "rgba(8,16,28,0.88)";
+    ctx.fillStyle = "rgba(8,16,28,0.85)";
     ctx.fillRect(p.x, p.y, p.w, p.h);
     ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x, p.y, p.w, p.h);
 
     for (const r of this._rects) {
@@ -598,22 +598,21 @@ export class StartMenu {
       w: startW, h: startH,
     };
 
-    // Energy header — clickable strip at the very top of the menu.
-    // Sits above the title in screen space.
-    const ebW = 360, ebH = 38;
+    // Top-bar chrome — paired pills sitting in the corners so they
+    // never collide with the centered title block. Energy on the
+    // left (it's the primary action driver — F2P funnel), Settings
+    // on the right.
+    const pillH = 38;
     this.energyBarRect = {
-      x: (viewW - ebW) / 2,
-      y: titleY - 60,
-      w: ebW, h: ebH,
+      x: 18,
+      y: 18,
+      w: 240, h: pillH,
     };
-
-    // Settings gear button — top-right corner of the menu so it's
-    // discoverable without disturbing the centered layout.
-    const sgW = 110, sgH = 38;
+    const sgW = 110;
     this.settingsButtonRect = {
       x: viewW - sgW - 18,
       y: 18,
-      w: sgW, h: sgH,
+      w: sgW, h: pillH,
     };
 
     // Refill overlay (package picker). Always laid out so the click
@@ -754,38 +753,40 @@ export class StartMenu {
 
   draw(ctx, viewW, viewH) {
     ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    // Full-screen dim with a subtle blue grade so the menu sits on a
+    // softly tinted void rather than raw black-over-stars.
+    ctx.fillStyle = "rgba(2,8,18,0.78)";
     ctx.fillRect(0, 0, viewW, viewH);
 
-    // Energy header — clickable strip showing current tank and the
-    // refill countdown when below cap. Doubles as the entry point to
-    // the purchase overlay.
+    // Energy + Settings corner pills — drawn before the title so the
+    // title can layer over the top-bar baseline if needed.
     if (this.energyBarRect) this._drawEnergyHeader(ctx);
 
-    ctx.fillStyle = "#cef";
+    // Title with accent rule. The thin underline gives the wordmark a
+    // visual anchor without needing actual logo art.
     ctx.textAlign = "center";
-    ctx.font = "bold 36px system-ui, sans-serif";
+    ctx.fillStyle = "#e6f4ff";
+    ctx.font = "bold 38px system-ui, sans-serif";
     ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 230);
+    ctx.fillStyle = "#5af";
+    ctx.fillRect(viewW / 2 - 200, viewH / 2 - 214, 400, 2);
+    ctx.fillStyle = "#7bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("FLEET COMBAT", viewW / 2, viewH / 2 - 198);
 
-    ctx.fillStyle = "#9bd";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("MAP SIZE", viewW / 2, this.sizeRects[0].y - 14);
+    this._drawSectionLabel(ctx, "MAP SIZE", this.sizeRects);
     for (const r of this.sizeRects) {
       this._drawChip(ctx, r, r.key === this.selectedSize,
         r.label, `${r.mapW} × ${r.mapH}`);
     }
 
-    ctx.fillStyle = "#9bd";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("GAME MODE", viewW / 2, this.modeRects[0].y - 14);
+    this._drawSectionLabel(ctx, "GAME MODE", this.modeRects);
     for (const r of this.modeRects) {
       this._drawChip(ctx, r, r.key === this.selectedMode,
         r.label, r.tagline);
     }
 
-    ctx.fillStyle = "#9bd";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("ALLIED RACE", viewW / 2, this.raceRects[0].y - 14);
+    this._drawSectionLabel(ctx, "ALLIED RACE", this.raceRects);
     for (const r of this.raceRects) {
       const race = RACES[r.key];
       this._drawChip(ctx, r, r.key === this.selectedRace,
@@ -793,9 +794,7 @@ export class StartMenu {
     }
 
     if (this.fleetRects.length > 0) {
-      ctx.fillStyle = "#9bd";
-      ctx.font = "13px system-ui, sans-serif";
-      ctx.fillText("FLEET SIZE", viewW / 2, this.fleetRects[0].y - 14);
+      this._drawSectionLabel(ctx, "FLEET SIZE", this.fleetRects);
       for (const r of this.fleetRects) {
         this._drawChip(ctx, r, r.key === this.selectedFleet,
           r.label, r.tagline);
@@ -820,26 +819,47 @@ export class StartMenu {
 
     const s = this.startRect;
     const outOfEnergy = this.energy && !canSpend(this.energy, COST_PER_GAME);
+    // Outer glow plate — radial gradient under the button so the CTA
+    // visibly pops off the page without needing real shadow ops.
+    const glowCol = outOfEnergy ? "rgba(220,80,80," : "rgba(120,220,160,";
+    const g = ctx.createRadialGradient(
+      s.x + s.w / 2, s.y + s.h / 2, 0,
+      s.x + s.w / 2, s.y + s.h / 2, s.w * 0.7,
+    );
+    g.addColorStop(0, glowCol + "0.32)");
+    g.addColorStop(1, glowCol + "0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(s.x - 60, s.y - 28, s.w + 120, s.h + 56);
+
     if (outOfEnergy) {
-      ctx.fillStyle = "rgba(60,40,40,0.85)";
+      ctx.fillStyle = "rgba(70,30,30,0.95)";
       ctx.fillRect(s.x, s.y, s.w, s.h);
-      ctx.strokeStyle = "#c66";
+      ctx.strokeStyle = "#e88";
       ctx.lineWidth = 3;
       ctx.strokeRect(s.x, s.y, s.w, s.h);
-      ctx.fillStyle = "#fcc";
+      ctx.fillStyle = "#fdd";
       ctx.font = "bold 18px system-ui, sans-serif";
-      ctx.fillText("OUT OF ENERGY", s.x + s.w / 2, s.y + s.h / 2 - 2);
+      ctx.fillText("OUT OF ENERGY", s.x + s.w / 2, s.y + s.h / 2 - 4);
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillStyle = "#fa8";
-      ctx.fillText("Tap to refill", s.x + s.w / 2, s.y + s.h / 2 + 16);
+      ctx.fillText("Tap to refill", s.x + s.w / 2, s.y + s.h / 2 + 14);
     } else {
-      ctx.fillStyle = "rgba(60,140,90,0.85)";
+      // Vertical gradient body — top a touch lighter than bottom for a
+      // subtle "lit from above" read.
+      const bg = ctx.createLinearGradient(0, s.y, 0, s.y + s.h);
+      bg.addColorStop(0, "rgba(80,170,110,0.95)");
+      bg.addColorStop(1, "rgba(40,110,75,0.95)");
+      ctx.fillStyle = bg;
       ctx.fillRect(s.x, s.y, s.w, s.h);
-      ctx.strokeStyle = "#9f8";
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#bff";
+      ctx.lineWidth = 2.5;
       ctx.strokeRect(s.x, s.y, s.w, s.h);
+      // Inner highlight rule along the top edge for that lit-from-above
+      // sheen.
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(s.x + 2, s.y + 2, s.w - 4, 1);
       ctx.fillStyle = "#fff";
-      ctx.font = "bold 22px system-ui, sans-serif";
+      ctx.font = "bold 24px system-ui, sans-serif";
       let label = "START";
       if (this.selectedMode === "campaign" && this.campaign) {
         label = this.campaign.completed
@@ -848,7 +868,7 @@ export class StartMenu {
       } else if (this.selectedMode === "custom") {
         label = "CONFIGURE…";
       }
-      ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
+      ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 9);
     }
 
     // Settings gear button — drawn alongside the rest of the menu
@@ -864,6 +884,25 @@ export class StartMenu {
     ctx.restore();
   }
 
+  // Section header — small caps centered above its row of chips, with
+  // a faint horizontal rule on either side for visual structure. Pure
+  // chrome; no hit-test.
+  _drawSectionLabel(ctx, label, rects) {
+    if (!rects || rects.length === 0) return;
+    const cx = (rects[0].x + rects[rects.length - 1].x + rects[rects.length - 1].w) / 2;
+    const y = rects[0].y - 16;
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#5ab";
+    ctx.fillText(label, cx, y);
+    // Side rules: thin lines flanking the label.
+    ctx.fillStyle = "rgba(90,180,200,0.35)";
+    const labelW = ctx.measureText(label).width;
+    const ruleW = 80, gap = 14;
+    ctx.fillRect(cx - labelW / 2 - gap - ruleW, y - 4, ruleW, 1);
+    ctx.fillRect(cx + labelW / 2 + gap, y - 4, ruleW, 1);
+  }
+
   _drawEnergyHeader(ctx) {
     const r = this.energyBarRect;
     const e = this.energy;
@@ -871,34 +910,36 @@ export class StartMenu {
     const full = cur >= MAX_ENERGY;
     const empty = cur <= 0;
 
-    ctx.fillStyle = empty ? "rgba(70,30,30,0.85)" : "rgba(20,40,55,0.85)";
+    ctx.fillStyle = empty ? "rgba(60,24,30,0.92)" : "rgba(14,28,42,0.92)";
     ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = empty ? "#f86" : (full ? "#9fc" : "#7df");
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = empty ? "#e87" : (full ? "#9ec" : "#5ad");
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
 
-    // Left: ⚡ + count
+    // Left: ENERGY label.
     ctx.textAlign = "left";
-    ctx.fillStyle = empty ? "#f86" : "#fe8";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText("ENERGY", r.x + 12, r.y + 24);
+    ctx.fillStyle = empty ? "#fb8" : "#fd9";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("ENERGY", r.x + 12, r.y + 17);
+    // Count below label.
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText(`${cur}/${MAX_ENERGY}`, r.x + 90, r.y + 24);
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText(`${cur}/${MAX_ENERGY}`, r.x + 12, r.y + 32);
 
-    // Middle: regen countdown.
+    // Center: regen countdown.
     if (!full && e) {
       ctx.fillStyle = "#9bd";
-      ctx.font = "12px system-ui, sans-serif";
+      ctx.font = "11px system-ui, sans-serif";
       ctx.textAlign = "center";
       const next = timeUntilNext(e);
-      ctx.fillText(`Next +1 in ${formatDuration(next)}`, r.x + r.w / 2, r.y + 23);
+      ctx.fillText(formatDuration(next), r.x + r.w / 2, r.y + 17);
+      ctx.fillText("until +1", r.x + r.w / 2, r.y + 30);
     }
 
-    // Right: refill button hint.
+    // Right: refill chip.
     ctx.textAlign = "right";
-    ctx.fillStyle = "#fe8";
-    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillStyle = "#fd9";
+    ctx.font = "bold 12px system-ui, sans-serif";
     ctx.fillText("+ REFILL", r.x + r.w - 12, r.y + 24);
     ctx.textAlign = "left";
   }
@@ -1331,17 +1372,35 @@ export class StartMenu {
   }
 
   _drawChip(ctx, r, selected, label, sublabel) {
-    ctx.fillStyle = selected ? "rgba(40,90,140,0.95)" : "rgba(20,40,60,0.85)";
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = selected ? "#fff" : "#7df";
-    ctx.lineWidth = selected ? 3 : 2;
+    if (selected) {
+      // Gradient fill so a picked chip reads as elevated, plus a soft
+      // exterior glow rim.
+      const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+      g.addColorStop(0, "rgba(60,130,190,0.95)");
+      g.addColorStop(1, "rgba(30,75,120,0.95)");
+      ctx.fillStyle = g;
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      // Glow plate behind the chip.
+      ctx.fillStyle = "rgba(120,180,230,0.10)";
+      ctx.fillRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
+      // Inner top highlight.
+      ctx.fillStyle = "rgba(255,255,255,0.20)";
+      ctx.fillRect(r.x + 2, r.y + 2, r.w - 4, 1);
+      ctx.strokeStyle = "#bff";
+      ctx.lineWidth = 2;
+    } else {
+      ctx.fillStyle = "rgba(14,26,40,0.92)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = "rgba(120,180,220,0.55)";
+      ctx.lineWidth = 1;
+    }
     ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.fillStyle = "#cef";
+    ctx.fillStyle = selected ? "#fff" : "#cef";
     ctx.font = "bold 17px system-ui, sans-serif";
     ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 - 2);
     if (sublabel) {
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillStyle = "#9bd";
+      ctx.fillStyle = selected ? "rgba(220,240,255,0.85)" : "#7bd";
       ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 15);
     }
   }

@@ -21,13 +21,3 @@ html, body {
   touch-action: none;
 }
 
-#hint {
-  position: fixed;
-  left: 50%;
-  bottom: 6px;
-  transform: translateX(-50%);
-  font-size: 11px;
-  opacity: 0.5;
-  pointer-events: none;
-  letter-spacing: 0.04em;
-}

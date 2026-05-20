@@ -42,56 +42,26 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   drawSideStrip(ctx, counts.red,  "red",  game.hostileRace, viewW - 16, 16, "right");
 
   const player = game.ships.find((s) => s.isPlayer && !s.dead);
-  if (player) {
-    drawPlayerHUD(ctx, player, viewW, viewH, missileBtn);
-  } else if (game.spectating) {
+  // Spectate identifier pill sits at the top whenever spectating, so
+  // the player always knows whose camera they're on. The bottom
+  // vitals panel is a separate concern below.
+  if (!player && game.spectating) {
     drawSpectateOverlay(ctx, game, viewW, viewH);
+  }
+  // Bottom vitals strip: alive player gets their own; otherwise the
+  // spectated ship gets one so you can read its shield/hull/gun the
+  // same way you would when piloting. Suppressed in admiral mode —
+  // the admiral panel owns the bottom strip there.
+  if (player) {
+    drawVitalsPanel(ctx, player, viewW, viewH, missileBtn);
+  } else if (game.spectating && !game.admiralMode) {
+    const t = getSpectateTarget(game);
+    if (t && !t.dead) drawVitalsPanel(ctx, t, viewW, viewH, null);
   } else if (game.respawnTimer > 0) {
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 28px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(`Respawn in ${game.respawnTimer.toFixed(1)}s`, viewW / 2, 90);
-    ctx.textAlign = "left";
+    drawRespawnPanel(ctx, game.respawnTimer, viewW, viewH);
   }
 
-  if (game.matchOver) {
-    const isCampaign = game.mode === "campaign";
-    const panelH = isCampaign ? 220 : 160;
-    ctx.fillStyle = "rgba(0,0,0,0.62)";
-    ctx.fillRect(0, viewH / 2 - panelH / 2, viewW, panelH);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 42px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    let msg;
-    if (isCampaign) {
-      msg = game.winner === "blue" ? "MISSION COMPLETE" : "MISSION FAILED";
-    } else {
-      msg = game.winner === "blue" ? "ALLIED VICTORY" : "HOSTILE VICTORY";
-    }
-    ctx.fillText(msg, viewW / 2, viewH / 2 - (isCampaign ? 30 : 0));
-    if (isCampaign && game.campaign) {
-      ctx.font = "bold 22px system-ui, sans-serif";
-      if (game.winner === "blue") {
-        ctx.fillStyle = "#fe8";
-        ctx.fillText(`+${game.campaign.lastReward.toLocaleString()} credits`,
-          viewW / 2, viewH / 2 + 12);
-        ctx.fillStyle = "#cef";
-        ctx.font = "16px system-ui, sans-serif";
-        ctx.fillText(`Balance: $${game.campaign.totalMoney.toLocaleString()}`,
-          viewW / 2, viewH / 2 + 38);
-      } else {
-        ctx.fillStyle = "#fdb";
-        ctx.fillText("No reward — retry the mission", viewW / 2, viewH / 2 + 12);
-      }
-    }
-    ctx.fillStyle = "#fff";
-    ctx.font = "18px system-ui, sans-serif";
-    const prompt = isCampaign
-      ? (game.winner === "blue" ? "Tap to return to hangar" : "Tap to retry")
-      : "Tap to restart";
-    ctx.fillText(prompt, viewW / 2, viewH / 2 + (isCampaign ? 78 : 36));
-    ctx.textAlign = "left";
-  }
+  if (game.matchOver) drawMatchOverPanel(ctx, game, viewW, viewH);
 
   const focusTarget = pickFocusTarget(game);
   if (focusTarget) drawTargetPanel(ctx, focusTarget, viewW, viewH);
@@ -99,150 +69,331 @@ export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
   drawMinimap(ctx, game, viewW, viewH);
 }
 
+// Single-letter class glyphs for the compact roster strip. Chosen so
+// each class is unambiguous without needing a full name.
+const CLASS_GLYPH = {
+  fighter: "F", bomber: "B", frigate: "Fr",
+  cruiser: "C", battleship: "BB", carrier: "CV", station: "St",
+};
+
 function drawSideStrip(ctx, counts, side, race, anchorX, anchorY, align) {
   const palette = SIDES[side];
-  ctx.fillStyle = palette.primary;
-  ctx.font = "bold 14px system-ui, sans-serif";
-  ctx.textAlign = align;
-  ctx.fillText(palette.name, anchorX, anchorY + 14);
-  // Race name beneath the side label.
   const raceInfo = RACES[race] || RACES.terran;
-  ctx.font = "11px system-ui, sans-serif";
+  // Panel chrome: a tinted strip the width of the roster row so the
+  // text isn't floating against the starfield.
+  const cellW = 44, cellH = 38, gap = 4;
+  const cells = CLASS_ORDER.length;
+  const stripW = cellW * cells + gap * (cells - 1) + 14;
+  const panelH = 70;
+  const stripY = anchorY;
+  // Anchor the panel relative to the alignment side so left/right
+  // strips mirror cleanly without each caller computing its origin.
+  const panelX = align === "right" ? anchorX - stripW : anchorX;
+
+  ctx.fillStyle = "rgba(8,16,28,0.78)";
+  ctx.fillRect(panelX, stripY, stripW, panelH);
+  // Side-tinted accent rule along the panel's outward edge.
+  ctx.fillStyle = palette.primary;
+  if (align === "right") {
+    ctx.fillRect(panelX + stripW - 3, stripY, 3, panelH);
+  } else {
+    ctx.fillRect(panelX, stripY, 3, panelH);
+  }
+
+  ctx.textAlign = "left";
+  ctx.fillStyle = palette.primary;
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.fillText(palette.name, panelX + 9, stripY + 15);
   ctx.fillStyle = "#9bd";
-  ctx.fillText(raceInfo.name.toUpperCase(), anchorX, anchorY + 30);
-  ctx.font = "13px system-ui, sans-serif";
-  ctx.fillStyle = "#cdf";
-  let y = anchorY + 50;
-  for (const klass of CLASS_ORDER) {
-    const c = counts[klass];
-    if (c === 0) ctx.globalAlpha = 0.35; else ctx.globalAlpha = 1;
-    ctx.fillText(`${CLASSES[klass].name}: ${c}`, anchorX, y);
-    y += 18;
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.fillText(raceInfo.name.toUpperCase(), panelX + 9, stripY + 28);
+
+  // Roster cells: 7 mini boxes with class glyph + count. Empty classes
+  // drop to faded so the alive composition reads at a glance.
+  const cellsY = stripY + 36;
+  const cellsX = panelX + 7;
+  for (let i = 0; i < cells; i++) {
+    const klass = CLASS_ORDER[i];
+    const c = counts[klass] || 0;
+    const cx = cellsX + i * (cellW + gap);
+    ctx.globalAlpha = c === 0 ? 0.30 : 1;
+    ctx.fillStyle = "rgba(20,32,48,0.85)";
+    ctx.fillRect(cx, cellsY, cellW, cellH - 4);
+    ctx.strokeStyle = c === 0 ? "rgba(120,180,220,0.25)" : palette.primary;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx, cellsY, cellW, cellH - 4);
+    ctx.fillStyle = "#9bd";
+    ctx.font = "bold 10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(CLASS_GLYPH[klass] || "?", cx + cellW / 2, cellsY + 12);
+    ctx.fillStyle = c === 0 ? "#566" : "#fff";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText(String(c), cx + cellW / 2, cellsY + 27);
   }
   ctx.globalAlpha = 1;
   ctx.textAlign = "left";
 }
 
-function drawPlayerHUD(ctx, player, viewW, viewH, missileBtn) {
-  const w = 260, h = 12;
-  const x = (viewW - w) / 2;
-  const y = viewH - 36;
+// Vitals panel: shield + hull (+ gun ammo when applicable) clustered
+// in a single side-tinted backdrop. Renders for the live player ship
+// when piloting, and for the spectated ship in spectate mode — same
+// chrome, same layout — so spectating reads like "what would I see if
+// I were flying this thing". `missileBtn` is null when spectating;
+// the on-screen missile button only makes sense for an alive player.
+function drawVitalsPanel(ctx, ship, viewW, viewH, missileBtn) {
+  const w = 300, barH = 10;
+  const hasShield = ship.shieldMax > 0;
+  const hasAmmo = ship.spec.weapon && ship.spec.weapon.capacity != null;
+  const rows = (hasShield ? 1 : 0) + 1 + (hasAmmo ? 1 : 0);
+  const rowSpacing = 18;
+  const padX = 14, padY = 12;
+  const panelW = w + padX * 2;
+  const panelH = padY * 2 + rows * rowSpacing - 4;
+  const px = (viewW - panelW) / 2;
+  const py = viewH - panelH - 14;
+  ctx.fillStyle = "rgba(8,16,28,0.85)";
+  ctx.fillRect(px, py, panelW, panelH);
+  // Spectated ships get a side-tinted border so the colour reinforces
+  // whose camera you're on; the alive player keeps the neutral blue
+  // accent that ties the bottom strip to the other HUD chrome.
+  ctx.strokeStyle = ship.isPlayer ? "#5af" : SIDES[ship.side].primary;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(px, py, panelW, panelH);
 
-  // Shield bar (above hull).
-  if (player.shieldMax > 0) {
-    const sy = y - 16;
-    ctx.fillStyle = "#113";
-    ctx.fillRect(x, sy, w, h);
-    ctx.fillStyle = "#7df";
-    ctx.fillRect(x, sy, w * (player.shield / player.shieldMax), h);
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, sy, w, h);
-    ctx.fillStyle = "#fff";
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(
-      `SHIELD ${Math.max(0, Math.round(player.shield))} / ${player.shieldMax}`,
-      viewW / 2, sy - 3);
+  const x = px + padX;
+  let rowY = py + padY;
+
+  // Inline label-bar row helper. Label on the left, value on the right,
+  // bar fills the remaining width below. Keeps everything aligned and
+  // avoids the bouncing text-centered look the old version had.
+  const drawLabeledBar = (label, value, frac, fill, bg) => {
+    ctx.fillStyle = "#9bd";
+    ctx.font = "bold 10px system-ui, sans-serif";
     ctx.textAlign = "left";
-  }
+    ctx.fillText(label, x, rowY + 8);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "right";
+    ctx.fillText(value, x + w, rowY + 8);
+    const by = rowY + 11;
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, by, w, barH);
+    ctx.fillStyle = fill;
+    ctx.fillRect(x, by, w * Math.max(0, Math.min(1, frac)), barH);
+    rowY += rowSpacing;
+  };
 
-  // Hull bar.
-  ctx.fillStyle = "#222";
-  ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = "#4f6";
-  ctx.fillRect(x, y, w * (player.hp / player.hpMax), h);
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(x, y, w, h);
-  ctx.fillStyle = "#fff";
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(`HULL ${Math.max(0, Math.round(player.hp))} / ${player.hpMax}`, viewW / 2, y - 3);
+  if (hasShield) {
+    drawLabeledBar(
+      "SHIELD",
+      `${Math.max(0, Math.round(ship.shield))} / ${ship.shieldMax}`,
+      ship.shield / ship.shieldMax, "#7df", "#0a1a2a",
+    );
+  }
+  drawLabeledBar(
+    "HULL",
+    `${Math.max(0, Math.round(ship.hp))} / ${ship.hpMax}`,
+    ship.hp / ship.hpMax,
+    ship.hp / ship.hpMax > 0.33 ? "#4f6" : "#f64",
+    "#2a1818",
+  );
+  if (hasAmmo) {
+    const cap = ship.spec.weapon.capacity;
+    if (ship.weaponReloading) {
+      const frac = 1 - (ship.weaponReloadTimer / ship.spec.weapon.reloadTime);
+      drawLabeledBar(
+        "GUN",
+        `RELOAD ${Math.max(0, ship.weaponReloadTimer).toFixed(1)}s`,
+        frac, "#fa3", "#2a1c10",
+      );
+    } else {
+      drawLabeledBar(
+        "GUN",
+        `${ship.weaponAmmo} / ${cap}`,
+        ship.weaponAmmo / cap, "#fd6", "#2a1c10",
+      );
+    }
+  }
   ctx.textAlign = "left";
 
-  // Cannon ammo readout: a short bar below the hull bar.
-  if (player.spec.weapon && player.spec.weapon.capacity != null) {
-    const cap = player.spec.weapon.capacity;
-    const ay = y + h + 4;
-    const aw = w, ah = 8;
-    ctx.fillStyle = "#221";
-    ctx.fillRect(x, ay, aw, ah);
-    if (player.weaponReloading) {
-      const frac = 1 - (player.weaponReloadTimer / player.spec.weapon.reloadTime);
-      ctx.fillStyle = "#fa3";
-      ctx.fillRect(x, ay, aw * frac, ah);
-    } else {
-      ctx.fillStyle = "#fd6";
-      ctx.fillRect(x, ay, aw * (player.weaponAmmo / cap), ah);
-    }
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x, ay, aw, ah);
-    ctx.fillStyle = "#fff";
-    ctx.font = "10px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    const label = player.weaponReloading
-      ? `GUN RELOADING ${Math.max(0, player.weaponReloadTimer).toFixed(1)}s`
-      : `GUN ${player.weaponAmmo} / ${cap}`;
-    ctx.fillText(label, viewW / 2, ay + ah + 9);
-    ctx.textAlign = "left";
-  }
-
-  // Missile cooldown indicator: also drawn through the on-screen button.
-  if (missileBtn) {
-    const cd = player.spec.missile ? player.spec.missile.cooldown : 1;
-    const remain = player.missileCd;
+  // Missile cooldown indicator: also drawn through the on-screen
+  // button. Only ever wired for the alive player — spectated ships
+  // pass null because their missile state isn't player-controllable.
+  if (missileBtn && ship.spec.missile) {
+    const cd = ship.spec.missile.cooldown;
+    const remain = ship.missileCd;
     const ready = remain <= 0;
     const frac = ready ? 0 : (remain / cd);
     missileBtn.draw(ctx, ready, frac);
   }
 }
 
+// Centered pill prompting the player while their respawn timer ticks
+// down. Sits at the top of the screen, well clear of the bottom HUD,
+// so the moment-to-moment battle below isn't visually blocked.
+function drawRespawnPanel(ctx, secondsLeft, viewW, _viewH) {
+  const panelW = 280, panelH = 56;
+  const px = (viewW - panelW) / 2;
+  const py = 110;
+  ctx.fillStyle = "rgba(8,16,28,0.85)";
+  ctx.fillRect(px, py, panelW, panelH);
+  ctx.strokeStyle = "#5af";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(px, py, panelW, panelH);
+  ctx.fillStyle = "#9bd";
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("RESPAWN IN", px + panelW / 2, py + 18);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 22px system-ui, sans-serif";
+  ctx.fillText(`${secondsLeft.toFixed(1)}s`, px + panelW / 2, py + 44);
+  ctx.textAlign = "left";
+}
+
+// Match-end summary panel. Centered card with side-tinted border that
+// matches the winner so the result reads at a glance. Campaign mode
+// folds reward / balance lines into the same card; arena/defend get
+// a shorter card with just the result + restart prompt.
+function drawMatchOverPanel(ctx, game, viewW, viewH) {
+  const isCampaign = game.mode === "campaign";
+  const winnerSide = game.winner === "blue" ? "blue" : "red";
+  const accent = SIDES[winnerSide].primary;
+  const won = game.winner === "blue";
+
+  // Soft full-screen dim behind the panel so the still-rendering
+  // battle behind doesn't compete for attention.
+  ctx.fillStyle = "rgba(2,8,18,0.55)";
+  ctx.fillRect(0, 0, viewW, viewH);
+
+  const panelW = 540;
+  const panelH = isCampaign ? 230 : 170;
+  const px = (viewW - panelW) / 2;
+  const py = (viewH - panelH) / 2;
+  ctx.fillStyle = "rgba(8,16,28,0.92)";
+  ctx.fillRect(px, py, panelW, panelH);
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px, py, panelW, panelH);
+  // Inner accent rule across the top of the panel for visual weight.
+  ctx.fillStyle = accent;
+  ctx.fillRect(px, py, panelW, 3);
+
+  let msg;
+  if (isCampaign) msg = won ? "MISSION COMPLETE" : "MISSION FAILED";
+  else msg = won ? "ALLIED VICTORY" : "HOSTILE VICTORY";
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 34px system-ui, sans-serif";
+  ctx.fillText(msg, px + panelW / 2, py + 56);
+
+  if (isCampaign && game.campaign) {
+    ctx.font = "bold 18px system-ui, sans-serif";
+    if (won) {
+      ctx.fillStyle = "#fe8";
+      ctx.fillText(
+        `+${game.campaign.lastReward.toLocaleString()} credits`,
+        px + panelW / 2, py + 100,
+      );
+      ctx.fillStyle = "#cef";
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.fillText(
+        `Balance: $${game.campaign.totalMoney.toLocaleString()}`,
+        px + panelW / 2, py + 128,
+      );
+    } else {
+      ctx.fillStyle = "#fdb";
+      ctx.fillText(
+        "No reward — retry the mission",
+        px + panelW / 2, py + 100,
+      );
+    }
+  }
+
+  ctx.fillStyle = "#9bd";
+  ctx.font = "13px system-ui, sans-serif";
+  const prompt = isCampaign
+    ? (won ? "Tap to return to hangar" : "Tap to retry")
+    : "Tap to restart";
+  ctx.fillText(prompt, px + panelW / 2, py + panelH - 22);
+  ctx.textAlign = "left";
+}
+
 function drawSpectateOverlay(ctx, game, viewW, viewH) {
   const t = getSpectateTarget(game);
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.fillRect(0, viewH - 60, viewW, 60);
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 16px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("SPECTATING", viewW / 2, viewH - 38);
+  // Compact pill at the top of the screen instead of a full-width
+  // bottom bar — keeps the bottom HUD area clear for the vitals
+  // panel + admiral controls.
+  // Sits just under the SPECTATE button (which is at y=12, h=36) so
+  // the two stack cleanly without overlapping.
+  const panelW = 360, panelH = 36;
+  const px = (viewW - panelW) / 2;
+  const py = 58;
+  ctx.fillStyle = "rgba(8,16,28,0.85)";
+  ctx.fillRect(px, py, panelW, panelH);
+  ctx.strokeStyle = "#5af";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(px, py, panelW, panelH);
+  ctx.fillStyle = "#7bd";
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("SPECTATE", px + 10, py + 14);
+  ctx.fillStyle = "#9bd";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText("V exit  ·  N/B cycle", px + panelW - 10, py + 14);
   ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
   if (t) {
     const palette = SIDES[t.side];
-    ctx.fillStyle = palette.primary;
-    const armorPart = t.armorMax > 0
-      ? `  ·  ARMOR ${Math.round(t.armor)}/${t.armorMax}`
-      : "";
     const raceInfo = RACES[t.race] || RACES.terran;
+    ctx.fillStyle = palette.primary;
     ctx.fillText(
-      `${palette.name} ${raceInfo.name} ${t.spec.name}  ·  HULL ${Math.round(t.hp)}/${t.hpMax}  ·  SHIELD ${Math.round(t.shield)}/${t.shieldMax}${armorPart}`,
-      viewW / 2, viewH - 20);
+      `${palette.name} ${raceInfo.name} ${t.spec.name}`,
+      px + panelW / 2, py + 28,
+    );
   } else {
     ctx.fillStyle = "#cdf";
-    ctx.fillText("No targets available", viewW / 2, viewH - 20);
+    ctx.fillText("No targets available", px + panelW / 2, py + 28);
   }
-  ctx.fillStyle = "#cdf";
-  ctx.fillText("V: return to ship   ·   N / B: cycle target", viewW / 2, viewH - 6);
   ctx.textAlign = "left";
 }
 
 function drawMinimap(ctx, game, viewW, viewH) {
   const mapW = 180, mapH = 135;
+  const headerH = 18;
+  const padTotalH = mapH + headerH;
   const x = viewW - mapW - 16;
-  const y = viewH - mapH - 16;
-  ctx.fillStyle = "#0a0e16";
-  ctx.fillRect(x, y, mapW, mapH);
-  ctx.strokeStyle = "#456";
+  const y = viewH - padTotalH - 16;
+  // Outer panel with header strip + map area; the header gives the
+  // minimap visual weight and tags it as a deliberate UI element
+  // instead of a floating rectangle.
+  ctx.fillStyle = "rgba(8,16,28,0.85)";
+  ctx.fillRect(x - 4, y - 4, mapW + 8, padTotalH + 8);
+  ctx.strokeStyle = "#5af";
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(x, y, mapW, mapH);
+  ctx.strokeRect(x - 4, y - 4, mapW + 8, padTotalH + 8);
+  ctx.fillStyle = "rgba(20,40,60,0.95)";
+  ctx.fillRect(x, y, mapW, headerH);
+  ctx.fillStyle = "#9bd";
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("FLEET MAP", x + 8, y + 12);
+  // Compact total readout on the right of the header.
+  const totalShips = game.ships.filter(s => !s.dead).length;
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#7bd";
+  ctx.fillText(`${totalShips} units`, x + mapW - 8, y + 12);
+
+  const mapY = y + headerH;
+  ctx.fillStyle = "#03070d";
+  ctx.fillRect(x, mapY, mapW, mapH);
 
   const sx = mapW / ARENA.width;
   const sy = mapH / ARENA.height;
   for (const s of game.ships) {
     if (s.dead) continue;
     const px = x + s.pos.x * sx;
-    const py = y + s.pos.y * sy;
+    const py = mapY + s.pos.y * sy;
     const isSpec = game.spectating && s.id === game.spectateTargetId;
     ctx.fillStyle = (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
     const r = (s.isPlayer || isSpec) ? 2.5
@@ -256,6 +407,7 @@ function drawMinimap(ctx, game, viewW, viewH) {
     ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.textAlign = "left";
 }
 
 // Beams are rendered in the world transform (called from main.js).
@@ -342,23 +494,28 @@ function drawTargetPanel(ctx, ship, viewW, viewH) {
   const x = 16;
   const y = viewH - panelH - 16;
 
-  ctx.fillStyle = "rgba(8,12,20,0.78)";
+  // Same chrome as the rest of the HUD (rgba(8,16,28,0.85) bg) but
+  // keep the side-tinted border + accent rule — the target panel's
+  // job is to identify an enemy, so the colour is a feature.
+  ctx.fillStyle = "rgba(8,16,28,0.85)";
   ctx.fillRect(x, y, panelW, panelH);
   ctx.strokeStyle = SIDES[ship.side].primary;
   ctx.lineWidth = 1.5;
   ctx.strokeRect(x, y, panelW, panelH);
+  ctx.fillStyle = SIDES[ship.side].primary;
+  ctx.fillRect(x, y, panelW, 2);
 
   ctx.textAlign = "left";
   ctx.fillStyle = SIDES[ship.side].primary;
-  ctx.font = "bold 12px system-ui, sans-serif";
-  ctx.fillText("TARGET", x + padX, y + padY + 11);
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.fillText("TARGET", x + padX, y + padY + 12);
 
   // Header: race + class name.
   const raceName = (RACES[ship.race] && RACES[ship.race].name) || "Unknown";
   const klassName = (CLASSES[ship.klass] && CLASSES[ship.klass].name) || ship.klass;
-  ctx.fillStyle = "#cdf";
+  ctx.fillStyle = "#e6f4ff";
   ctx.font = "bold 14px system-ui, sans-serif";
-  ctx.fillText(`${raceName} ${klassName}`, x + padX, y + padY + 29);
+  ctx.fillText(`${raceName} ${klassName}`, x + padX, y + padY + 30);
 
   // Hull bar.
   drawStatBar(ctx, x + padX, y + padY + 38, panelW - padX * 2, 6,

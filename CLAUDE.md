@@ -122,6 +122,92 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — HUD polish: unified panel chrome + spectator vitals
+
+**What changed**
+
+The previous pass left several panels on the old chrome (full-width
+black strips, no border): target panel, match-over, respawn timer.
+Also, spectating a fighter/bomber showed *no* HP info anywhere — the
+target panel requires modules, and the bottom vitals only ran for the
+alive player. Five coordinated fixes:
+
+1. **`drawPlayerHUD` → `drawVitalsPanel`.** Same chrome, now reused
+   for the spectated ship. The bottom shield/hull/gun strip now
+   appears for either (a) the alive player or (b) the spectated ship
+   (outside admiral mode — see below). Spectate border picks up the
+   side colour so the camera identity reinforces.
+2. **Match-over screen** is now a centered ~540px card with a
+   winner-tinted border and a 3px accent rule across the top, instead
+   of a full-width black strip across the middle of the screen.
+   Soft full-screen dim (`rgba(2,8,18,0.55)`) sits behind the card.
+3. **Respawn prompt** is now a small centered pill at `y=110` with
+   "RESPAWN IN" label + countdown, matching the panel chrome.
+4. **Target panel** picked up `rgba(8,16,28,0.85)` bg + a side-tinted
+   accent rule at the top to match the side strip pattern.
+5. **Admiral panel** stroke weight bumped from 2 → 1.5 to match
+   every other HUD panel (consistency, not visibility).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/hud.js` | `drawHUD` dispatch rewritten — `player ? vitals : spectating ? vitals(target) : respawn`. New `drawVitalsPanel`, `drawRespawnPanel`, `drawMatchOverPanel`. `drawTargetPanel` chrome unified; accent rule added. |
+| `src/input.js` | `AdmiralPanel.draw` lineWidth 2 → 1.5 + bg alpha 0.88 → 0.85. |
+
+**Design decisions / gotchas**
+
+- **Spectate vitals are suppressed in admiral mode.** The admiral
+  panel owns the bottom strip there. The top spectate ID pill still
+  shows so the camera identity is clear. If you ever move the
+  admiral panel off the bottom, drop the `!game.admiralMode` guard
+  in `drawHUD`.
+- **`drawVitalsPanel` reads only fields present on every ship**
+  (`shieldMax`, `shield`, `hp`, `hpMax`, `spec.weapon.capacity`,
+  `weaponAmmo`, `weaponReloading`, `weaponReloadTimer`,
+  `spec.missile.cooldown`, `missileCd`). Safe for any ship; missile
+  block is double-gated on `missileBtn && ship.spec.missile` so the
+  spectator path (null button) skips it.
+- **Border tint is keyed on `ship.isPlayer`, not on side.** Player
+  ship is always blue, but the *intent* is "is this me?". Don't
+  switch to `side === "blue"` — it'd repaint a captured/recycled
+  red ship's vitals as neutral.
+- **Target panel kept at bottom-left** — overlaps with the admiral
+  panel left column on narrow viewports (admiral panel is ~772px
+  centered; target panel is 296px wide at x=16). Pre-existing; not
+  in scope for this pass. Fix would be to retag target panel to
+  top-left under the roster strip when `admiralMode` is on.
+- **Match-over panel accent uses `SIDES[winner].primary`** — when
+  hostile wins, the card's accent goes red, which is the deliberate
+  read. Don't switch to a neutral colour "for politeness"; the
+  player loss state should feel different from a win.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Start an open battle, die to a battleship: bottom shows a small
+  centered "RESPAWN IN X.Xs" pill (not bare floating text).
+- Press V to spectate a friendly **fighter** (no modules): bottom
+  shows the vitals panel with that fighter's shield / hull / gun
+  ammo. The spectate ID pill at the top names them; the bottom
+  pill identifies their state.
+- Press N/B to cycle to a **battleship**: vitals show its shield
+  (much larger) + hull, target panel at bottom-left lists its
+  modules, both panels coexist without overlap.
+- Win the match: a centered card with a 2px green-blue border +
+  "ALLIED VICTORY" appears, not a full-width black strip. Lose
+  the match: same card with red border and "HOSTILE VICTORY".
+- Start an **admiral match**: bottom strip is the admiral panel
+  (with a thinner 1.5px border matching the rest). Spectating a
+  ship still shows the top ID pill but no second vitals panel
+  underneath the admiral panel.
+
 ### 2026-05-20 — Custom Match: player-configurable per-side rosters + races
 
 **What changed**
