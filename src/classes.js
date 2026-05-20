@@ -90,22 +90,35 @@ export const CLASSES = {
       capacity: 24,
       reloadTime: 1.2,
     },
-    shield: { max: 35, regen: 6, regenDelay: 3.5 },
+    shield: { max: 80, regen: 12, regenDelay: 2.5 },
     // No armor — bombers are still light craft.
     // Heavy missile pods are the bomber's reason to exist. Each pod is
     // tougher than a frigate's missile (more hp) so it survives some PD.
+    // Three pods, faster propellant, better tracking — bombers were
+    // getting overrun before they could deliver a meaningful strike.
     missilePods: {
-      count: 2,
+      count: 3,
       damage: 70,
-      cooldown: 11.0,
-      projectileSpeed: 290,
-      range: 1700,
-      ttl: 7.0,
-      turnRate: 1.7,
-      hp: 3,
+      cooldown: 7.5,
+      projectileSpeed: 420,
+      range: 1800,
+      ttl: 6.0,
+      turnRate: 2.4,
+      hp: 4,
       radius: 7,
-      acquireRange: 2000,
+      acquireRange: 2100,
       colors: { blue: "#9cf", red: "#fa6" },
+    },
+    // Single light PD turret. Anti-missile only in practice — the
+    // global PD_VS_SHIP_MUL nerf keeps it from chipping enemy hulls.
+    pdCannons: {
+      count: 1,
+      damage: 5,
+      cooldown: 0.30,
+      projectileSpeed: 950,
+      range: 320,
+      projectileRadius: 2,
+      projectileColors: { blue: "#cef", red: "#fda" },
     },
     aiRange: 1400,
     aiOrbit: 800,

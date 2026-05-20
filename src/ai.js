@@ -543,10 +543,11 @@ function bomberFlankAI(ship, target, dt, world) {
 
   const pods = s.missilePods;
   const podRange = pods ? pods.range : 1700;
-  // Stay just inside pod range so missiles can lock, but well inside the
-  // wider standoff of the old AI — bombers are supposed to PRESS in from
-  // the flank, not loiter at the back fence.
-  const STANDOFF = Math.min(podRange * 0.80, 1350);
+  // Stay just inside pod range so missiles can lock, but well inside
+  // the wider standoff of the old AI — bombers are supposed to PRESS
+  // in from the flank, not loiter at the back fence. With the bomber
+  // shield buff they can also commit closer than before.
+  const STANDOFF = Math.min(podRange * 0.75, 1200);
 
   // Per-bomber consistent side. Use target heading when it has one;
   // small craft (fighters) can move erratically so fall back to the
@@ -576,15 +577,29 @@ function bomberFlankAI(ship, target, dt, world) {
   const toSlotY = slotY - ship.pos.y;
   const distToSlot = Math.hypot(toSlotX, toSlotY);
 
+  // Slot hysteresis: enter the in-slot mode at distToSlot <= 280, but
+  // hold it until we drift past 360. Without this, a bomber that just
+  // arrived oscillates between "go to slot" and "in slot" on every
+  // frame as its heading-locked motion nudges it across the boundary.
+  const inSlotEnter = 280, inSlotExit = 360;
+  if (ship.inSlot) {
+    if (distToSlot > inSlotExit) ship.inSlot = false;
+  } else if (distToSlot <= inSlotEnter) {
+    ship.inSlot = true;
+  }
+
   let aim;
-  if (distToSlot > 280) {
+  if (!ship.inSlot) {
     // Get to the flank slot first — heading-locked flight means aiming
     // there IS flying there.
     aim = { x: toSlotX, y: toSlotY };
-  } else if (dist < STANDOFF * 0.6) {
-    // We've blown through the slot and are now too close. Back off along
-    // the flank vector so we don't drift into the PD bubble.
-    aim = { x: -dir.x + perpTx * 0.6, y: -dir.y + perpTy * 0.6 };
+  } else if (dist < STANDOFF * 0.55) {
+    // Overshoot recovery: curve OUT along the flank tangent instead of
+    // doing a 180° turn back along the approach vector. A heading-
+    // locked craft would otherwise spend ~2s spinning around while
+    // sitting inside the PD bubble; the tangent escape arcs out in
+    // half the time.
+    aim = { x: perpTx, y: perpTy };
   } else {
     // In the slot — face the target so forward gun + pod launch geometry
     // line up on it.
