@@ -9,8 +9,9 @@
 import { DEFAULT_INVENTORY } from "./cosmetics.js";
 
 const STORAGE_KEY = "aphelion.save.v1";
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 const WRITE_DEBOUNCE_MS = 250;
+const LEGACY_CAMPAIGN_KEY = "aphelion.campaign.v1";
 
 /** @type {import("./types.js").SaveData} */
 const DEFAULT_SAVE = Object.freeze({
@@ -73,6 +74,24 @@ const DEFAULT_SAVE = Object.freeze({
     // doesn't need a schema bump — existing saves boot with `false`.
     musicMuted: false,
   },
+  // Roguelite "Frontier" campaign — replaces the linear 100-mission
+  // campaign that lived under the old aphelion.campaign.v1 key. `meta`
+  // is cross-run state (unlocks, war progress); `current` is the live
+  // run state (null when no run is in progress).
+  roguelite: {
+    meta: {
+      runsCompleted: 0,
+      runsWon: 0,
+      warProgress: { terran: 0, reavers: 0, hegemony: 0, voidsworn: 0 },
+      unlockedPerks: [],
+      activePerkKey: null,
+      // All four factions are pre-unlocked. This field exists as the
+      // extensibility gate for a future 5th race — append the key here
+      // and the run-setup overlay will auto-pick it up.
+      unlockedFactions: ["terran", "reavers", "hegemony", "voidsworn"],
+    },
+    current: null,
+  },
 });
 
 /**
@@ -96,6 +115,22 @@ const MIGRATIONS = {
       : [...DEFAULT_INVENTORY],
     daily: { firstWinSeed: null, ...(data.daily || {}) },
   }),
+  // v2 → v3: Roguelite "Frontier" campaign replaces the old linear
+  // 100-mission campaign. The old state lived under its own
+  // localStorage key (aphelion.campaign.v1) — wipe it so it doesn't
+  // sit around forever, and seed the fresh roguelite block.
+  2: (data) => {
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.removeItem(LEGACY_CAMPAIGN_KEY);
+      }
+    } catch (_e) { /* private mode etc — ignore */ }
+    return {
+      ...data,
+      schemaVersion: 3,
+      roguelite: data.roguelite || null,
+    };
+  },
 };
 
 function deepClone(value) {
@@ -137,6 +172,20 @@ function mergeWithDefaults(loaded) {
           red:  { ...base.customRoster.red,  ...(loaded.customRoster.red  || {}) },
         }
       : base.customRoster,
+    // Roguelite: deep-merge `meta` so future perk additions / faction
+    // unlocks ship without a migration bump. `current` is preserved
+    // verbatim — a live run shouldn't get default fields stamped over it.
+    roguelite: {
+      meta: {
+        ...base.roguelite.meta,
+        ...((loaded.roguelite && loaded.roguelite.meta) || {}),
+        warProgress: {
+          ...base.roguelite.meta.warProgress,
+          ...((loaded.roguelite && loaded.roguelite.meta && loaded.roguelite.meta.warProgress) || {}),
+        },
+      },
+      current: (loaded.roguelite && loaded.roguelite.current) || null,
+    },
   };
 }
 

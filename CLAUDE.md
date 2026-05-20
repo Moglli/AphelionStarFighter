@@ -122,6 +122,138 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Frontier roguelite campaign (replaces 100-mission campaign)
+
+**What changed**
+
+The old linear 100-mission campaign (`src/campaign.js`, persistent
+6-upgrade fighter) is replaced with a **Slay-the-Spire / FTL-style
+roguelite**: branching node maps per act, 3 acts per run, capital
+ships carry hull damage between battles, small craft (fighters /
+bombers) auto-replenish at a drip rate, two currencies (credits +
+fuel — fuel gates inter-node jumps). The four existing factions are
+the warring opposition (faction set is data-driven so adding a 5th
+is purely an entry in `RACES`).
+
+Locked design rules:
+- Loss condition: run ends when ALL capital ships are destroyed
+  (frigate / cruiser / battleship / carrier). Losing a single battle
+  is survivable.
+- Fresh starter fleet each new run; surviving ships do NOT carry over
+  between runs. Meta-progression unlocks perks + records war progress
+  per faction.
+- 3 acts × ~16-22 reachable nodes (~45-60 min). Mid-run save/resume
+  is mandatory — every act graph is cached on saveStore so a browser
+  reload picks up exactly where the player left off.
+- At each Battle / Elite / Boss node the player picks FLY (pilot a
+  fighter) or COMMAND (admiral posture, no piloted ship).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/roguelite.js` *(new)* | Core: run-state lifecycle, Mulberry32 PRNG, per-act procgen (6 × 4 candidate slots, type table per column, ≤1 resupply per row), encounter resolution, capital persistence, inter-node drip (REPAIR_RATE 6%, FIGHTER_DRIP 0.5, BOMBER_DRIP 0.25), boon table, 6 event cards, 3 captain perks, 4 hand-curated boss rosters, meta-progression. Exports the public surface main.js + input.js consume. |
+| `src/modes/roguelite.js` *(new)* | Mode descriptor. Setup hook reads `game.modeConfig` and switches between fly vs command (admiral spectator camera + directives). |
+| `src/modes/index.js` | Registered `rogueliteMode` in `MODES`. |
+| `src/save.js` | Schema v3. Added `roguelite: { meta, current }` block to `DEFAULT_SAVE`. v2→v3 migration drops the legacy `aphelion.campaign.v1` localStorage key. `mergeWithDefaults` deep-merges `roguelite.meta` so future perk additions ship without a migration bump. |
+| `src/ship.js` | `createShip` accepts `initialHpFrac` so wounded capitals respawn at the previous battle's hull%. Shields/armor still reset to max each match. |
+| `src/game.js` | Renamed `startGame`'s `campaign` param to `modeConfig`. Wired `MODES.tick` and `MODES.checkEnd` in `update()` (they were defined on mode objects but never invoked before). `spawnRoster` pops the next manifest entry per blue capital klass and passes `wounded` into `spawnCapitalWithEscort`. `spawnCapitalWithEscort` accepts `wounded`, stamps `runtimeInstanceId` on the capital so the run controller can map it back to its slot. Emits `matchEnded` event on the edge `matchOver` flips true. Resolves perk + bridge-boon sentinels on `playerSpecOverride` before promotePlayer. |
+| `src/main.js` | Replaced all campaign imports/wiring with the roguelite controller. `setRoguelite(state, onChoice)` plumbs run state into StartMenu. Handles every overlay action (`new-run`, `abandon-run`, `enter-node`, `enter-node-and-complete`, `complete-node-noncombat`, `buy-repair`/`-recruit`/`-refuel`, `apply-boon`, `apply-event`). Subscribes to `matchEnded` for capital-hp carryover and run-over check; subscribes to `runEnded` for cleanup. Tap-to-restart after a roguelite battle auto-reopens the run map. |
+| `src/input.js` | Dropped campaign UI (`UPGRADES` import, `upgradeRects`, `setCampaign`, `onPurchase`, the upgrade-tile grid). Renamed `campaign` chip to `roguelite` / "Frontier" in `MODE_OPTIONS`. Added 5 new overlays — Run Setup (faction picker), Run Map (node graph + fleet panel + currencies), Resupply (repair / recruit / refuel / boon refits), Event (card with 2-3 choices), Battle Choice (FLY vs COMMAND). Click routing intercepts every roguelite overlay before chip rows; START label flips to NEW RUN / RESUME RUN. |
+| `src/hud.js` | `drawMatchOverPanel` swapped campaign-specific text for roguelite-aware: "NODE CLEARED" / "FLEET LOSSES", "Tap to return to fleet". |
+| `src/progression.js` | Added `runEnded` listener that toasts the run outcome. Meta-progression bookkeeping itself lives in `roguelite.js`'s `recordRunEnd`. |
+| `src/campaign.js` *(deleted)* | Replaced by `src/roguelite.js`. |
+
+**Design decisions / gotchas**
+
+- **Per-instance capital identity.** `playerSpecOverride` is a single
+  patch; persistent per-ship damage needed per-instance state. The
+  manifest is an ordered array `[{ klass, hpFrac, instanceId }, ...]`
+  popped by `spawnRoster` in declaration order. Each spawned capital
+  gets a `runtimeInstanceId` stamped on it so `captureBattleOutcome`
+  can match the live ship back to its slot in `run.capitals` after
+  the match. Don't introduce a second consumer of the manifest
+  without re-deriving its order from `run.capitals` — the popping
+  pattern relies on `Object.entries(roster)` iterating capitals
+  before fighters/bombers (insertion order, guaranteed by V8 spec).
+- **Only hull persists, not shields/armor.** Shields regenerate
+  every frame in combat — persisting shield state would be invisible
+  to the player. Armor wear isn't restored mid-match anyway;
+  persisting would make capitals progressively softer in opaque
+  ways. Hull persistence is legible: "my battleship is at 42%"
+  matches the run-map readout exactly.
+- **`MODES.tick` and `MODES.checkEnd` were dead.** They were
+  documented in `arena.js`'s mode contract but never invoked in
+  `update()`. Wiring them is defensive — modes that pass `null`
+  (every existing mode) are untouched. The waves mode's `checkEnd`
+  now actually fires.
+- **`matchEnded` event was being subscribed to but never emitted.**
+  `progression.js:160-182` already listens for it. Now emitted from
+  `update()` on the edge `matchOver` first flips true, gated by
+  `game._matchEndedEmitted` so it fires exactly once per match.
+- **Boss-win clears the run synchronously inside `completeNode`.**
+  `recordRunEnd(run, true)` + `clearRun()` happen before the
+  function returns. `main.js`'s `matchEnded` handler snapshots the
+  run reference up front (`runRef`) because the synchronous
+  `runEnded` dispatch can null out `activeRun` mid-flight.
+- **Resupply nodes pay fuel on CONTINUE, not on opening the
+  overlay.** Player can back out without committing — purchases
+  inside the overlay (which DO debit credits) are still "real" so
+  they don't get refunded. Stacking purchases by repeatedly opening
+  the resupply without continuing is not exploitable since each
+  purchase costs the same.
+- **Energy gate is skipped for roguelite battles.** Each run is the
+  energy-equivalent commitment; per-node battles don't drain the
+  meter. The Frontier chip's START click opens an overlay rather
+  than calling `_emitStart`, so the existing `spendEnergy` path in
+  `main.js` never fires for roguelite.
+- **`unlockedFactions` is the 5th-race extensibility gate.** All
+  four current factions are pre-populated. Adding a 5th race is a
+  data-only change: drop a new entry into `RACES`, append its key
+  to `DEFAULT_SAVE.roguelite.meta.unlockedFactions`, optionally add
+  a `BOSS_ROSTERS` entry. The run-setup overlay reads the unlocked
+  list dynamically, so the new chip appears automatically.
+- **Tunable constants.** Top of `src/roguelite.js`. If the
+  early-act starter fleet feels too generous, edit `STARTER_FLEET`.
+  If small craft replenish too fast/slow, edit `FIGHTER_DRIP` /
+  `BOMBER_DRIP`. If capitals heal too fast between nodes, drop
+  `REPAIR_RATE`.
+
+**How to verify**
+
+```bash
+npm install
+npm run build      # production build — should succeed
+npm run dev        # vite dev server
+```
+
+In-game:
+- Open menu → pick `Frontier` chip → click `NEW RUN`. Setup overlay
+  appears with the four faction chips. Pick `Terran`, click `BEGIN`.
+- Run-map overlay opens. Act 1 graph shows ~16-22 nodes across 6
+  columns. Right panel shows starter fleet (2 frigate / 1 cruiser /
+  1 carrier / 16 fighter / 3 bomber) + 0 credits + 8 fuel.
+- Click the entry node → Battle Choice modal pops. Click `FLY` → a
+  Terran fighter spawns; the enemy fleet matches the node's
+  assigned faction.
+- Take damage on a friendly battleship (spectate-cycle on `V`,
+  let the AI take hits, or fly into the fight). Win the battle.
+- "NODE CLEARED" panel appears. Tap to dismiss → run map reopens.
+  The just-cleared node is dimmed; reachable next nodes light up.
+  The damaged capital's HP bar shows its reduced %. Fuel -1.
+- Pick a Resupply node when one becomes available. Repair a damaged
+  capital (cost ≈ `100 × (1 - hpFrac)` credits for a battleship).
+  Recruit fighters. Refuel. Hit `CONTINUE`.
+- Pick an Event node. Card appears with 2-3 buttons. Pick one —
+  mutation applies, returns to map.
+- Beat the Act 1 boss → fresh Act 2 graph generated.
+- **Reload the browser tab** at the run-map screen. Confirm the run
+  resumes at the same node with same graph, fleet HPs, currencies.
+- Let your capitals all die → "FLEET LOSSES" panel → tap → back to
+  the main menu, Frontier chip now reads `NEW RUN` again.
+- Complete Act 3 boss → `meta.runsCompleted++`, `runsWon++`,
+  `warProgress[bossFaction]++`. Reload page; counters persist.
+
 ### 2026-05-20 — Custom Match: slider-driven roster redesign
 
 **What changed**

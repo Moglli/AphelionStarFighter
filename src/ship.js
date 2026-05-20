@@ -115,9 +115,14 @@ export function getHull(race, klass) {
 
 export { HULLS };
 
-export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null }) {
+export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null, initialHpFrac = 1 }) {
   let spec = resolveSpec(race, klass);
   if (specOverride) spec = deepMerge(spec, specOverride);
+  // Roguelite wounded-spawn: a capital that came out of the previous
+  // battle at 42% hull spawns at 42% hull here. Shields/armor still
+  // reset to max each match (their state isn't legible-to-the-player
+  // mid-fight and persistence would only confuse readouts).
+  const hpFrac = initialHpFrac > 0 && initialHpFrac <= 1 ? initialHpFrac : 1;
   const ship = {
     id: nextId++,
     klass,
@@ -127,7 +132,7 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     pos: { ...pos },
     vel: { x: 0, y: 0 },
     heading,
-    hp: spec.hp,
+    hp: spec.hp * hpFrac,
     hpMax: spec.hp,
     cooldown: 0,           // forward firing
     cooldownPort: 0,       // broadside: left side

@@ -250,22 +250,20 @@ function drawRespawnPanel(ctx, secondsLeft, viewW, _viewH) {
 }
 
 // Match-end summary panel. Centered card with side-tinted border that
-// matches the winner so the result reads at a glance. Campaign mode
-// folds reward / balance lines into the same card; arena/defend get
-// a shorter card with just the result + restart prompt.
+// matches the winner so the result reads at a glance. Roguelite mode
+// shows a "tap to return to fleet" line so the player knows the run
+// continues on the map; other modes show a plain restart prompt.
 function drawMatchOverPanel(ctx, game, viewW, viewH) {
-  const isCampaign = game.mode === "campaign";
+  const isRoguelite = game.mode === "roguelite";
   const winnerSide = game.winner === "blue" ? "blue" : "red";
   const accent = SIDES[winnerSide].primary;
   const won = game.winner === "blue";
 
-  // Soft full-screen dim behind the panel so the still-rendering
-  // battle behind doesn't compete for attention.
   ctx.fillStyle = "rgba(2,8,18,0.55)";
   ctx.fillRect(0, 0, viewW, viewH);
 
   const panelW = 540;
-  const panelH = isCampaign ? 230 : 170;
+  const panelH = 190;
   const px = (viewW - panelW) / 2;
   const py = (viewH - panelH) / 2;
   ctx.fillStyle = "rgba(8,16,28,0.92)";
@@ -273,12 +271,11 @@ function drawMatchOverPanel(ctx, game, viewW, viewH) {
   ctx.strokeStyle = accent;
   ctx.lineWidth = 2;
   ctx.strokeRect(px, py, panelW, panelH);
-  // Inner accent rule across the top of the panel for visual weight.
   ctx.fillStyle = accent;
   ctx.fillRect(px, py, panelW, 3);
 
   let msg;
-  if (isCampaign) msg = won ? "MISSION COMPLETE" : "MISSION FAILED";
+  if (isRoguelite) msg = won ? "NODE CLEARED" : "FLEET LOSSES";
   else msg = won ? "ALLIED VICTORY" : "HOSTILE VICTORY";
 
   ctx.textAlign = "center";
@@ -286,34 +283,18 @@ function drawMatchOverPanel(ctx, game, viewW, viewH) {
   ctx.font = "bold 34px system-ui, sans-serif";
   ctx.fillText(msg, px + panelW / 2, py + 56);
 
-  if (isCampaign && game.campaign) {
-    ctx.font = "bold 18px system-ui, sans-serif";
-    if (won) {
-      ctx.fillStyle = "#fe8";
-      ctx.fillText(
-        `+${game.campaign.lastReward.toLocaleString()} credits`,
-        px + panelW / 2, py + 100,
-      );
-      ctx.fillStyle = "#cef";
-      ctx.font = "14px system-ui, sans-serif";
-      ctx.fillText(
-        `Balance: $${game.campaign.totalMoney.toLocaleString()}`,
-        px + panelW / 2, py + 128,
-      );
-    } else {
-      ctx.fillStyle = "#fdb";
-      ctx.fillText(
-        "No reward — retry the mission",
-        px + panelW / 2, py + 100,
-      );
-    }
+  if (isRoguelite) {
+    ctx.font = "14px system-ui, sans-serif";
+    ctx.fillStyle = won ? "#bfd" : "#fdb";
+    const sub = won
+      ? "Returning to the front…"
+      : "Fleet captured losses — check the map.";
+    ctx.fillText(sub, px + panelW / 2, py + 96);
   }
 
   ctx.fillStyle = "#9bd";
   ctx.font = "13px system-ui, sans-serif";
-  const prompt = isCampaign
-    ? (won ? "Tap to return to hangar" : "Tap to retry")
-    : "Tap to restart";
+  const prompt = isRoguelite ? "Tap to return to fleet" : "Tap to restart";
   ctx.fillText(prompt, px + panelW / 2, py + panelH - 22);
   ctx.textAlign = "left";
 }
