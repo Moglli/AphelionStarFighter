@@ -11,6 +11,11 @@ import {
   repairCostFor, eventCardById, PERKS, BOON_TABLE,
 } from "./roguelite.js";
 import {
+  makeGalaxy, drawGalaxy, nodePositionsFor,
+  drawCurvedEdge, drawNodeArt, drawFleetMarker,
+  drawFactionEmblem, clampPan,
+} from "./starmap.js";
+import {
   MAX_ENERGY, COST_PER_GAME, PACKAGES,
   canSpend, timeUntilNext, formatDuration,
 } from "./energy.js";
@@ -498,6 +503,18 @@ export class StartMenu {
     // Random boons offered at the current resupply node, refreshed each
     // visit so the same node doesn't repaint the same three picks.
     this._resupplyBoonOffers = null;
+    // Starmap state — pan offset + cached galaxy/positions keyed by
+    // (run.seed, act). Drag tracking distinguishes a tap-on-node from
+    // a pan gesture. Regenerated lazily when the key changes.
+    this._runMapPanX = 0;
+    this._runMapPanY = 0;
+    this._runMapDrag = null;           // { startX, startY, startPanX, startPanY }
+    this._runMapDragMoved = false;
+    this._runMapGalaxyKey = null;
+    this._runMapGalaxy = null;
+    this._runMapNodePositions = null;
+    this._runMapWorldW = 0;
+    this._runMapWorldH = 0;
     // Energy state ref + IAP callback wired by main.js.
     this.energy = null;
     this.onEnergyPurchase = null;
@@ -714,7 +731,15 @@ export class StartMenu {
     if (this.showBattleChoice) { this._clickBattleChoice(x, y); return true; }
     if (this.showEvent)        { this._clickEvent(x, y);        return true; }
     if (this.showResupply)     { this._clickResupply(x, y);     return true; }
-    if (this.showRunMap)       { this._clickRunMap(x, y);       return true; }
+    if (this.showRunMap)       {
+      // Drag-aware: start a pan-drag here and stash the press position.
+      // The actual click routing is deferred to pointerUp so a drag
+      // doesn't fire a node tap on release.
+      this._runMapPressX = x;
+      this._runMapPressY = y;
+      this._startRunMapDrag(x, y);
+      return true;
+    }
     if (this.showRunSetup)     { this._clickRunSetup(x, y);     return true; }
     // Energy bar opens the refill overlay.
     if (this.energyBarRect && this._hit(this.energyBarRect, x, y)) {
@@ -1617,21 +1642,45 @@ export class StartMenu {
     counts[klass] = Math.round(frac * CUSTOM_MAX_PER_CLASS);
   }
 
-  // Called from InputManager.onMove while a slider drag is active.
-  // Returns true if the move was consumed (i.e., we are dragging) so
-  // the caller can short-circuit any default move behavior.
+  // Called from InputManager.onMove while a slider drag OR a run-map
+  // pan is active. Returns true if the move was consumed.
   pointerMove(x, y) {
-    void y;  // sliders are 1D; vertical motion is ignored
-    if (!this._customDrag) return false;
-    const d = this._customDrag;
-    this._applySliderValue(d.counts, d.klass, d.row, x);
-    return true;
+    if (this._customDrag) {
+      this._applySliderValue(this._customDrag.counts, this._customDrag.klass,
+                             this._customDrag.row, x);
+      return true;
+    }
+    if (this.showRunMap && this._runMapDrag) {
+      this._moveRunMapDrag(x, y);
+      return true;
+    }
+    return false;
   }
 
-  // Called from InputManager.onUp. Ends the active slider drag.
+  // Called from InputManager.onUp. Ends the active slider drag, or
+  // ends a run-map pan and routes the deferred click if the gesture
+  // didn't actually drag.
   pointerUp() {
     if (this._customDrag) {
       this._customDrag = null;
+      return true;
+    }
+    if (this.showRunMap && this._runMapDrag) {
+      const dragMoved = this._runMapDragMoved;
+      const px = this._runMapPressX, py = this._runMapPressY;
+      this._endRunMapDrag();
+      if (!dragMoved) {
+        // No pan happened — treat this as a tap on the press position.
+        // _clickRunMap re-checks _runMapDragMoved and short-circuits
+        // when it is set, so we clear the flag before routing.
+        this._runMapDragMoved = false;
+        this._clickRunMap(px, py);
+      } else {
+        // Suppress the next tap-on-node by leaving the moved flag set
+        // until _clickRunMap consumes it. Clear here since the click
+        // routing was already skipped.
+        this._runMapDragMoved = false;
+      }
       return true;
     }
     return false;
@@ -1684,98 +1733,143 @@ export class StartMenu {
   // =====================================================================
 
   // ---- Run setup (NEW RUN) -------------------------------------------
+  //
+  // Full-screen galaxy backdrop + larger faction emblem cards. The
+  // emblems are procedurally rendered roundels (no asset art needed).
+  // Each card shows the faction's sigil, name, tagline, and war-record
+  // count if the meta-progression has any wins against them.
   _layoutRunSetup(viewW, viewH) {
-    const panelW = Math.min(720, viewW - 80);
-    const panelH = 380;
-    const panelX = (viewW - panelW) / 2;
-    const panelY = (viewH - panelH) / 2;
-    this.runSetupRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+    // No central panel — we paint over the galaxy directly.
+    this.runSetupRects.panel = { x: 0, y: 0, w: viewW, h: viewH };
 
-    // Faction chips — 4 across (extensible: layout adapts to count).
     const unlocked = (this.runState && this.runState.meta && this.runState.meta.unlockedFactions) || RACE_KEYS;
     const n = unlocked.length;
-    const chipW = Math.min(150, (panelW - 80) / n - 12);
-    const chipH = 80;
-    const chipsTotalW = n * chipW + (n - 1) * 12;
-    const chipsStartX = panelX + (panelW - chipsTotalW) / 2;
-    const chipsY = panelY + 130;
+    // Faction cards: bigger than the old chips, with a stacked emblem
+    // + name + tagline layout. Sizes scale to viewport.
+    const cardW = Math.min(220, Math.max(160, (viewW - 80) / n - 18));
+    const cardH = 280;
+    const cardsTotalW = n * cardW + (n - 1) * 18;
+    const cardsStartX = (viewW - cardsTotalW) / 2;
+    const cardsY = (viewH - cardH) / 2 + 30;
     this.runSetupRects.factionChips = unlocked.map((k, i) => ({
       key: k, label: RACES[k] ? RACES[k].name : k,
-      x: chipsStartX + i * (chipW + 12),
-      y: chipsY, w: chipW, h: chipH,
+      x: cardsStartX + i * (cardW + 18),
+      y: cardsY, w: cardW, h: cardH,
     }));
 
-    // Buttons.
-    const btnH = 44, btnW = 140;
+    // Buttons sit at the very bottom of the screen so they don't
+    // crowd the cards.
+    const btnH = 52, btnW = 180;
     this.runSetupRects.beginBtn = {
-      x: panelX + panelW - btnW - 24,
-      y: panelY + panelH - btnH - 20,
+      x: viewW / 2 + 12,
+      y: cardsY + cardH + 36,
       w: btnW, h: btnH,
     };
     this.runSetupRects.cancelBtn = {
-      x: panelX + 24,
-      y: panelY + panelH - btnH - 20,
-      w: 110, h: btnH,
+      x: viewW / 2 - btnW - 12,
+      y: cardsY + cardH + 36,
+      w: btnW, h: btnH,
     };
     // Default selection is the menu's currently-picked race.
     this._runSetupFaction = this.selectedRace;
+
+    // Lazily build a galaxy backdrop just for the setup screen — keyed
+    // on a constant seed so it stays stable across opens.
+    if (!this._runSetupGalaxy) {
+      this._runSetupGalaxy = makeGalaxy(0xfd00bea1, viewW, viewH);
+    }
   }
 
   _drawRunSetup(ctx, viewW, viewH) {
-    // Scrim.
-    ctx.fillStyle = "rgba(2,8,18,0.78)";
+    // Galaxy backdrop (no parallax — this is a static screen).
+    if (this._runSetupGalaxy) {
+      drawGalaxy(ctx, this._runSetupGalaxy, 0, 0, viewW, viewH);
+    } else {
+      ctx.fillStyle = "rgba(2,8,18,0.95)";
+      ctx.fillRect(0, 0, viewW, viewH);
+    }
+    // Dim overlay so the chrome over the galaxy stays legible.
+    ctx.fillStyle = "rgba(2,8,18,0.45)";
     ctx.fillRect(0, 0, viewW, viewH);
 
-    const p = this.runSetupRects.panel;
-    ctx.fillStyle = "rgba(8,16,28,0.95)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-    // Accent rule.
-    ctx.fillStyle = "#5af";
-    ctx.fillRect(p.x, p.y, p.w, 3);
-
+    // Title block.
     ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 26px system-ui, sans-serif";
-    ctx.fillText("BEGIN FRONTIER RUN", p.x + p.w / 2, p.y + 44);
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillStyle = "#9bd";
-    ctx.fillText("PICK YOUR FACTION · STARTER FLEET FIXED · 3 ACTS",
-                 p.x + p.w / 2, p.y + 70);
+    ctx.fillStyle = "#e6f4ff";
+    ctx.font = "bold 34px system-ui, sans-serif";
+    ctx.fillText("FRONTIER", viewW / 2, 80);
+    ctx.fillStyle = "#5af";
+    ctx.fillRect(viewW / 2 - 180, 92, 360, 2);
+    ctx.fillStyle = "#7bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("BEGIN A NEW RUN  ·  PICK YOUR COMMANDING FACTION", viewW / 2, 112);
 
-    // Faction chips.
+    // Faction emblem cards.
+    const t = performance.now() / 1000;
     for (const r of this.runSetupRects.factionChips) {
       const selected = r.key === this._runSetupFaction;
       const accent = RACES[r.key] ? RACES[r.key].accent : "#7df";
-      ctx.fillStyle = selected ? "rgba(40,80,120,0.95)" : "rgba(24,36,56,0.85)";
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = selected ? accent : "#456";
-      ctx.lineWidth = selected ? 2.5 : 1.5;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      // Accent dot.
-      ctx.fillStyle = accent;
-      ctx.beginPath();
-      ctx.arc(r.x + r.w / 2, r.y + 18, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#cef";
-      ctx.font = "bold 14px system-ui, sans-serif";
-      ctx.fillText(r.label, r.x + r.w / 2, r.y + 42);
-      ctx.font = "10px system-ui, sans-serif";
-      ctx.fillStyle = "#9bd";
-      const tag = (RACES[r.key] && RACES[r.key].tagline) || "";
-      ctx.fillText(tag.slice(0, 22), r.x + r.w / 2, r.y + 58);
-      // War progress notch.
-      const wp = (this.runState && this.runState.meta && this.runState.meta.warProgress[r.key]) || 0;
-      if (wp > 0) {
-        ctx.fillStyle = "#fc8";
-        ctx.font = "10px system-ui, sans-serif";
-        ctx.fillText(`× ${wp}`, r.x + r.w / 2, r.y + r.h - 8);
+      // Card background — darker when not selected, lifted on select.
+      const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+      if (selected) {
+        g.addColorStop(0, "rgba(20,36,60,0.95)");
+        g.addColorStop(1, "rgba(10,20,38,0.95)");
+      } else {
+        g.addColorStop(0, "rgba(8,16,28,0.85)");
+        g.addColorStop(1, "rgba(4,10,20,0.85)");
       }
+      ctx.fillStyle = g;
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = selected ? accent : "rgba(120,160,200,0.4)";
+      ctx.lineWidth = selected ? 3 : 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      // Top accent rule when selected.
+      if (selected) {
+        ctx.fillStyle = accent;
+        ctx.fillRect(r.x, r.y, r.w, 3);
+      }
+      // Emblem in the upper half of the card.
+      const emblemR = Math.min(56, r.w * 0.35);
+      const emblemX = r.x + r.w / 2;
+      const emblemY = r.y + 80;
+      // Subtle pulse on the selected card so it reads as "chosen".
+      if (selected) {
+        ctx.save();
+        const pulse = 1 + Math.sin(t * 2.4) * 0.04;
+        ctx.translate(emblemX, emblemY);
+        ctx.scale(pulse, pulse);
+        ctx.translate(-emblemX, -emblemY);
+      }
+      drawFactionEmblem(ctx, emblemX, emblemY, emblemR, accent, r.key);
+      if (selected) ctx.restore();
+
+      // Name + tagline below the emblem.
+      ctx.fillStyle = selected ? "#fff" : "#cef";
+      ctx.font = "bold 18px system-ui, sans-serif";
+      ctx.fillText(r.label.toUpperCase(), r.x + r.w / 2, r.y + 178);
+      const tag = (RACES[r.key] && RACES[r.key].tagline) || "";
+      if (tag) {
+        ctx.fillStyle = "#7bd";
+        ctx.font = "11px system-ui, sans-serif";
+        // Simple wrap: split tagline at the midpoint word boundary so
+        // long taglines fit in two lines.
+        const words = tag.split(" ");
+        if (words.length > 3) {
+          const mid = Math.ceil(words.length / 2);
+          ctx.fillText(words.slice(0, mid).join(" "), r.x + r.w / 2, r.y + 200);
+          ctx.fillText(words.slice(mid).join(" "), r.x + r.w / 2, r.y + 216);
+        } else {
+          ctx.fillText(tag, r.x + r.w / 2, r.y + 200);
+        }
+      }
+      // War-progress trophy at the bottom of the card.
+      const wp = (this.runState && this.runState.meta && this.runState.meta.warProgress[r.key]) || 0;
+      ctx.fillStyle = wp > 0 ? "#fc8" : "rgba(140,160,180,0.6)";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText(wp > 0 ? `★ ${wp} VICTOR${wp > 1 ? "IES" : "Y"}` : "Unbroken",
+                   r.x + r.w / 2, r.y + r.h - 18);
     }
 
-    // BEGIN button.
+    // BEGIN button — gradient pill like the main menu START.
     const b = this.runSetupRects.beginBtn;
     const beginBg = ctx.createLinearGradient(0, b.y, 0, b.y + b.h);
     beginBg.addColorStop(0, "rgba(80,170,110,0.95)");
@@ -1785,19 +1879,22 @@ export class StartMenu {
     ctx.strokeStyle = "#bff";
     ctx.lineWidth = 2;
     ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(b.x + 2, b.y + 2, b.w - 4, 1);
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.fillText("BEGIN", b.x + b.w / 2, b.y + b.h / 2 + 6);
+    ctx.font = "bold 20px system-ui, sans-serif";
+    ctx.fillText("BEGIN RUN", b.x + b.w / 2, b.y + b.h / 2 + 7);
 
-    // CANCEL button.
+    // CANCEL button — match the menu's red pill.
     const c = this.runSetupRects.cancelBtn;
-    ctx.fillStyle = "rgba(60,40,40,0.85)";
+    ctx.fillStyle = "rgba(60,30,30,0.92)";
     ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = "#a66";
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#e88";
+    ctx.lineWidth = 2;
     ctx.strokeRect(c.x, c.y, c.w, c.h);
-    ctx.fillStyle = "#fbb";
-    ctx.fillText("CANCEL", c.x + c.w / 2, c.y + c.h / 2 + 6);
+    ctx.fillStyle = "#fdd";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("CANCEL", c.x + c.w / 2, c.y + c.h / 2 + 7);
     ctx.textAlign = "left";
   }
 
@@ -1821,147 +1918,224 @@ export class StartMenu {
   }
 
   // ---- Run map -------------------------------------------------------
+  //
+  // Full-screen FTL-style sector chart. Nodes live in world space at
+  // ~1.6x viewport size; the player drags the map to pan around. Top
+  // strip carries currencies + act, right strip is the fleet panel.
+  // Background is a procedural galaxy (parallax stars + nebula clouds)
+  // generated deterministically from the run seed + act.
   _layoutRunMap(viewW, viewH) {
-    const panelW = Math.min(1100, viewW - 60);
-    const panelH = Math.min(720, viewH - 80);
-    const panelX = (viewW - panelW) / 2;
-    const panelY = (viewH - panelH) / 2;
-    this.runMapRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+    // No central panel — the map IS the screen. We still cache a small
+    // set of rects so the click handler can find the HUD chrome.
+    this.runMapRects.panel = { x: 0, y: 0, w: viewW, h: viewH };
 
-    // Fleet panel on the right.
-    const fleetW = 280;
-    this.runMapRects.fleetPanel = {
-      x: panelX + panelW - fleetW - 16,
-      y: panelY + 80,
-      w: fleetW, h: panelH - 160,
-    };
+    // World rect: wide enough that capital-end columns sit comfortably
+    // off-screen on most viewports, encouraging the player to pan.
+    const worldW = Math.max(viewW * 1.55, 1600);
+    const worldH = Math.max(viewH * 1.25, 900);
+    this._runMapWorldW = worldW;
+    this._runMapWorldH = worldH;
 
-    // Map region on the left.
-    const mapX = panelX + 24;
-    const mapY = panelY + 90;
-    const mapW = panelW - fleetW - 56;
-    const mapH = panelH - 170;
     const run = this.runState && this.runState.run;
     this.runMapRects.nodes = [];
     this.runMapRects.edges = [];
+
     if (run) {
       const graph = run.graphs[run.act - 1];
-      if (graph) {
-        const colSpacing = mapW / Math.max(1, COLS_PER_ACT - 1);
-        const rowSpacing = mapH / (ROWS_PER_ACT + 1);
+      const galaxyKey = (run.seed >>> 0) + "_" + run.act;
+      if (galaxyKey !== this._runMapGalaxyKey) {
+        // Regenerate the galaxy + node positions for this (run, act).
+        this._runMapGalaxy = makeGalaxy(
+          (run.seed ^ (run.act * 0x6d2b79f5)) >>> 0,
+          worldW, worldH,
+        );
+        this._runMapNodePositions = graph
+          ? nodePositionsFor(graph, (run.seed >>> 0) + run.act,
+                             worldW, worldH, COLS_PER_ACT, ROWS_PER_ACT)
+          : new Map();
+        this._runMapGalaxyKey = galaxyKey;
+        // Centre the pan on the current node so a fresh open lands
+        // the player's position in view.
+        this._centerPanOnCurrent(viewW, viewH);
+      }
+
+      if (graph && this._runMapNodePositions) {
+        // World-space node rects — node draw + click both read these.
         for (const n of graph.nodes) {
-          const nx = mapX + n.col * colSpacing;
-          const ny = mapY + (n.row + 1) * rowSpacing;
+          const p = this._runMapNodePositions.get(n.id);
+          if (!p) continue;
           this.runMapRects.nodes.push({
             id: n.id, type: n.type, faction: n.faction,
-            x: nx, y: ny, r: 22,
+            x: p.x, y: p.y,
+            // Node radius scales with type: bosses are visibly bigger,
+            // events are slightly smaller for a "checkpoint" feel.
+            r: n.type === "boss" ? 28 : n.type === "event" ? 18 : 22,
           });
         }
-        // Edge rendering uses node positions; cache them.
         for (const e of graph.edges) {
-          const a = this.runMapRects.nodes.find((r) => r.id === e.fromId);
-          const b = this.runMapRects.nodes.find((r) => r.id === e.toId);
-          if (a && b) this.runMapRects.edges.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y, fromId: e.fromId, toId: e.toId, fuelCost: e.fuelCost });
+          const a = this._runMapNodePositions.get(e.fromId);
+          const b = this._runMapNodePositions.get(e.toId);
+          if (a && b) {
+            this.runMapRects.edges.push({
+              ax: a.x, ay: a.y, bx: b.x, by: b.y,
+              fromId: e.fromId, toId: e.toId, fuelCost: e.fuelCost,
+            });
+          }
         }
       }
     }
 
-    // Footer buttons.
-    const btnH = 40;
+    // Top HUD strip — full-width, semi-transparent so the galaxy peeks
+    // through the chrome.
+    const stripH = 60;
+    this.runMapRects.header = { x: 0, y: 0, w: viewW, h: stripH };
+
+    // Fleet panel: right edge, full-height, ~300px wide.
+    const fleetW = Math.min(320, Math.max(260, viewW * 0.24));
+    this.runMapRects.fleetPanel = {
+      x: viewW - fleetW,
+      y: stripH,
+      w: fleetW,
+      h: viewH - stripH,
+    };
+
+    // Footer buttons sit centred at the bottom over the galaxy.
+    const btnH = 42, btnW = 150;
     this.runMapRects.abandonBtn = {
-      x: panelX + 24,
-      y: panelY + panelH - btnH - 18,
-      w: 130, h: btnH,
+      x: 20, y: viewH - btnH - 20, w: btnW, h: btnH,
     };
     this.runMapRects.closeBtn = {
-      x: panelX + panelW - 130 - 24,
-      y: panelY + panelH - btnH - 18,
-      w: 130, h: btnH,
+      x: viewW - fleetW - btnW - 20, y: viewH - btnH - 20, w: btnW, h: btnH,
     };
+
+    // Clamp pan to the new viewport bounds.
+    const clamped = clampPan(
+      this._runMapPanX, this._runMapPanY,
+      worldW, worldH, viewW, viewH,
+    );
+    this._runMapPanX = clamped.x;
+    this._runMapPanY = clamped.y;
+  }
+
+  // Centre the map view on the player's current node. Called on first
+  // open + when act changes so a fresh layout puts "you are here" in
+  // the middle of the screen.
+  _centerPanOnCurrent(viewW, viewH) {
+    const run = this.runState && this.runState.run;
+    if (!run || !this._runMapNodePositions) return;
+    const p = this._runMapNodePositions.get(run.nodePos);
+    if (!p) return;
+    // Shift the fleet panel's width out of the centring calc so the
+    // player position lands in the visible centre, not under the
+    // fleet panel.
+    const fleetW = Math.min(320, Math.max(260, viewW * 0.24));
+    const visibleCenterX = (viewW - fleetW) / 2;
+    const visibleCenterY = viewH / 2;
+    this._runMapPanX = visibleCenterX - p.x;
+    this._runMapPanY = visibleCenterY - p.y;
   }
 
   _drawRunMap(ctx, viewW, viewH) {
-    ctx.fillStyle = "rgba(2,8,18,0.78)";
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    const p = this.runMapRects.panel;
-    if (!p) return;
-    ctx.fillStyle = "rgba(8,16,28,0.95)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-    ctx.fillStyle = "#5af";
-    ctx.fillRect(p.x, p.y, p.w, 3);
-
     const run = this.runState && this.runState.run;
+    const t = performance.now() / 1000;
+    const px = this._runMapPanX;
+    const py = this._runMapPanY;
+
+    // Galaxy backdrop — paints the whole screen with parallax stars +
+    // nebula clouds. Pan offset feeds the parallax.
+    if (this._runMapGalaxy) {
+      drawGalaxy(ctx, this._runMapGalaxy, px, py, viewW, viewH);
+    } else {
+      ctx.fillStyle = "#02040a";
+      ctx.fillRect(0, 0, viewW, viewH);
+    }
+
     if (!run) {
       ctx.textAlign = "center";
       ctx.fillStyle = "#cef";
-      ctx.font = "bold 22px system-ui, sans-serif";
-      ctx.fillText("NO ACTIVE RUN", p.x + p.w / 2, p.y + p.h / 2);
+      ctx.font = "bold 26px system-ui, sans-serif";
+      ctx.fillText("NO ACTIVE RUN", viewW / 2, viewH / 2);
       this._drawCloseFooterBtn(ctx);
       ctx.textAlign = "left";
       return;
     }
 
-    // Header.
-    ctx.textAlign = "left";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 22px system-ui, sans-serif";
-    ctx.fillText(`ACT ${run.act} OF ${ACTS_PER_RUN}`, p.x + 24, p.y + 40);
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillStyle = "#9bd";
-    const faction = RACES[run.faction] ? RACES[run.faction].name : run.faction;
-    ctx.fillText(`Commander · ${faction}`, p.x + 24, p.y + 60);
-
-    // Top-right currency strip.
-    ctx.textAlign = "right";
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.fillStyle = "#fe8";
-    ctx.fillText(`${run.resources.credits} credits`, p.x + p.w - 24, p.y + 40);
-    ctx.fillStyle = "#8df";
-    ctx.fillText(`${run.resources.fuel} fuel`, p.x + p.w - 24, p.y + 60);
-
-    // Edges first so nodes sit on top.
-    for (const e of this.runMapRects.edges) {
-      const isCurrent = e.fromId === run.nodePos;
-      const isVisited = run.visitedNodeIds.includes(e.fromId) && run.visitedNodeIds.includes(e.toId);
-      ctx.strokeStyle = isCurrent
-        ? "rgba(140,210,255,0.85)"
-        : isVisited
-          ? "rgba(140,210,255,0.25)"
-          : "rgba(120,140,170,0.35)";
-      ctx.lineWidth = isCurrent ? 2.5 : 1.5;
-      ctx.beginPath();
-      ctx.moveTo(e.ax, e.ay);
-      ctx.lineTo(e.bx, e.by);
-      ctx.stroke();
-    }
-
-    // Nodes.
+    // Reachable set — edges out of the player's current node.
     const reachable = new Set();
     for (const e of this.runMapRects.edges) {
       if (e.fromId === run.nodePos) reachable.add(e.toId);
     }
+
+    // Edges first — each translated by the pan offset so the curves
+    // ride with the chart.
+    for (const e of this.runMapRects.edges) {
+      const isCurrentOut = e.fromId === run.nodePos;
+      const isVisited = run.visitedNodeIds.includes(e.fromId) && run.visitedNodeIds.includes(e.toId);
+      const state = isCurrentOut ? "current-out"
+                  : isVisited     ? "visited"
+                  :                  "locked";
+      drawCurvedEdge(
+        ctx,
+        e.ax + px, e.ay + py,
+        e.bx + px, e.by + py,
+        state,
+        e.fromId * 31 + e.toId,
+        t,
+      );
+    }
+
+    // Nodes — pan offset applied per draw so click handler can keep
+    // working in world space.
+    const currentNode = this.runMapRects.nodes.find((n) => n.id === run.nodePos);
     for (const n of this.runMapRects.nodes) {
       const isCurrent = n.id === run.nodePos;
       const isVisited = run.visitedNodeIds.includes(n.id);
       const isReachable = reachable.has(n.id);
-      let state;
-      if (isCurrent) state = "current";
-      else if (isVisited) state = "visited";
-      else if (isReachable) state = "reachable";
-      else state = "locked";
-      this._drawNodeIcon(ctx, n, state);
+      const state = isCurrent ? "current"
+                  : isVisited ? "visited"
+                  : isReachable ? "reachable"
+                  : "locked";
+      const screen = { ...n, x: n.x + px, y: n.y + py };
+      drawNodeArt(ctx, screen, state, t);
     }
 
-    // Fleet panel.
+    // Player fleet marker sits above the current node — small wing
+    // silhouette so the player's position is obvious at a glance.
+    if (currentNode) {
+      drawFleetMarker(ctx, currentNode.x + px, currentNode.y + py, t);
+    }
+
+    // Fuel-cost tooltip near each reachable edge: prevents the player
+    // from guessing which jumps they can afford.
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    for (const e of this.runMapRects.edges) {
+      if (e.fromId !== run.nodePos) continue;
+      const midX = (e.ax + e.bx) / 2 + px;
+      const midY = (e.ay + e.by) / 2 + py;
+      const canAfford = run.resources.fuel >= e.fuelCost;
+      ctx.fillStyle = canAfford ? "rgba(140,210,255,0.95)" : "rgba(250,140,120,0.95)";
+      // Tiny chip background so the number reads over starfield.
+      const chipW = 32, chipH = 18;
+      ctx.fillStyle = "rgba(8,16,28,0.85)";
+      ctx.fillRect(midX - chipW / 2, midY - chipH / 2, chipW, chipH);
+      ctx.strokeStyle = canAfford ? "rgba(140,210,255,0.7)" : "rgba(250,140,120,0.7)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(midX - chipW / 2, midY - chipH / 2, chipW, chipH);
+      ctx.fillStyle = canAfford ? "#7df" : "#f97";
+      ctx.fillText(`⛽ ${e.fuelCost}`, midX, midY + 4);
+    }
+    ctx.textAlign = "left";
+
+    // Top HUD strip — currencies + act badge.
+    this._drawRunMapHeader(ctx, viewW, viewH, run);
+
+    // Fleet panel on the right.
     this._drawFleetPanel(ctx, this.runMapRects.fleetPanel, run);
 
     // Footer.
     const ab = this.runMapRects.abandonBtn;
-    ctx.fillStyle = "rgba(60,30,30,0.85)";
+    ctx.fillStyle = "rgba(60,30,30,0.88)";
     ctx.fillRect(ab.x, ab.y, ab.w, ab.h);
     ctx.strokeStyle = "#c66";
     ctx.lineWidth = 1.5;
@@ -1972,6 +2146,85 @@ export class StartMenu {
     ctx.fillText("ABANDON RUN", ab.x + ab.w / 2, ab.y + ab.h / 2 + 5);
 
     this._drawCloseFooterBtn(ctx);
+    ctx.textAlign = "left";
+  }
+
+  // Top header strip: act badge on the left, faction commander label,
+  // and credits + fuel chips on the right. Sits over the galaxy so the
+  // backdrop is still readable through the chrome.
+  _drawRunMapHeader(ctx, viewW, viewH, run) {
+    const h = this.runMapRects.header;
+    // Strip background — gradient from transparent at bottom up to
+    // semi-opaque at top so the chart fades cleanly into the chrome.
+    const g = ctx.createLinearGradient(0, h.y, 0, h.y + h.h);
+    g.addColorStop(0, "rgba(4,8,16,0.92)");
+    g.addColorStop(1, "rgba(4,8,16,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(h.x, h.y, h.w, h.h);
+    // Thin accent rule along the bottom of the strip.
+    ctx.fillStyle = "rgba(140,210,255,0.4)";
+    ctx.fillRect(h.x, h.y + h.h - 1, h.w, 1);
+
+    // Act badge — small rounded chip on the left.
+    const badgeW = 110, badgeH = 36;
+    ctx.fillStyle = "rgba(20,40,60,0.85)";
+    ctx.fillRect(20, 14, badgeW, badgeH);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(20, 14, badgeW, badgeH);
+    ctx.fillStyle = "#7bd";
+    ctx.font = "bold 10px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("CURRENT ACT", 28, 27);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText(`${run.act} / ${ACTS_PER_RUN}`, 28, 46);
+
+    // Faction commander next to badge.
+    const faction = RACES[run.faction] ? RACES[run.faction].name : run.faction;
+    const factionAccent = (RACES[run.faction] && RACES[run.faction].accent) || "#7df";
+    ctx.fillStyle = "#9bd";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.fillText("COMMANDING", 20 + badgeW + 18, 27);
+    ctx.fillStyle = factionAccent;
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText(faction, 20 + badgeW + 18, 46);
+
+    // Currency chips on the right — credits + fuel with icons.
+    const fleetW = this.runMapRects.fleetPanel ? this.runMapRects.fleetPanel.w : 280;
+    const chipsRight = viewW - fleetW - 20;
+    const fuelChipW = 100;
+    const credChipW = 130;
+    const chipH = 36;
+    const fuelChipX = chipsRight - fuelChipW;
+    const credChipX = fuelChipX - credChipW - 8;
+    // Credits chip.
+    ctx.fillStyle = "rgba(40,30,16,0.85)";
+    ctx.fillRect(credChipX, 14, credChipW, chipH);
+    ctx.strokeStyle = "#fc8";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(credChipX, 14, credChipW, chipH);
+    ctx.fillStyle = "#fc8";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("$", credChipX + 12, 38);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(String(run.resources.credits), credChipX + credChipW - 12, 38);
+    // Fuel chip.
+    ctx.fillStyle = "rgba(20,40,50,0.85)";
+    ctx.fillRect(fuelChipX, 14, fuelChipW, chipH);
+    ctx.strokeStyle = "#7df";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(fuelChipX, 14, fuelChipW, chipH);
+    ctx.fillStyle = "#7df";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("⛽", fuelChipX + 10, 38);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "right";
+    ctx.fillText(String(run.resources.fuel), fuelChipX + fuelChipW - 12, 38);
     ctx.textAlign = "left";
   }
 
@@ -2053,68 +2306,181 @@ export class StartMenu {
 
   _drawFleetPanel(ctx, panel, run) {
     if (!panel) return;
-    ctx.fillStyle = "rgba(12,20,32,0.92)";
+    // Panel chrome — slightly lifted off the galaxy with a gradient so
+    // the right edge of the screen has visual weight as "your fleet HQ"
+    // distinct from the starmap chart.
+    const g = ctx.createLinearGradient(panel.x, 0, panel.x + panel.w, 0);
+    g.addColorStop(0, "rgba(4,10,20,0.6)");
+    g.addColorStop(0.25, "rgba(8,16,28,0.9)");
+    g.addColorStop(1, "rgba(8,16,28,0.95)");
+    ctx.fillStyle = g;
     ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
-    ctx.strokeStyle = "#356";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
-    ctx.fillStyle = SIDES.blue.primary;
-    ctx.fillRect(panel.x, panel.y, panel.w, 2);
+    // Left-edge accent rule (faces the chart).
+    ctx.fillStyle = "rgba(140,210,255,0.35)";
+    ctx.fillRect(panel.x, panel.y, 2, panel.h);
 
     ctx.textAlign = "left";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText("FLEET", panel.x + 14, panel.y + 22);
+    ctx.fillStyle = "#7bd";
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.fillText("FLEET ROSTER", panel.x + 18, panel.y + 24);
+    ctx.fillStyle = "rgba(140,210,255,0.18)";
+    ctx.fillRect(panel.x + 18, panel.y + 32, panel.w - 36, 1);
 
-    // Capital list with HP bars.
-    let cy = panel.y + 42;
+    // Capital list — each ship gets a small silhouette + name + HP bar.
+    let cy = panel.y + 52;
     for (const cap of run.capitals) {
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillStyle = "#cef";
-      ctx.fillText(this._capitalName(cap.klass), panel.x + 14, cy);
-      // HP bar.
-      const barX = panel.x + 110;
-      const barW = panel.w - 130;
-      const barH = 8;
+      // Silhouette badge.
+      this._drawCapitalGlyph(ctx, panel.x + 28, cy + 12, 14, cap.klass);
+      // Name + class role on two lines.
+      ctx.fillStyle = "#e6f4ff";
+      ctx.font = "bold 13px system-ui, sans-serif";
+      ctx.fillText(this._capitalName(cap.klass), panel.x + 52, cy + 8);
+      ctx.fillStyle = "#7bd";
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillText(`HULL ${Math.round(cap.hpFrac * 100)}%`, panel.x + 52, cy + 22);
+      // HP bar across the right side of the row.
+      const barX = panel.x + 52;
+      const barW = panel.w - 80;
+      const barH = 6;
+      const barY = cy + 28;
       ctx.fillStyle = "rgba(40,60,80,0.85)";
-      ctx.fillRect(barX, cy - 8, barW, barH);
+      ctx.fillRect(barX, barY, barW, barH);
       const fillW = barW * cap.hpFrac;
       ctx.fillStyle = cap.hpFrac > 0.6 ? "#7df"
                     : cap.hpFrac > 0.3 ? "#fc6"
                     : "#f76";
-      ctx.fillRect(barX, cy - 8, fillW, barH);
-      ctx.fillStyle = "#cef";
-      ctx.font = "10px system-ui, sans-serif";
-      ctx.fillText(`${Math.round(cap.hpFrac * 100)}%`, barX + barW + 4, cy);
-      cy += 22;
+      ctx.fillRect(barX, barY, fillW, barH);
+      cy += 46;
     }
 
-    // Small craft.
+    // Small craft block.
     cy += 8;
-    ctx.fillStyle = "#9bd";
+    ctx.fillStyle = "#7bd";
     ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.fillText("SMALL CRAFT", panel.x + 14, cy);
-    cy += 16;
-    ctx.fillStyle = "#cef";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(`Fighter × ${run.smallCraft.fighter}`, panel.x + 14, cy);
-    cy += 18;
-    ctx.fillText(`Bomber  × ${run.smallCraft.bomber}`, panel.x + 14, cy);
+    ctx.fillText("SMALL CRAFT", panel.x + 18, cy);
+    ctx.fillStyle = "rgba(140,210,255,0.18)";
+    ctx.fillRect(panel.x + 18, cy + 6, panel.w - 36, 1);
+    cy += 22;
+    // Fighter + bomber rows with mini icons.
+    this._drawCapitalGlyph(ctx, panel.x + 28, cy + 8, 9, "fighter");
+    ctx.fillStyle = "#e6f4ff";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("Fighters", panel.x + 50, cy + 12);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 15px system-ui, sans-serif";
+    ctx.fillText(`× ${run.smallCraft.fighter}`, panel.x + panel.w - 18, cy + 12);
+    ctx.textAlign = "left";
+    cy += 26;
+    this._drawCapitalGlyph(ctx, panel.x + 28, cy + 8, 9, "bomber");
+    ctx.fillStyle = "#e6f4ff";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("Bombers", panel.x + 50, cy + 12);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 15px system-ui, sans-serif";
+    ctx.fillText(`× ${run.smallCraft.bomber}`, panel.x + panel.w - 18, cy + 12);
+    ctx.textAlign = "left";
+    cy += 30;
 
     // Boons.
     if (run.boons.length > 0) {
-      cy += 22;
-      ctx.fillStyle = "#9bd";
+      ctx.fillStyle = "#7bd";
       ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.fillText("BOONS", panel.x + 14, cy);
-      cy += 16;
-      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText("BOONS", panel.x + 18, cy);
+      ctx.fillStyle = "rgba(140,210,255,0.18)";
+      ctx.fillRect(panel.x + 18, cy + 6, panel.w - 36, 1);
+      cy += 22;
+      ctx.font = "12px system-ui, sans-serif";
       ctx.fillStyle = "#fe8";
       for (const b of run.boons) {
-        ctx.fillText(`• ${b.desc}`, panel.x + 14, cy);
-        cy += 14;
+        // Wrap each boon at panel width.
+        ctx.fillText(`◆ ${b.desc}`, panel.x + 18, cy);
+        cy += 16;
       }
     }
+  }
+
+  // Tiny ship silhouette for the fleet panel. Each klass gets a
+  // distinct shape so the player can read the roster at a glance
+  // without relying on the text label.
+  _drawCapitalGlyph(ctx, cx, cy, r, klass) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.fillStyle = "rgba(170,210,240,0.95)";
+    ctx.strokeStyle = "rgba(20,40,60,0.9)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    switch (klass) {
+      case "fighter": {
+        // Forward-pointing dart.
+        ctx.moveTo(0, -r);
+        ctx.lineTo(r * 0.6, r * 0.5);
+        ctx.lineTo(0, r * 0.2);
+        ctx.lineTo(-r * 0.6, r * 0.5);
+        ctx.closePath();
+        break;
+      }
+      case "bomber": {
+        // Wider swept wing.
+        ctx.moveTo(0, -r * 0.8);
+        ctx.lineTo(r, r * 0.5);
+        ctx.lineTo(r * 0.4, r * 0.2);
+        ctx.lineTo(0, r * 0.5);
+        ctx.lineTo(-r * 0.4, r * 0.2);
+        ctx.lineTo(-r, r * 0.5);
+        ctx.closePath();
+        break;
+      }
+      case "frigate": {
+        // Slim hexagon.
+        for (let i = 0; i < 6; i++) {
+          const a = -Math.PI / 2 + i * (Math.PI * 2 / 6);
+          const px = Math.cos(a) * r * 0.85;
+          const py = Math.sin(a) * r * 1.1;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        break;
+      }
+      case "cruiser": {
+        // Pointed prow + flared aft.
+        ctx.moveTo(0, -r * 1.2);
+        ctx.lineTo(r * 0.7, r * 0.4);
+        ctx.lineTo(r * 0.4, r * 0.6);
+        ctx.lineTo(-r * 0.4, r * 0.6);
+        ctx.lineTo(-r * 0.7, r * 0.4);
+        ctx.closePath();
+        break;
+      }
+      case "battleship": {
+        // Long lozenge.
+        ctx.moveTo(0, -r * 1.3);
+        ctx.lineTo(r * 0.5, -r * 0.3);
+        ctx.lineTo(r * 0.7, r * 0.4);
+        ctx.lineTo(r * 0.4, r * 0.8);
+        ctx.lineTo(-r * 0.4, r * 0.8);
+        ctx.lineTo(-r * 0.7, r * 0.4);
+        ctx.lineTo(-r * 0.5, -r * 0.3);
+        ctx.closePath();
+        break;
+      }
+      case "carrier": {
+        // Flat-decked rounded rectangle.
+        ctx.moveTo(-r * 0.9, -r * 0.5);
+        ctx.lineTo(r * 0.9, -r * 0.5);
+        ctx.lineTo(r * 0.7, r * 0.7);
+        ctx.lineTo(-r * 0.7, r * 0.7);
+        ctx.closePath();
+        break;
+      }
+      default: {
+        ctx.arc(0, 0, r * 0.8, 0, Math.PI * 2);
+      }
+    }
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
 
   _capitalName(klass) {
@@ -2127,6 +2493,14 @@ export class StartMenu {
 
   _clickRunMap(x, y) {
     const run = this.runState && this.runState.run;
+    // A drag that moved the map shouldn't also count as a click on a
+    // node underneath the release point. The drag start was logged in
+    // _startRunMapDrag; we only treat this as a tap if no significant
+    // pan happened during the gesture.
+    if (this._runMapDragMoved) {
+      this._runMapDragMoved = false;
+      return;
+    }
     if (this._hit(this.runMapRects.closeBtn, x, y)) {
       this.showRunMap = false; return;
     }
@@ -2135,10 +2509,19 @@ export class StartMenu {
       this.showRunMap = false; return;
     }
     if (!run) return;
-    // Node clicks.
+    // Reject clicks landing inside the fleet panel — that's chrome,
+    // not the chart.
+    if (this._hit(this.runMapRects.fleetPanel, x, y)) return;
+    // Node clicks. Nodes are stored in WORLD space; translate the
+    // pointer back to world space by subtracting the pan offset.
+    const wx = x - this._runMapPanX;
+    const wy = y - this._runMapPanY;
     for (const n of this.runMapRects.nodes) {
-      const dx = x - n.x, dy = y - n.y;
-      if (dx * dx + dy * dy > n.r * n.r + 64) continue;
+      const dx = wx - n.x, dy = wy - n.y;
+      // Generous touch slack so a tap near (but not on) a star still
+      // registers — important on phones with thick fingers.
+      const hitR = n.r + 12;
+      if (dx * dx + dy * dy > hitR * hitR) continue;
       // Must be a reachable edge target.
       let reachable = false;
       for (const e of this.runMapRects.edges) {
@@ -2170,6 +2553,54 @@ export class StartMenu {
       }
       return;
     }
+  }
+
+  // ---- Run map pan + drag --------------------------------------------
+  //
+  // Drag-to-pan on pointer-down inside the map area (anything outside
+  // the fleet panel / header / footer buttons). Pan offset updates on
+  // each pointerMove; a moved-flag guards against the release being
+  // mis-treated as a node tap.
+  _startRunMapDrag(x, y) {
+    // Don't start a drag if the pointer landed on chrome.
+    if (this._hit(this.runMapRects.fleetPanel, x, y)) return false;
+    if (this._hit(this.runMapRects.header, x, y)) return false;
+    if (this._hit(this.runMapRects.abandonBtn, x, y)) return false;
+    if (this._hit(this.runMapRects.closeBtn, x, y)) return false;
+    this._runMapDrag = {
+      startX: x, startY: y,
+      startPanX: this._runMapPanX,
+      startPanY: this._runMapPanY,
+    };
+    this._runMapDragMoved = false;
+    return true;
+  }
+
+  _moveRunMapDrag(x, y) {
+    if (!this._runMapDrag) return false;
+    const dx = x - this._runMapDrag.startX;
+    const dy = y - this._runMapDrag.startY;
+    // Threshold of 4px — past this we treat the gesture as a pan and
+    // the eventual pointer-up won't fire a node click.
+    if (!this._runMapDragMoved && (dx * dx + dy * dy) > 16) {
+      this._runMapDragMoved = true;
+    }
+    if (this._runMapDragMoved) {
+      const panX = this._runMapDrag.startPanX + dx;
+      const panY = this._runMapDrag.startPanY + dy;
+      const clamped = clampPan(
+        panX, panY,
+        this._runMapWorldW, this._runMapWorldH,
+        this._lastViewW || 1200, this._lastViewH || 800,
+      );
+      this._runMapPanX = clamped.x;
+      this._runMapPanY = clamped.y;
+    }
+    return true;
+  }
+
+  _endRunMapDrag() {
+    this._runMapDrag = null;
   }
 
   _pickBoonOffers() {

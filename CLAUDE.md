@@ -122,6 +122,104 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Frontier UI overhaul: starmap + scrollable galaxy + emblem cards
+
+**What changed**
+
+The roguelite UI shipped as flat geometric chips on a small centred
+panel — the chart felt like a debug view, not a campaign. This pass
+rewrites the campaign UI to read like an FTL-style sector chart:
+
+1. **Full-screen scrollable starmap.** The run map fills the viewport
+   instead of sitting in a 1100×720 panel. World rect is ~1.55×
+   viewport so the player drags to pan around the chart. Parallax
+   stars (3 depth layers) + 2-3 procedural nebula clouds tint the
+   backdrop. Map opens centred on the player's current position.
+2. **Node art per type.** Nodes render as celestial bodies — battle
+   stars (red corona with faction-tinted glint ring), elite stars
+   (same with rotating 4-point flare cross), resupply planets
+   (blue-green with atmosphere halo), event anomalies (purple swirl
+   with rotating arcs + `?`), boss gas giants with rings tinted by
+   the boss faction. Locked nodes desaturate; reachable pulse softly;
+   current node gets a "you-are-here" second pulse ring.
+3. **Curved travel routes** (quadratic Bezier with seeded
+   perpendicular bulge). The active route from the current node has
+   an animated dashed-flow shimmer.
+4. **Drag-to-pan.** Pointer-down anywhere on the map starts a
+   pan-drag. Threshold of 4px distinguishes tap vs pan; a pan
+   release skips node-click routing, a tap fires the click as
+   before.
+5. **Top HUD strip** with act badge, faction commander label, and
+   credit/fuel chips with icons. Right-edge fleet panel rebuilt
+   with per-class procedural ship silhouettes + HP bars +
+   iconified small-craft rows.
+6. **Fuel-cost chips** along reachable edges (red if you can't
+   afford the jump, blue if you can).
+7. **Run Setup redesign.** Galaxy backdrop + faction emblem cards
+   (procedural sigil roundels — Terran 5-point star, Reavers
+   skull-triangle, Hegemony cross, Voidsworn hexagram). Selected
+   card scales gently and gets the faction-coloured stroke. War
+   record trophy at the card foot.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/starmap.js` *(new)* | Procedural art module. `makeGalaxy(seed,w,h)` builds deterministic 3-layer starfield + nebula clouds. `drawGalaxy` paints with parallax. `nodePositionsFor` spreads col/row grid across world rect with seeded jitter. `drawCurvedEdge` quadratic Bezier with flow shimmer. `drawNodeArt` dispatches per node type. `drawFleetMarker` (wing silhouette). `drawFactionEmblem` (per-faction sigils). `clampPan` keeps pan within world bounds. |
+| `src/input.js` | `_layoutRunMap` rewritten — full-screen world rect with cached galaxy + node positions keyed on `(run.seed, run.act)`. `_centerPanOnCurrent` so a fresh open centres on the player. `_drawRunMap` rewritten — galaxy backdrop, curved edges, node art, fleet marker, fuel-cost chips, top HUD strip. `_drawFleetPanel` rebuilt with capital silhouettes + HP bars. New `_drawCapitalGlyph` for per-class shapes. `_clickRunMap` converts pointer coords to world space. `_startRunMapDrag`/`_moveRunMapDrag`/`_endRunMapDrag` handle pan + drag-vs-tap distinction. `StartMenu.pointerMove`/`pointerUp` extended for the deferred-click flow. `_drawRunSetup`/`_layoutRunSetup` rewritten for galaxy + emblem cards. |
+| `CLAUDE.md` | This entry. |
+
+**Design decisions / gotchas**
+
+- **Click is deferred to pointer-up for the run map only.** Sub-
+  overlays (Battle Choice, Event, Resupply, Run Setup) still route
+  clicks on pointer-down because they're modal and don't need
+  drag detection. Don't unify the two paths.
+- **Drag threshold is 4px (squared 16).** Below = tap, above = pan.
+  Bump to 6-8 if testers report missed taps on phones.
+- **Pan is clamped via `clampPan`** with 80px slack so edge stars
+  remain visible at the limits.
+- **Galaxy + node positions cached on `(run.seed, run.act)`.**
+  Changing acts mid-run regenerates both — by design, each act
+  feels like a new region.
+- **Node-position jitter** uses 0.18 scale at entry/boss columns
+  (anchors) and 0.45 in the middle (organic chart feel).
+- **The legacy `_drawNodeIcon` method is now dead code** — left in
+  place to keep the diff focused. Safe to delete in a follow-up.
+- **`drawFactionEmblem` accepts hex OR rgba()** via the internal
+  `factionRgba` normaliser. Add HSL handling there if a race ever
+  uses one.
+- **`drawFleetMarker` sits 38px ABOVE the current node** with a
+  pip line down — keeps the marker from obscuring the star.
+- **The Run Setup galaxy uses a fixed seed (`0xfd00bea1`)** so the
+  starscape stays consistent across opens. Don't randomise it.
+- **Boss ring system is a flat ellipse**, not a proper occluded
+  ring. The occlusion trick tripled draw cost; current read is
+  "obvious gas giant" which is enough.
+
+**How to verify**
+
+```bash
+npm install
+npm run build      # production build — should succeed
+npm run dev        # vite dev server
+```
+
+In-game:
+- Menu → Frontier chip → NEW RUN. Galaxy backdrop + four faction
+  emblem cards. Selected card scales up with accent border.
+- Run map opens full-screen with parallax starfield + nebulae.
+  Nodes are stars/planets/anomalies, not triangles. Player
+  position marker (wing) above the current star with a pulse ring.
+- Drag the map — chart pans, nebulae move at half-speed, distant
+  stars barely move. Tap a reachable node — sub-overlay opens.
+- Fuel-cost chip on each reachable edge (blue = affordable, red
+  = not). Top strip shows act / commander / $ / ⛽.
+- Right-edge fleet panel shows capitals with mini silhouettes +
+  HP bars + iconified small-craft rows + boons.
+- Reload the page on the run map — galaxy + node positions
+  identical (deterministic from seed).
+
 ### 2026-05-20 — Frontier roguelite campaign (replaces 100-mission campaign)
 
 **What changed**
