@@ -400,6 +400,15 @@ const MODE_OPTIONS = [
 const CUSTOM_CLASSES = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
 const CUSTOM_MAX_PER_CLASS = 60;
 
+// Two-letter glyphs for the class icon badge in each slider row.
+// Same family as the in-game roster strip (kept in hud.js) — duplicated
+// here so input.js stays import-light. If a class is added to either
+// file, add the matching glyph in both.
+const CLASS_GLYPHS = {
+  fighter: "F", bomber: "B", frigate: "Fr",
+  cruiser: "C", battleship: "BB", carrier: "CV",
+};
+
 // Pull a fresh per-class count map for the given race. Used to seed
 // counts when the player opens the overlay or switches the race chip
 // for a side. Missing entries default to 0 so adding new classes to
@@ -475,11 +484,17 @@ export class StartMenu {
     this.customRedCounts = rosterForRace("terran");
     this.customRects = {
       panel: null,
-      allied: { race: [], counters: [] },
-      hostile: { race: [], counters: [] },
+      allied: { race: [], counters: [], header: null, panel: null },
+      hostile: { race: [], counters: [], header: null, panel: null },
       start: null,
       cancel: null,
     };
+    // Active slider drag — populated when a pointer-down lands inside
+    // a counter slider track, cleared on pointer-up. While set,
+    // pointer-move updates the count from the pointer x. Refers to
+    // the counts object directly (allied or hostile) and the rects
+    // (so a relayout mid-drag stays correct).
+    this._customDrag = null;
 
     // Settings overlay — wired to main.js via setSettings(). Reads
     // live state through a getter (so the overlay always reflects what
@@ -1146,187 +1161,374 @@ export class StartMenu {
   // Compute click + draw rects for the overlay. Called every time the
   // overlay opens so it survives viewport resizes between matches.
   _layoutCustomOverlay(viewW, viewH) {
-    const panelW = 320;
-    const panelGap = 40;
+    // Two side-by-side panels, each ~460px wide; comfortable on a
+    // typical desktop viewport (>=1000px) and graceful on phones —
+    // the overlay shrinks each panel proportionally when the viewport
+    // is too narrow to host the ideal width.
+    const padX = 24, padY = 24;
+    const headerH = 44;
+    const raceRowH = 34;
+    const dividerH = 12;
+    const classRowH = 38;
+    const classGap = 6;
+    const classesH = CUSTOM_CLASSES.length * classRowH + classGap * (CUSTOM_CLASSES.length - 1);
+    const sideFooterH = 26;
+    const panelInnerH = headerH + raceRowH + dividerH + classesH + sideFooterH;
+    const panelH = panelInnerH + padY * 2;
+
+    // Title strip (top) + the two panels + footer buttons.
+    const titleH = 56;
+    const footerStrip = 92;          // CANCEL/START buttons + totals line
+    const overlayInnerH = titleH + panelH + footerStrip;
+    const overlayH = overlayInnerH + padY * 2;
+
+    // Panel sizing: ideal 460/side; fall back to (viewW - 2*pad - gap) / 2
+    // when the viewport is narrow. Minimum 280 — below that we'd be
+    // strangling sliders to <140px which is unusable on touch.
+    const panelGap = 24;
+    const idealPanelW = 460;
+    const availW = viewW - padX * 4;
+    const fitTwo = (availW - panelGap) / 2;
+    const panelW = Math.max(280, Math.min(idealPanelW, fitTwo));
     const totalW = panelW * 2 + panelGap;
-    const panelLeftX = (viewW - totalW) / 2;
+    const overlayW = totalW + padX * 2;
+
+    const overlayX = (viewW - overlayW) / 2;
+    const overlayY = Math.max(20, (viewH - overlayH) / 2);
+    this.customRects.panel = { x: overlayX, y: overlayY, w: overlayW, h: overlayH };
+
+    const panelTop = overlayY + padY + titleH;
+    const panelLeftX = overlayX + padX;
     const panelRightX = panelLeftX + panelW + panelGap;
 
-    // Vertical layout: title (top), then panels, then footer buttons.
-    const rowH = 36;
-    const chipH = 32;
-    const racePad = 12;
-    const counterPad = 10;
-    const innerW = panelW - 24;
-    const panelH = racePad + chipH * 2 + 8 + counterPad + rowH * CUSTOM_CLASSES.length + 16;
+    this.customRects.allied.panel = { x: panelLeftX, y: panelTop, w: panelW, h: panelH };
+    this.customRects.hostile.panel = { x: panelRightX, y: panelTop, w: panelW, h: panelH };
 
-    const panelY = Math.max(60, viewH / 2 - panelH / 2 - 30);
+    this.customRects.allied.header = { x: panelLeftX, y: panelTop, w: panelW, h: headerH };
+    this.customRects.hostile.header = { x: panelRightX, y: panelTop, w: panelW, h: headerH };
 
-    this.customRects.panel = {
-      x: panelLeftX - 16, y: panelY - 38,
-      w: totalW + 32, h: panelH + 100,
-    };
-
-    // Race chip rows for each side: 2x2 grid of race chips inside each panel.
+    // Race chips: 1×4 row across each side panel — one tap to swap a
+    // race instead of having to scan a 2×2 grid. Tagline below name.
+    const innerPadX = 16;
+    const raceY = panelTop + headerH + padY;
     const raceKeys = RACE_KEYS;
-    const chipW = (innerW - 12) / 2;
-    const buildRaceRects = (px) => {
-      const out = [];
-      for (let i = 0; i < raceKeys.length; i++) {
-        const col = i % 2, row = Math.floor(i / 2);
-        out.push({
-          key: raceKeys[i],
-          x: px + 12 + col * (chipW + 12),
-          y: panelY + racePad + row * (chipH + 6),
-          w: chipW, h: chipH,
-        });
-      }
-      return out;
-    };
+    const raceGap = 6;
+    const raceInnerW = panelW - innerPadX * 2 - raceGap * (raceKeys.length - 1);
+    const raceChipW = raceInnerW / raceKeys.length;
+    const buildRaceRects = (px) => raceKeys.map((key, i) => ({
+      key,
+      x: px + innerPadX + i * (raceChipW + raceGap),
+      y: raceY,
+      w: raceChipW, h: raceRowH,
+    }));
     this.customRects.allied.race = buildRaceRects(panelLeftX);
     this.customRects.hostile.race = buildRaceRects(panelRightX);
 
-    // Per-class counter rows.
-    const countersStartY = panelY + racePad + chipH * 2 + 8 + counterPad;
-    const minusW = 36, plusW = 36, countW = 50;
-    const labelW = innerW - (minusW + countW + plusW) - 24;
-
-    const buildCounterRects = (px) => {
+    // Per-class slider rows. Each row: [icon] Name | track | count.
+    // The track hit zone spans the row's full height so the slider
+    // is easy to grab on a phone.
+    const rowsTop = raceY + raceRowH + dividerH + padY / 2;
+    const iconW = 30;
+    const nameW = Math.round(panelW * 0.22);
+    const countW = 56;
+    const buildClassRects = (px) => {
       const rows = [];
       for (let i = 0; i < CUSTOM_CLASSES.length; i++) {
-        const y = countersStartY + i * rowH;
         const klass = CUSTOM_CLASSES[i];
-        const rowLeft = px + 12;
-        const labelRect = { x: rowLeft, y, w: labelW, h: rowH - 4, klass, kind: "label" };
-        const minusRect = { x: rowLeft + labelW + 6, y, w: minusW, h: rowH - 4, klass, kind: "minus" };
-        const countRect = { x: minusRect.x + minusW + 4, y, w: countW, h: rowH - 4, klass, kind: "count" };
-        const plusRect = { x: countRect.x + countW + 4, y, w: plusW, h: rowH - 4, klass, kind: "plus" };
-        rows.push({ label: labelRect, minus: minusRect, count: countRect, plus: plusRect });
+        const y = rowsTop + i * (classRowH + classGap);
+        const rowLeft = px + innerPadX;
+        const rowRight = px + panelW - innerPadX;
+        const iconX = rowLeft;
+        const nameX = iconX + iconW + 6;
+        const countX = rowRight - countW;
+        const trackX = nameX + nameW + 12;
+        const trackW = countX - trackX - 12;
+        const trackVisY = y + Math.round((classRowH - 8) / 2);
+        rows.push({
+          klass,
+          row:   { x: rowLeft, y, w: rowRight - rowLeft, h: classRowH },
+          icon:  { x: iconX,   y, w: iconW,             h: classRowH },
+          name:  { x: nameX,   y, w: nameW,             h: classRowH },
+          track: { x: trackX,  y: trackVisY, w: trackW, h: 8,
+                   // hitX/hitY/hitW/hitH gives a touch-friendly
+                   // taller hit area than the 8px visible track.
+                   hitX: trackX - 4, hitY: y, hitW: trackW + 8, hitH: classRowH },
+          count: { x: countX,  y, w: countW,            h: classRowH },
+        });
       }
       return rows;
     };
-    this.customRects.allied.counters = buildCounterRects(panelLeftX);
-    this.customRects.hostile.counters = buildCounterRects(panelRightX);
+    this.customRects.allied.counters = buildClassRects(panelLeftX);
+    this.customRects.hostile.counters = buildClassRects(panelRightX);
 
-    // Footer buttons (CANCEL, START).
-    const btnW = 140, btnH = 50;
-    const btnY = panelY + panelH + 24;
-    this.customRects.cancel = { x: viewW / 2 - btnW - 12, y: btnY, w: btnW, h: btnH };
-    this.customRects.start = { x: viewW / 2 + 12, y: btnY, w: btnW, h: btnH };
+    // Footer (CANCEL / START) plus the total readout line above them.
+    const btnW = 160, btnH = 52;
+    const btnY = overlayY + overlayH - padY - btnH;
+    this.customRects.cancel = { x: viewW / 2 - btnW - 16, y: btnY, w: btnW, h: btnH };
+    this.customRects.start  = { x: viewW / 2 + 16,        y: btnY, w: btnW, h: btnH };
+    this._customTotalsY = btnY - 16;
   }
 
   _drawCustomOverlay(ctx, viewW, viewH) {
-    // Full-screen scrim so background menu doesn't bleed clicks visually.
-    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    // Full-screen scrim — keeps the background visible but desaturated
+    // so the overlay reads as a focused modal.
+    ctx.fillStyle = "rgba(2,8,18,0.86)";
     ctx.fillRect(0, 0, viewW, viewH);
 
     const p = this.customRects.panel;
-    ctx.fillStyle = "rgba(10,18,28,0.95)";
+    // Outer overlay card: same chrome family as the rest of the HUD
+    // (rgba(8,16,28,0.85) + #5af border) so the overlay feels native
+    // to the game's UI rather than a separate dialog system.
+    ctx.fillStyle = "rgba(8,16,28,0.92)";
     ctx.fillRect(p.x, p.y, p.w, p.h);
     ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x, p.y, p.w, p.h);
+    // Top accent rule — same trick as the side strip / target panel.
+    ctx.fillStyle = "#5af";
+    ctx.fillRect(p.x, p.y, p.w, 3);
 
+    // Title block: large wordmark + thin accent + subtitle.
     ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 24px system-ui, sans-serif";
-    ctx.fillText("CUSTOM MATCH", viewW / 2, p.y + 26);
+    ctx.fillStyle = "#e6f4ff";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.fillText("CUSTOM MATCH", viewW / 2, p.y + 38);
+    ctx.fillStyle = "#7bd";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText("PICK RACE · DRAG SLIDERS TO SET FLEET", viewW / 2, p.y + 58);
 
-    this._drawCustomSide(ctx, "ALLIED", this.customRects.allied,
+    this._drawCustomSide(ctx, "ALLIED", "blue", this.customRects.allied,
       this.customAlliedRace, this.customBlueCounts);
-    this._drawCustomSide(ctx, "HOSTILE", this.customRects.hostile,
+    this._drawCustomSide(ctx, "HOSTILE", "red", this.customRects.hostile,
       this.customHostileRace, this.customRedCounts);
 
-    // Footer buttons.
+    // Combined totals line — sits above the action buttons so it can't
+    // be missed when you're about to start a match that would melt the
+    // device. Color graded: blue under 200, soft amber 200–400, hot
+    // orange past 400 (rough "this will chug" threshold).
+    const blueTotal = totalShipCount(this.customBlueCounts);
+    const redTotal = totalShipCount(this.customRedCounts);
+    const totalAll = blueTotal + redTotal;
+    let totalsColor = "#9bd";
+    if (totalAll > 400) totalsColor = "#f97";
+    else if (totalAll > 200) totalsColor = "#fc8";
+    ctx.fillStyle = totalsColor;
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText(
+      `Total fleet · Allied ${blueTotal}  ·  Hostile ${redTotal}  ·  ${totalAll} ships`,
+      viewW / 2, this._customTotalsY,
+    );
+
+    // Footer buttons — match the rest of the menu's button language so
+    // CANCEL/START aren't visually different from the main START on the
+    // previous screen.
     const cancel = this.customRects.cancel;
-    ctx.fillStyle = "rgba(60,30,30,0.85)";
+    ctx.fillStyle = "rgba(60,30,30,0.92)";
     ctx.fillRect(cancel.x, cancel.y, cancel.w, cancel.h);
-    ctx.strokeStyle = "#c66";
+    ctx.strokeStyle = "#e88";
     ctx.lineWidth = 2;
     ctx.strokeRect(cancel.x, cancel.y, cancel.w, cancel.h);
-    ctx.fillStyle = "#fcc";
+    ctx.fillStyle = "#fdd";
     ctx.font = "bold 18px system-ui, sans-serif";
     ctx.fillText("CANCEL", cancel.x + cancel.w / 2, cancel.y + cancel.h / 2 + 6);
 
     const start = this.customRects.start;
-    ctx.fillStyle = "rgba(60,140,90,0.92)";
+    const startBg = ctx.createLinearGradient(0, start.y, 0, start.y + start.h);
+    startBg.addColorStop(0, "rgba(80,170,110,0.95)");
+    startBg.addColorStop(1, "rgba(40,110,75,0.95)");
+    ctx.fillStyle = startBg;
     ctx.fillRect(start.x, start.y, start.w, start.h);
-    ctx.strokeStyle = "#9f8";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#bff";
+    ctx.lineWidth = 2;
     ctx.strokeRect(start.x, start.y, start.w, start.h);
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(start.x + 2, start.y + 2, start.w - 4, 1);
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 20px system-ui, sans-serif";
-    ctx.fillText("START", start.x + start.w / 2, start.y + start.h / 2 + 7);
-
-    // Total-fleet hint: tells the player roughly what they're spawning so
-    // they don't accidentally pick numbers that melt their phone.
-    const blueTotal = totalShipCount(this.customBlueCounts);
-    const redTotal = totalShipCount(this.customRedCounts);
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillStyle = blueTotal + redTotal > 400 ? "#fa8" : "#9bd";
-    ctx.fillText(
-      `Allied ${blueTotal} ships  ·  Hostile ${redTotal} ships  ·  total ${blueTotal + redTotal}`,
-      viewW / 2, start.y + start.h + 22,
-    );
+    ctx.font = "bold 22px system-ui, sans-serif";
+    ctx.fillText("START", start.x + start.w / 2, start.y + start.h / 2 + 8);
+    ctx.textAlign = "left";
   }
 
-  _drawCustomSide(ctx, title, sideRects, raceKey, counts) {
-    const firstChip = sideRects.race[0];
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#9bd";
-    ctx.font = "bold 12px system-ui, sans-serif";
-    ctx.fillText(title, (firstChip.x + sideRects.race[1].x + sideRects.race[1].w) / 2,
-      firstChip.y - 10);
+  _drawCustomSide(ctx, title, side, sideRects, raceKey, counts) {
+    const panel = sideRects.panel;
+    const accent = SIDES[side].primary;
+    // Inner panel chrome — slightly lifted off the overlay backdrop so
+    // each side reads as a discrete sub-card.
+    ctx.fillStyle = "rgba(14,24,38,0.85)";
+    ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
+    ctx.strokeStyle = "rgba(120,180,220,0.25)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
+    // Side-tinted accent rule on the outward edge (left=ALLIED on left
+    // edge; right=HOSTILE on right edge) — visually mirrors the HUD
+    // side strips at the top of the screen.
+    const isLeft = title === "ALLIED";
+    ctx.fillStyle = accent;
+    if (isLeft) ctx.fillRect(panel.x, panel.y, 3, panel.h);
+    else ctx.fillRect(panel.x + panel.w - 3, panel.y, 3, panel.h);
 
-    // Race chips.
-    for (const r of sideRects.race) {
-      this._drawChip(ctx, r, r.key === raceKey, RACES[r.key].name, RACES[r.key].tagline || "");
+    // Header strip: ALLIED / HOSTILE label + currently selected race
+    // name on the same line. Big, easy to scan.
+    const header = sideRects.header;
+    ctx.textAlign = "left";
+    ctx.fillStyle = accent;
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText(title, header.x + 16, header.y + 22);
+    ctx.fillStyle = "#cdf";
+    ctx.font = "bold 17px system-ui, sans-serif";
+    ctx.fillText((RACES[raceKey] && RACES[raceKey].name) || "—",
+      header.x + 16, header.y + 38);
+    // Tagline on the right of the header.
+    const tagline = (RACES[raceKey] && RACES[raceKey].tagline) || "";
+    if (tagline) {
+      ctx.fillStyle = "#7bd";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(tagline, header.x + header.w - 16, header.y + 38);
     }
 
-    // Counter rows.
-    ctx.textAlign = "left";
+    // Header divider rule.
+    ctx.fillStyle = "rgba(120,180,220,0.18)";
+    ctx.fillRect(panel.x + 12, header.y + header.h, panel.w - 24, 1);
+
+    // Race chips: 1×4 horizontal row.
+    for (const r of sideRects.race) {
+      this._drawRaceMiniChip(ctx, r, r.key === raceKey, RACES[r.key].name);
+    }
+
+    // Divider rule between race chips and class sliders.
+    const firstRow = sideRects.counters[0];
+    ctx.fillStyle = "rgba(120,180,220,0.18)";
+    ctx.fillRect(panel.x + 12, firstRow.row.y - 8, panel.w - 24, 1);
+
+    // Class slider rows.
     for (let i = 0; i < sideRects.counters.length; i++) {
       const row = sideRects.counters[i];
       const klass = CUSTOM_CLASSES[i];
-      ctx.fillStyle = "#9bd";
-      ctx.font = "bold 14px system-ui, sans-serif";
-      ctx.fillText(classDisplayName(klass), row.label.x, row.label.y + row.label.h / 2 + 5);
-
-      // [-] button.
-      ctx.textAlign = "center";
-      const drawBtn = (r, label) => {
-        ctx.fillStyle = "rgba(20,40,60,0.9)";
-        ctx.fillRect(r.x, r.y, r.w, r.h);
-        ctx.strokeStyle = "#7df";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(r.x, r.y, r.w, r.h);
-        ctx.fillStyle = "#cef";
-        ctx.font = "bold 18px system-ui, sans-serif";
-        ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 6);
-      };
-      drawBtn(row.minus, "−");
-      drawBtn(row.plus, "+");
-
-      // Count display.
-      ctx.fillStyle = "rgba(8,16,24,0.9)";
-      ctx.fillRect(row.count.x, row.count.y, row.count.w, row.count.h);
-      ctx.strokeStyle = "#5af";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(row.count.x, row.count.y, row.count.w, row.count.h);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 16px system-ui, sans-serif";
-      ctx.fillText(String(counts[klass] || 0),
-        row.count.x + row.count.w / 2,
-        row.count.y + row.count.h / 2 + 6);
-      ctx.textAlign = "left";
+      const count = counts[klass] || 0;
+      this._drawClassSliderRow(ctx, row, klass, count, accent);
     }
+
+    // Per-side total in the bottom strip.
+    const subtotal = totalShipCount(counts);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#9bd";
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.fillText(`${subtotal} SHIPS`,
+      panel.x + panel.w - 16, panel.y + panel.h - 10);
+    ctx.textAlign = "left";
+  }
+
+  // Compact race chip used inside the custom-match overlay's 1×4 row.
+  // The main menu's _drawChip is taller (label + sublabel + glow);
+  // here we just need a single-line selector with bold selected state.
+  _drawRaceMiniChip(ctx, r, selected, label) {
+    ctx.fillStyle = selected ? "rgba(70,130,170,0.85)" : "rgba(20,32,48,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = selected ? "#7df" : "rgba(120,160,200,0.45)";
+    ctx.lineWidth = selected ? 2 : 1;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = selected ? "#fff" : "#9bd";
+    ctx.font = selected
+      ? "bold 12px system-ui, sans-serif"
+      : "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 4);
+    ctx.textAlign = "left";
+  }
+
+  // Single class slider row: [icon] Name | track-with-thumb | count.
+  // Active drag receives a brighter thumb so the touch feels alive.
+  _drawClassSliderRow(ctx, row, klass, count, accent) {
+    const isDragging = this._customDrag
+      && this._customDrag.klass === klass
+      && this._customDrag.row === row;
+
+    // Class glyph badge on the left.
+    const ic = row.icon;
+    ctx.fillStyle = "rgba(20,32,48,0.85)";
+    ctx.fillRect(ic.x, ic.y + (ic.h - ic.w) / 2, ic.w, ic.w);
+    ctx.strokeStyle = "rgba(120,180,220,0.4)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ic.x, ic.y + (ic.h - ic.w) / 2, ic.w, ic.w);
+    ctx.fillStyle = "#cdf";
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(CLASS_GLYPHS[klass] || "?",
+      ic.x + ic.w / 2, ic.y + ic.h / 2 + 4);
+
+    // Class name.
+    ctx.textAlign = "left";
+    ctx.fillStyle = count > 0 ? "#e6f4ff" : "#8aa";
+    ctx.font = count > 0
+      ? "bold 13px system-ui, sans-serif"
+      : "13px system-ui, sans-serif";
+    ctx.fillText(classDisplayName(klass), row.name.x, row.name.y + row.name.h / 2 + 4);
+
+    // Slider track.
+    const t = row.track;
+    const frac = Math.max(0, Math.min(1, count / CUSTOM_MAX_PER_CLASS));
+    // Track background.
+    ctx.fillStyle = "rgba(10,18,28,0.95)";
+    ctx.fillRect(t.x, t.y, t.w, t.h);
+    ctx.strokeStyle = "rgba(120,180,220,0.35)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(t.x, t.y, t.w, t.h);
+    // Filled portion.
+    const fillW = Math.round(t.w * frac);
+    if (fillW > 0) {
+      const grad = ctx.createLinearGradient(t.x, 0, t.x + t.w, 0);
+      grad.addColorStop(0, accent);
+      grad.addColorStop(1, count > 40 ? "#fc8" : accent);
+      ctx.fillStyle = grad;
+      ctx.fillRect(t.x + 1, t.y + 1, Math.max(0, fillW - 2), t.h - 2);
+    }
+    // Tick marks at 10/20/30/40/50 so the player has a coarse mental
+    // scale when dragging.
+    ctx.fillStyle = "rgba(120,180,220,0.25)";
+    for (let v = 10; v < CUSTOM_MAX_PER_CLASS; v += 10) {
+      const tx = t.x + Math.round((v / CUSTOM_MAX_PER_CLASS) * t.w);
+      ctx.fillRect(tx, t.y + 1, 1, t.h - 2);
+    }
+    // Thumb.
+    const thumbX = t.x + Math.round(t.w * frac);
+    const thumbY = t.y + t.h / 2;
+    const thumbR = isDragging ? 9 : 7;
+    ctx.beginPath();
+    ctx.arc(thumbX, thumbY, thumbR + 1, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(thumbX, thumbY, thumbR, 0, Math.PI * 2);
+    ctx.fillStyle = count > 0 ? "#fff" : "#bcd";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(thumbX, thumbY, thumbR - 3, 0, Math.PI * 2);
+    ctx.fillStyle = count > 40 ? "#fc8" : accent;
+    ctx.fill();
+
+    // Count badge on the right.
+    const c = row.count;
+    ctx.textAlign = "right";
+    ctx.fillStyle = count > 0 ? "#fff" : "#566";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText(String(count), c.x + c.w, c.y + c.h / 2 + 6);
+    ctx.fillStyle = "#7bd";
+    ctx.font = "9px system-ui, sans-serif";
+    ctx.fillText(`/ ${CUSTOM_MAX_PER_CLASS}`, c.x + c.w, c.y + c.h / 2 + 18);
+    ctx.textAlign = "left";
   }
 
   // Returns true if the overlay handled the click, false otherwise.
   _clickCustomOverlay(x, y) {
     if (!this.showCustom) return false;
-    if (this._hit(this.customRects.cancel, x, y)) { this.showCustom = false; return true; }
+    if (this._hit(this.customRects.cancel, x, y)) {
+      this.showCustom = false;
+      this._customDrag = null;
+      return true;
+    }
     if (this._hit(this.customRects.start, x, y)) {
+      this._customDrag = null;
       // Pass through to _emitStart via the main click path; the caller
       // (this.click below) handles the energy check + start emission.
       return "start";
@@ -1347,28 +1549,57 @@ export class StartMenu {
         return true;
       }
     }
-    // Counter buttons.
-    const tweakRow = (rows, counts) => {
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const klass = CUSTOM_CLASSES[i];
-        if (this._hit(row.minus, x, y)) {
-          counts[klass] = Math.max(0, (counts[klass] || 0) - 1);
-          return true;
-        }
-        if (this._hit(row.plus, x, y)) {
-          counts[klass] = Math.min(CUSTOM_MAX_PER_CLASS, (counts[klass] || 0) + 1);
-          return true;
-        }
-      }
-      return false;
-    };
-    if (tweakRow(this.customRects.allied.counters, this.customBlueCounts)) return true;
-    if (tweakRow(this.customRects.hostile.counters, this.customRedCounts)) return true;
+    // Slider tracks. Hit zone is the row-tall band around the visible
+    // 8px track, so a tap doesn't need pixel precision on a phone. A
+    // tap snaps the count to the pointer x; the same tap also opens a
+    // drag so a subsequent move keeps adjusting until pointer-up.
+    if (this._tryStartSliderDrag(this.customRects.allied.counters, this.customBlueCounts, "allied", x, y)) return true;
+    if (this._tryStartSliderDrag(this.customRects.hostile.counters, this.customRedCounts, "hostile", x, y)) return true;
     // Click on the panel chrome itself: swallow so the underlying menu
     // doesn't catch it. Click outside the panel: also swallow — closing
     // by mis-click would be frustrating.
     return true;
+  }
+
+  _tryStartSliderDrag(rows, counts, side, x, y) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const t = row.track;
+      if (x >= t.hitX && x <= t.hitX + t.hitW
+          && y >= t.hitY && y <= t.hitY + t.hitH) {
+        const klass = CUSTOM_CLASSES[i];
+        this._customDrag = { side, klass, row, counts };
+        this._applySliderValue(counts, klass, row, x);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _applySliderValue(counts, klass, row, pointerX) {
+    const t = row.track;
+    const frac = Math.max(0, Math.min(1, (pointerX - t.x) / t.w));
+    counts[klass] = Math.round(frac * CUSTOM_MAX_PER_CLASS);
+  }
+
+  // Called from InputManager.onMove while a slider drag is active.
+  // Returns true if the move was consumed (i.e., we are dragging) so
+  // the caller can short-circuit any default move behavior.
+  pointerMove(x, y) {
+    void y;  // sliders are 1D; vertical motion is ignored
+    if (!this._customDrag) return false;
+    const d = this._customDrag;
+    this._applySliderValue(d.counts, d.klass, d.row, x);
+    return true;
+  }
+
+  // Called from InputManager.onUp. Ends the active slider drag.
+  pointerUp() {
+    if (this._customDrag) {
+      this._customDrag = null;
+      return true;
+    }
+    return false;
   }
 
   _drawChip(ctx, r, selected, label, sublabel) {
@@ -1549,10 +1780,22 @@ export class InputManager {
     if (e.pointerType !== "touch") {
       this.mouse.x = x; this.mouse.y = y;
     }
+    // Pre-match menu owns the pointer while open — sliders inside the
+    // Custom Match overlay need move events to drag. Returns false
+    // when nothing is being dragged so we don't swallow stick input
+    // (which can't reach this branch anyway, since menu is exclusive).
+    if (this.menuActive) {
+      this.startMenu.pointerMove(x, y);
+      return;
+    }
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
   }
   onUp(e) {
+    if (this.menuActive) {
+      this.startMenu.pointerUp();
+      return;
+    }
     if (this.left.pointerId === e.pointerId) this.left.end();
     else if (this.right.pointerId === e.pointerId) this.right.end();
     if (this.missileBtn.pointerId === e.pointerId) this.missileBtn.end();

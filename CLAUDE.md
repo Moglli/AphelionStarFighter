@@ -122,6 +122,94 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Custom Match: slider-driven roster redesign
+
+**What changed**
+
+The Custom Match overlay was cramped (320px panels, 6 rows of
+`[−] [count] [+]` micro-buttons) and slow to use — 60 taps to max a
+single class. Rebuilt as a wider, two-panel layout with proper sliders
+per class.
+
+1. **Sliders replace the +/- pair.** Each per-class row is now
+   `[icon] Name | track-with-thumb | count`. Track is touch-friendly
+   (8px visible, full-row hit zone), gradient fill picks up the side
+   colour (blue/red), tick marks every 10 ships, thumb grows when
+   actively dragged. Tap-to-snap and tap-drag both supported.
+2. **Wider panels** — 460px each (down to 280 on narrow viewports)
+   instead of 320. Gap between panels tightened from 40 → 24. Overall
+   overlay is ~990px on desktop vs the old ~700px.
+3. **Header strip per side** — `ALLIED / HOSTILE` label + currently
+   selected race name + tagline on a single line, with a side-tinted
+   accent rule along the outer edge of each panel that mirrors the
+   in-match roster strips.
+4. **Race row collapsed to 1×4** instead of 2×2, so picking a race is
+   a single horizontal scan rather than reading a grid.
+5. **Title + subtitle** ("PICK RACE · DRAG SLIDERS TO SET FLEET") and
+   a colour-graded combined totals line above the buttons. CANCEL/START
+   buttons match the main menu's gradient/red-pill language.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | New `CLASS_GLYPHS` lookup. `_customDrag` state on the menu. `_layoutCustomOverlay` rewritten — wider, with `track.hitX/Y/W/H` plus visible track rect, per-side `panel` + `header` rects, `_customTotalsY` for the combined readout. `_drawCustomOverlay` + `_drawCustomSide` rewritten in the new chrome language. New `_drawRaceMiniChip`, `_drawClassSliderRow`. `_clickCustomOverlay` now starts a slider drag via `_tryStartSliderDrag`/`_applySliderValue`. New `StartMenu.pointerMove`/`pointerUp` called from `InputManager.onMove`/`onUp` while `menuActive` so a held drag keeps adjusting. |
+
+**Design decisions / gotchas**
+
+- **Tap-to-snap + drag are the same gesture.** Pointer-down inside
+  the track hit-zone both sets the value AND opens a drag, so a
+  user dragging across a track doesn't have to first land on the
+  thumb. If you ever add a "hold for fine-grain" mode, make the
+  drag-open behavior conditional or it'll fight the new gesture.
+- **Slider hit zone is a row-tall band, not the visible 8px track.**
+  `track.hitX/hitY/hitW/hitH` extends 4px on each side and the full
+  row height vertically. Trying to drop a fingertip on an 8px
+  visible track on a phone is hopeless; the inflated hit zone is
+  why this redesign earns its keep.
+- **`_customDrag` is cleared on CANCEL, START, and pointer-up.**
+  Don't add a path that closes the overlay without clearing it —
+  a stale drag would re-engage the next time the overlay opens
+  if the same slider rects survived a relayout (and they do; the
+  layout function regenerates rects from scratch but the drag
+  object holds a *reference* to the previous row).
+- **`pointerMove`/`pointerUp` only fire while `menuActive`.** Don't
+  hoist them out — gameplay relies on the virtual-stick `move`/`end`
+  branches inside the same handlers. The early-return in onMove/onUp
+  is gated on `menuActive` so live-game stick handling is untouched.
+- **Min panel width 280.** Below that the track shrinks below ~70px
+  and sliders become unusable. The overlay will overflow viewports
+  narrower than ~610 in landscape; the codebase targets
+  landscape/iPad-class anyway. If portrait-phone is a real surface,
+  the next pass is to stack the two panels vertically instead.
+- **Race chip click still re-seeds counts** to the new race's
+  default roster — unchanged from the previous version. Players who
+  want to keep their slider values across a race swap should swap
+  race FIRST, then tune.
+- **Subtitle text claims "DRAG SLIDERS".** If you ever change the
+  interaction (e.g., add a +/- back), update the subtitle too — it's
+  a discoverability cue, not just decoration.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Open menu → Custom → CONFIGURE…. Overlay now spans ~990px on
+  desktop, with bigger panels and clear ALLIED / HOSTILE headers.
+- Drag a slider thumb — count updates as the thumb moves; thumb
+  grows slightly while dragged.
+- Tap anywhere on a slider's row (not just the thumb) — the count
+  snaps to that x. A continued drag keeps adjusting.
+- Tap a different race chip — counts re-seed to that race's roster,
+  sliders snap to the new values.
+- Push two sliders past 30 ships — the combined-totals line goes
+  amber once total exceeds 200, hot orange past 400.
+
 ### 2026-05-20 — HUD polish: unified panel chrome + spectator vitals
 
 **What changed**
