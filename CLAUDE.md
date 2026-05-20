@@ -122,6 +122,102 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Custom Match: player-configurable per-side rosters + races
+
+**What changed**
+
+`modes/custom.js` existed as a stub but had no UI to populate
+`game.customRoster`, and `startGame` never consulted the MODES
+registry — it just called `spawnRoster(game)` directly. This pass
+finishes the integration:
+
+1. **`startGame` now dispatches via `MODES[mode].setup`** with
+   `{ spawnRoster, promotePlayer }` helpers. Existing modes (open,
+   defend, campaign) keep working because they fall through the
+   default branch when no hook is registered; `custom` provides
+   its own setup which overrides hostile/allied race and passes a
+   roster override into `spawnRoster`.
+2. **`spawnRoster(game, rosterOverride)`** now accepts an
+   optional `{ blue, red }` roster map. Resolution order: explicit
+   override > campaign rosters > race-defined defaults. Custom
+   and campaign both skip the fleet-size multiplier (their counts
+   are deliberate).
+3. **Custom Match overlay** in the start menu: a 4th mode chip
+   ("Custom"). Selecting it flips the main START button to
+   "CONFIGURE…", which opens a side-by-side configurator:
+   - Two panels (ALLIED / HOSTILE), each with a 2×2 race chip
+     grid (Terran / Reavers / Hegemony / Voidsworn) and six
+     per-class counter rows (fighter / bomber / frigate / cruiser
+     / battleship / carrier) with [−] [count] [+] buttons.
+   - Changing a side's race re-seeds that side's counts from the
+     race's default roster, so the player has a meaningful
+     starting point.
+   - Per-class cap of 60 to prevent runaway counts melting the
+     phone. A live total at the bottom turns orange past 400
+     total ships as a visual warning.
+   - CANCEL closes the overlay; START emits the roster bundle
+     through the normal `_emitStart` path and launches the match.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/game.js` | Import `MODES`. `startGame` accepts a `customRoster` arg, sets `game.customRoster`, and dispatches via `MODES[mode].setup` when present. `spawnRoster(game, rosterOverride = null)` takes per-side overrides; resolution order updated; fleet multiplier skipped when override or campaign is active. |
+| `src/modes/custom.js` | Setup hook now applies both `cr.alliedRace` and `cr.hostileRace`, falls back to random hostile if unset, and stops trying to pass a non-existent `game.playerKlass` arg to `promotePlayer`. Module-level JSDoc updated to document the `customRoster` shape. |
+| `src/input.js` | New `MODE_OPTIONS` entry for "custom". Added `CUSTOM_CLASSES`, `CUSTOM_MAX_PER_CLASS`, `rosterForRace()`, `totalShipCount()`, `classDisplayName()` helpers. New StartMenu state for the overlay (`showCustom`, `customAlliedRace`, `customHostileRace`, `customBlueCounts`, `customRedCounts`, `customRects`). New methods: `consumeCustomRoster`, `_layoutCustomOverlay`, `_drawCustomOverlay`, `_drawCustomSide`, `_clickCustomOverlay`. Click routing intercepts overlay clicks; START label flips to "CONFIGURE…" in custom mode; `_emitStart` bundles the custom roster when applicable. `layout()` records last viewW/H so the overlay can size itself on open. |
+| `src/main.js` | `startGame` call threads `choice.customRoster` through as the new last arg. |
+
+**Design decisions / gotchas**
+
+- **Mode dispatch is dispatch-or-fall-through, not dispatch-only.**
+  Existing modes without a `setup` hook still hit the legacy
+  `spawnRoster(game)` path. Don't refactor MODES to require a
+  hook — open/defend deliberately use the default.
+- **Race chip re-seeds counts.** Intentional. Players who want
+  to keep the previous count when swapping race should change
+  race FIRST, then tune. If this becomes annoying, gate it
+  behind a separate "Reset to default" button rather than
+  removing the re-seed.
+- **Per-class cap of 60.** A double-sided custom match with all
+  six classes at 60 = 360 base, plus escorts puts you past 500
+  ships before the player. Phones start to chug. Don't raise
+  the cap without also tuning the renderer's fill-time budget.
+- **Fleet-size multiplier deliberately bypassed for custom.**
+  The counts the player typed in are the counts they get; no
+  surprise doubling from a leftover "Huge" chip selection.
+- **Player class is always fighter.** Future enhancement could
+  add a player-class picker to the overlay; for now the existing
+  campaign/skirmish convention holds. When adding, set
+  `game.playerKlass` and pass it to `promotePlayer`.
+- **`game.playerKlass` is referenced by `custom.js` design
+  comments but not currently used.** Stub left in for the
+  picker future-work; if you remove it, also remove the JSDoc
+  hint.
+- **Overlay layout is recomputed on every open**, not on
+  resize. Resizing the window while the overlay is open will
+  leave its rects stale. Closing + reopening fixes it; not worth
+  a resize hook for an interaction this brief.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Open the menu; the GAME MODE row now has four chips ending in
+  "Custom". Select Custom — the START button reads "CONFIGURE…".
+- Click CONFIGURE… — the overlay opens with two side panels.
+  Swap the HOSTILE race chip to a different race — the counts on
+  that side re-seed to the new race's default roster.
+- Hit + on Battleship for the ALLIED side a few times; the count
+  display + the bottom total update.
+- Click START — the match launches with exactly those counts
+  (plus per-capital escort fighters — see `ESCORT_SIZE` in
+  game.js).
+
 ### 2026-05-20 — Multi-stage salvos for BB + cruiser; PD damage nerfed vs ships
 
 **What changed**

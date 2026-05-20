@@ -223,7 +223,42 @@ const MODE_OPTIONS = [
   { key: "open",     label: "Open Battle",     tagline: "Wipe the enemy fleet" },
   { key: "defend",   label: "Defend Station",  tagline: "Destroy enemy station" },
   { key: "campaign", label: "Campaign",        tagline: "100-mission tour" },
+  { key: "custom",   label: "Custom",          tagline: "Pick fleets + races" },
 ];
+
+// Roster classes editable in the Custom Match overlay. Order matters —
+// it's the row order in both side panels. Stations are intentionally
+// excluded; the Defend mode handles them.
+const CUSTOM_CLASSES = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+const CUSTOM_MAX_PER_CLASS = 60;
+
+// Pull a fresh per-class count map for the given race. Used to seed
+// counts when the player opens the overlay or switches the race chip
+// for a side. Missing entries default to 0 so adding new classes to
+// CUSTOM_CLASSES doesn't desync.
+function rosterForRace(raceKey) {
+  const race = RACES[raceKey] || RACES.terran;
+  const src = race.roster || {};
+  const out = {};
+  for (const k of CUSTOM_CLASSES) out[k] = src[k] || 0;
+  return out;
+}
+
+function totalShipCount(counts) {
+  let n = 0;
+  for (const k of CUSTOM_CLASSES) n += counts[k] || 0;
+  return n;
+}
+
+function classDisplayName(klass) {
+  if (klass === "battleship") return "Battleship";
+  if (klass === "fighter") return "Fighter";
+  if (klass === "bomber")  return "Bomber";
+  if (klass === "frigate") return "Frigate";
+  if (klass === "cruiser") return "Cruiser";
+  if (klass === "carrier") return "Carrier";
+  return klass;
+}
 
 // Fleet-size presets. `mul` is a multiplier applied to every per-class
 // count in spawnRoster (rounded, minimum 1 per non-zero class). "Huge"
@@ -259,6 +294,24 @@ export class StartMenu {
     this.refillRects = [];          // per-package click rects
     this.refillCloseRect = null;
     this.energyBarRect = null;      // clickable "refill" area in the header
+
+    // Custom Match overlay state. Opened when the player selects the
+    // Custom mode chip and clicks CONFIGURE (the START label flips in
+    // that mode). Counts seed from the picked race's default roster;
+    // changing the side's race chip re-seeds that side's counts so the
+    // player has a sensible starting point.
+    this.showCustom = false;
+    this.customAlliedRace = "terran";
+    this.customHostileRace = "terran";
+    this.customBlueCounts = rosterForRace("terran");
+    this.customRedCounts = rosterForRace("terran");
+    this.customRects = {
+      panel: null,
+      allied: { race: [], counters: [] },
+      hostile: { race: [], counters: [] },
+      start: null,
+      cancel: null,
+    };
   }
 
   setCampaign(state, onPurchase) {
@@ -272,6 +325,8 @@ export class StartMenu {
   }
 
   layout(viewW, viewH) {
+    this._lastViewW = viewW;
+    this._lastViewH = viewH;
     const chipH = 60;
     const gapX = 14;
     const rowGap = 44;
@@ -403,6 +458,22 @@ export class StartMenu {
       this.showRefill = false;
       return true;
     }
+    // Custom Match overlay also grabs all clicks while open.
+    if (this.showCustom) {
+      const result = this._clickCustomOverlay(x, y);
+      if (result === "start") {
+        // Energy gate same as the main START path.
+        if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
+          this.showRefill = true;
+          this.showCustom = false;
+          return true;
+        }
+        this._emitStart();
+        this.showCustom = false;
+        return true;
+      }
+      return true; // overlay swallows everything else
+    }
     // Energy bar opens the refill overlay.
     if (this.energyBarRect && this._hit(this.energyBarRect, x, y)) {
       this.showRefill = true;
@@ -434,6 +505,13 @@ export class StartMenu {
       }
     }
     if (this.startRect && this._hit(this.startRect, x, y)) {
+      // Custom mode: START opens the configuration overlay instead of
+      // launching. The overlay's own START launches the match.
+      if (this.selectedMode === "custom") {
+        this._layoutCustomOverlay(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showCustom = true;
+        return true;
+      }
       // Out-of-energy clicks pop the refill overlay instead of starting
       // a match. Standard F2P funnel: friction → purchase prompt.
       if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
@@ -461,6 +539,7 @@ export class StartMenu {
       race: this.selectedRace,
       mode: this.selectedMode,
       fleetMul: fleet.mul,
+      customRoster: this.selectedMode === "custom" ? this.consumeCustomRoster() : null,
     };
   }
 
@@ -563,12 +642,15 @@ export class StartMenu {
         label = this.campaign.completed
           ? "FREE SKIRMISH"
           : `START MISSION ${this.campaign.mission}`;
+      } else if (this.selectedMode === "custom") {
+        label = "CONFIGURE…";
       }
       ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
     }
 
     // Refill overlay renders last so it sits on top of everything.
     if (this.showRefill) this._drawRefillOverlay(ctx, viewW, viewH);
+    if (this.showCustom) this._drawCustomOverlay(ctx, viewW, viewH);
 
     ctx.textAlign = "left";
     ctx.restore();
@@ -697,6 +779,246 @@ export class StartMenu {
       ctx.fillText(`$${cost.toLocaleString()}`, r.x + r.w - 8, r.y + 44);
     }
     ctx.textAlign = "left";
+  }
+
+  // ---- Custom Match overlay --------------------------------------------
+  // Returns a snapshot of the configured custom roster for startGame.
+  // Shape matches what `modes/custom.js` expects.
+  consumeCustomRoster() {
+    return {
+      alliedRace: this.customAlliedRace,
+      hostileRace: this.customHostileRace,
+      blue: { ...this.customBlueCounts },
+      red: { ...this.customRedCounts },
+    };
+  }
+
+  // Compute click + draw rects for the overlay. Called every time the
+  // overlay opens so it survives viewport resizes between matches.
+  _layoutCustomOverlay(viewW, viewH) {
+    const panelW = 320;
+    const panelGap = 40;
+    const totalW = panelW * 2 + panelGap;
+    const panelLeftX = (viewW - totalW) / 2;
+    const panelRightX = panelLeftX + panelW + panelGap;
+
+    // Vertical layout: title (top), then panels, then footer buttons.
+    const rowH = 36;
+    const chipH = 32;
+    const racePad = 12;
+    const counterPad = 10;
+    const innerW = panelW - 24;
+    const panelH = racePad + chipH * 2 + 8 + counterPad + rowH * CUSTOM_CLASSES.length + 16;
+
+    const panelY = Math.max(60, viewH / 2 - panelH / 2 - 30);
+
+    this.customRects.panel = {
+      x: panelLeftX - 16, y: panelY - 38,
+      w: totalW + 32, h: panelH + 100,
+    };
+
+    // Race chip rows for each side: 2x2 grid of race chips inside each panel.
+    const raceKeys = RACE_KEYS;
+    const chipW = (innerW - 12) / 2;
+    const buildRaceRects = (px) => {
+      const out = [];
+      for (let i = 0; i < raceKeys.length; i++) {
+        const col = i % 2, row = Math.floor(i / 2);
+        out.push({
+          key: raceKeys[i],
+          x: px + 12 + col * (chipW + 12),
+          y: panelY + racePad + row * (chipH + 6),
+          w: chipW, h: chipH,
+        });
+      }
+      return out;
+    };
+    this.customRects.allied.race = buildRaceRects(panelLeftX);
+    this.customRects.hostile.race = buildRaceRects(panelRightX);
+
+    // Per-class counter rows.
+    const countersStartY = panelY + racePad + chipH * 2 + 8 + counterPad;
+    const minusW = 36, plusW = 36, countW = 50;
+    const labelW = innerW - (minusW + countW + plusW) - 24;
+
+    const buildCounterRects = (px) => {
+      const rows = [];
+      for (let i = 0; i < CUSTOM_CLASSES.length; i++) {
+        const y = countersStartY + i * rowH;
+        const klass = CUSTOM_CLASSES[i];
+        const rowLeft = px + 12;
+        const labelRect = { x: rowLeft, y, w: labelW, h: rowH - 4, klass, kind: "label" };
+        const minusRect = { x: rowLeft + labelW + 6, y, w: minusW, h: rowH - 4, klass, kind: "minus" };
+        const countRect = { x: minusRect.x + minusW + 4, y, w: countW, h: rowH - 4, klass, kind: "count" };
+        const plusRect = { x: countRect.x + countW + 4, y, w: plusW, h: rowH - 4, klass, kind: "plus" };
+        rows.push({ label: labelRect, minus: minusRect, count: countRect, plus: plusRect });
+      }
+      return rows;
+    };
+    this.customRects.allied.counters = buildCounterRects(panelLeftX);
+    this.customRects.hostile.counters = buildCounterRects(panelRightX);
+
+    // Footer buttons (CANCEL, START).
+    const btnW = 140, btnH = 50;
+    const btnY = panelY + panelH + 24;
+    this.customRects.cancel = { x: viewW / 2 - btnW - 12, y: btnY, w: btnW, h: btnH };
+    this.customRects.start = { x: viewW / 2 + 12, y: btnY, w: btnW, h: btnH };
+  }
+
+  _drawCustomOverlay(ctx, viewW, viewH) {
+    // Full-screen scrim so background menu doesn't bleed clicks visually.
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    const p = this.customRects.panel;
+    ctx.fillStyle = "rgba(10,18,28,0.95)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 24px system-ui, sans-serif";
+    ctx.fillText("CUSTOM MATCH", viewW / 2, p.y + 26);
+
+    this._drawCustomSide(ctx, "ALLIED", this.customRects.allied,
+      this.customAlliedRace, this.customBlueCounts);
+    this._drawCustomSide(ctx, "HOSTILE", this.customRects.hostile,
+      this.customHostileRace, this.customRedCounts);
+
+    // Footer buttons.
+    const cancel = this.customRects.cancel;
+    ctx.fillStyle = "rgba(60,30,30,0.85)";
+    ctx.fillRect(cancel.x, cancel.y, cancel.w, cancel.h);
+    ctx.strokeStyle = "#c66";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cancel.x, cancel.y, cancel.w, cancel.h);
+    ctx.fillStyle = "#fcc";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.fillText("CANCEL", cancel.x + cancel.w / 2, cancel.y + cancel.h / 2 + 6);
+
+    const start = this.customRects.start;
+    ctx.fillStyle = "rgba(60,140,90,0.92)";
+    ctx.fillRect(start.x, start.y, start.w, start.h);
+    ctx.strokeStyle = "#9f8";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(start.x, start.y, start.w, start.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 20px system-ui, sans-serif";
+    ctx.fillText("START", start.x + start.w / 2, start.y + start.h / 2 + 7);
+
+    // Total-fleet hint: tells the player roughly what they're spawning so
+    // they don't accidentally pick numbers that melt their phone.
+    const blueTotal = totalShipCount(this.customBlueCounts);
+    const redTotal = totalShipCount(this.customRedCounts);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = blueTotal + redTotal > 400 ? "#fa8" : "#9bd";
+    ctx.fillText(
+      `Allied ${blueTotal} ships  ·  Hostile ${redTotal} ships  ·  total ${blueTotal + redTotal}`,
+      viewW / 2, start.y + start.h + 22,
+    );
+  }
+
+  _drawCustomSide(ctx, title, sideRects, raceKey, counts) {
+    const firstChip = sideRects.race[0];
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#9bd";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.fillText(title, (firstChip.x + sideRects.race[1].x + sideRects.race[1].w) / 2,
+      firstChip.y - 10);
+
+    // Race chips.
+    for (const r of sideRects.race) {
+      this._drawChip(ctx, r, r.key === raceKey, RACES[r.key].name, RACES[r.key].tagline || "");
+    }
+
+    // Counter rows.
+    ctx.textAlign = "left";
+    for (let i = 0; i < sideRects.counters.length; i++) {
+      const row = sideRects.counters[i];
+      const klass = CUSTOM_CLASSES[i];
+      ctx.fillStyle = "#9bd";
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.fillText(classDisplayName(klass), row.label.x, row.label.y + row.label.h / 2 + 5);
+
+      // [-] button.
+      ctx.textAlign = "center";
+      const drawBtn = (r, label) => {
+        ctx.fillStyle = "rgba(20,40,60,0.9)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = "#7df";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.fillStyle = "#cef";
+        ctx.font = "bold 18px system-ui, sans-serif";
+        ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 6);
+      };
+      drawBtn(row.minus, "−");
+      drawBtn(row.plus, "+");
+
+      // Count display.
+      ctx.fillStyle = "rgba(8,16,24,0.9)";
+      ctx.fillRect(row.count.x, row.count.y, row.count.w, row.count.h);
+      ctx.strokeStyle = "#5af";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(row.count.x, row.count.y, row.count.w, row.count.h);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 16px system-ui, sans-serif";
+      ctx.fillText(String(counts[klass] || 0),
+        row.count.x + row.count.w / 2,
+        row.count.y + row.count.h / 2 + 6);
+      ctx.textAlign = "left";
+    }
+  }
+
+  // Returns true if the overlay handled the click, false otherwise.
+  _clickCustomOverlay(x, y) {
+    if (!this.showCustom) return false;
+    if (this._hit(this.customRects.cancel, x, y)) { this.showCustom = false; return true; }
+    if (this._hit(this.customRects.start, x, y)) {
+      // Pass through to _emitStart via the main click path; the caller
+      // (this.click below) handles the energy check + start emission.
+      return "start";
+    }
+    // Race chip clicks: re-seed that side's counts from the new race's
+    // default roster so the player has a meaningful starting point.
+    for (const r of this.customRects.allied.race) {
+      if (this._hit(r, x, y) && this.customAlliedRace !== r.key) {
+        this.customAlliedRace = r.key;
+        this.customBlueCounts = rosterForRace(r.key);
+        return true;
+      }
+    }
+    for (const r of this.customRects.hostile.race) {
+      if (this._hit(r, x, y) && this.customHostileRace !== r.key) {
+        this.customHostileRace = r.key;
+        this.customRedCounts = rosterForRace(r.key);
+        return true;
+      }
+    }
+    // Counter buttons.
+    const tweakRow = (rows, counts) => {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const klass = CUSTOM_CLASSES[i];
+        if (this._hit(row.minus, x, y)) {
+          counts[klass] = Math.max(0, (counts[klass] || 0) - 1);
+          return true;
+        }
+        if (this._hit(row.plus, x, y)) {
+          counts[klass] = Math.min(CUSTOM_MAX_PER_CLASS, (counts[klass] || 0) + 1);
+          return true;
+        }
+      }
+      return false;
+    };
+    if (tweakRow(this.customRects.allied.counters, this.customBlueCounts)) return true;
+    if (tweakRow(this.customRects.hostile.counters, this.customRedCounts)) return true;
+    // Click on the panel chrome itself: swallow so the underlying menu
+    // doesn't catch it. Click outside the panel: also swallow — closing
+    // by mis-click would be frustrating.
+    return true;
   }
 
   _drawChip(ctx, r, selected, label, sublabel) {

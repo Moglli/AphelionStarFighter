@@ -109,11 +109,12 @@ function frame(now) {
         game.campaign.lastReward = mc.reward;
         game.campaign.missionNumber = mc.mission;
       } else {
-        // Open / Defend, or Campaign-completed (falls through to a free
-        // skirmish at the player's chosen map size + fleet size).
+        // Open / Defend / Custom, or Campaign-completed (falls through
+        // to a free skirmish at the player's chosen map size + fleet
+        // size). Custom carries its full roster bundle through.
         const mode = choice.mode === "campaign" ? "open" : choice.mode;
         startGame(game, choice.mapW, choice.mapH, choice.race, mode, null,
-                  choice.fleetMul);
+                  choice.fleetMul, choice.customRoster || null);
       }
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();

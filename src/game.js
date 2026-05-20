@@ -3,6 +3,7 @@ import { createShip, updateShip } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey, getStationDef } from "./races.js";
+import { MODES } from "./modes/index.js";
 import {
   worldToLocal, findHitModuleLocal, findSplashModulesLocal, moduleWorldPos,
 } from "./modules.js";
@@ -93,7 +94,7 @@ export function createGame() {
 // counts so mission difficulty can scale independently of race. The
 // player ship is then promoted with `playerOverride` (a deepMerge-style
 // patch describing purchased upgrades).
-export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null, fleetMul = 1) {
+export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null, fleetMul = 1, customRoster = null) {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -108,35 +109,56 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.spectateCamera = { x: 0, y: 0, locked: true };
   game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
   game.hostileRace = randomRaceKey();
-  game.mode = mode === "defend" ? "defend" : (mode === "campaign" ? "campaign" : "open");
+  // Mode whitelist: legacy values map to "open"; anything in MODES is
+  // accepted verbatim. "campaign" stays as a special string so the
+  // existing campaign-only branches in spawnRoster keep working.
+  const knownLegacy = mode === "defend" || mode === "campaign" || mode === "open";
+  game.mode = knownLegacy ? mode : (MODES[mode] ? mode : "open");
   game.state = "playing";
   game.campaign = campaign || null;
   game.playerSpecOverride = (campaign && campaign.playerOverride) || null;
+  game.customRoster = customRoster || null;
   game.kills = 0;
   // Fleet-size multiplier from the menu. Clamped so a bad save / future
   // typo can't push the fleet to a frame-melting size.
   game.fleetMul = Math.max(0.25, Math.min(4, fleetMul));
-  spawnRoster(game);
+
+  // Mode hook (custom, future modes): given a chance to override the
+  // hostile race + roster before spawn. Falls back to the default
+  // spawnRoster + promotePlayer flow if no hook fires.
+  const modeHooks = MODES[game.mode];
+  if (modeHooks && typeof modeHooks.setup === "function") {
+    modeHooks.setup(game, {
+      spawnRoster: (g, rosters) => spawnRoster(g, rosters),
+      promotePlayer: (g) => promotePlayer(g),
+    });
+  } else {
+    spawnRoster(game);
+  }
 }
 
-function spawnRoster(game) {
+function spawnRoster(game, rosterOverride = null) {
   for (const side of ["blue", "red"]) {
     const race = side === "blue" ? game.alliedRace : game.hostileRace;
-    // Campaign mode overrides race-defined rosters with mission-defined
-    // counts so the difficulty curve drives composition, not race choice.
+    // Resolution order: explicit override (custom mode) > campaign
+    // rosters > race-defined defaults. Override and campaign both
+    // bypass the fleet-size multiplier — those numbers were chosen
+    // deliberately.
     let roster;
-    if (game.campaign) {
+    if (rosterOverride && rosterOverride[side]) {
+      roster = rosterOverride[side];
+    } else if (game.campaign) {
       roster = side === "blue" ? game.campaign.allies : game.campaign.enemies;
     } else {
       roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
     }
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
-    // Apply fleet-size multiplier. Campaign mode skips this (the
-    // mission's own counts win); free skirmish + Defend scale per the
-    // menu chip. Every non-zero class is guaranteed at least one ship
-    // so Small fleets don't accidentally drop a whole class.
-    const mul = game.campaign ? 1 : (game.fleetMul || 1);
+    // Apply fleet-size multiplier. Campaign + custom modes skip this
+    // (the rosters are hand-set); free skirmish + Defend scale per
+    // the menu chip. Every non-zero class is guaranteed at least one
+    // ship so Small fleets don't accidentally drop a whole class.
+    const mul = (game.campaign || rosterOverride) ? 1 : (game.fleetMul || 1);
     for (const [klass, count] of Object.entries(roster)) {
       if (count <= 0) continue;
       const scaled = Math.max(1, Math.round(count * mul));
