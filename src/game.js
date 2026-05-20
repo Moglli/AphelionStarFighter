@@ -19,15 +19,19 @@ const FIGHTER_PACK_SIZE = 5;
 const BOMBER_PACK_SIZE = 2;
 const PACK_CLUSTER_RADIUS = 130;
 
-// Every escortable capital spawns with a tight fighter escort. Escorts
+// Every escortable ship spawns with a tight fighter escort. Escorts
 // share a packId so the pack AI engages them as a wing centred on their
 // charge, and the pack target picker prioritises bombers so any bomber
-// threatening the capital gets swatted before it can deliver its payload.
+// threatening the charge gets swatted before it can deliver its payload.
+// Bombers also rate an escort (small but enough to ward off lone
+// interceptors) — they're the second-most-valuable strike asset after
+// the capitals and were getting picked off solo before.
 const ESCORT_SIZE = {
+  bomber: 2,
   frigate: 5,
   cruiser: 10,
-  battleship: 15,
-  carrier: 10,
+  battleship: 10,
+  carrier: 15,
 };
 
 const PACK_ROLES = [
@@ -256,6 +260,7 @@ function spawnFighterPacks(game, side, race, zone, count, facing) {
 // their AI targets capitals directly, and they're meant to be the "loud"
 // threat that pulls fighter attention.
 function spawnBomberPairs(game, side, race, zone, count, facing) {
+  const escortSize = ESCORT_SIZE.bomber || 0;
   let remaining = count;
   while (remaining > 0) {
     const pairSize = Math.min(BOMBER_PACK_SIZE, remaining);
@@ -268,7 +273,7 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
         y: center.y + Math.sin(ang) * dist,
       };
       const heading = facing + (Math.random() - 0.5) * 0.2;
-      const ship = createShip({
+      const bomber = createShip({
         klass: "bomber",
         race,
         side,
@@ -276,7 +281,33 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
         heading,
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
       });
-      game.ships.push(ship);
+      game.ships.push(bomber);
+
+      // Each bomber gets its own escort wing so the pack AI keeps them
+      // glued to that specific bomber instead of drifting across the
+      // pair. Same pack-role as capital escorts — hunt-fighter — so the
+      // existing target picker upgrades them to an enemy fighter
+      // threatening their charge.
+      if (escortSize > 0) {
+        const packId = nextPackId++;
+        const ringR = bomber.spec.radius + Math.max(40, escortSize * 8);
+        for (let j = 0; j < escortSize; j++) {
+          const eang = (j / escortSize) * Math.PI * 2 + Math.PI / 2;
+          const epos = {
+            x: pos.x + Math.cos(eang) * ringR,
+            y: pos.y + Math.sin(eang) * ringR,
+          };
+          const eheading = facing + (Math.random() - 0.5) * 0.3;
+          const escort = createShip({
+            klass: "fighter", race, side, pos: epos, heading: eheading,
+            controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+          });
+          escort.packId = packId;
+          escort.packRole = "hunt-fighter";
+          escort.escortOf = bomber.id;
+          game.ships.push(escort);
+        }
+      }
     }
     remaining -= pairSize;
   }
