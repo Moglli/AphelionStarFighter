@@ -152,13 +152,23 @@ export class GameAudio {
   }
 
   toggleMute() {
-    this.muted = !this.muted;
+    this.setMuted(!this.muted);
+  }
+
+  // Explicit setter — used by the settings overlay and the boot-time
+  // restore from saveStore. Idempotent: a no-op when the requested
+  // state matches the current one (saves a needless gain ramp).
+  setMuted(m) {
+    if (this.muted === m) return;
+    this.muted = m;
     if (this.master) {
       const now = this.ctx.currentTime;
       this.master.gain.cancelScheduledValues(now);
       this.master.gain.linearRampToValueAtTime(this.muted ? 0 : 0.32, now + 0.05);
     }
   }
+
+  isMuted() { return this.muted; }
 
   // Lookahead scheduler — Chris Wilson's classic Web Audio pattern.
   // Wakes every 25 ms and queues every step whose start time falls

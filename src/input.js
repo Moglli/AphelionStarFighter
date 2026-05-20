@@ -312,6 +312,21 @@ export class StartMenu {
       start: null,
       cancel: null,
     };
+
+    // Settings overlay — wired to main.js via setSettings(). Reads
+    // live state through a getter (so the overlay always reflects what
+    // the live audio graph currently has) and writes via a patch
+    // callback (so persistence happens through saveStore, not here).
+    this.showSettings = false;
+    this.settingsButtonRect = null;
+    this.settingsRects = { panel: null, musicToggle: null, close: null };
+    this._settingsGet = () => ({ musicMuted: false });
+    this._settingsApply = () => {};
+  }
+
+  setSettings(getter, applyFn) {
+    this._settingsGet = getter || this._settingsGet;
+    this._settingsApply = applyFn || this._settingsApply;
   }
 
   setCampaign(state, onPurchase) {
@@ -424,6 +439,15 @@ export class StartMenu {
       w: ebW, h: ebH,
     };
 
+    // Settings gear button — top-right corner of the menu so it's
+    // discoverable without disturbing the centered layout.
+    const sgW = 110, sgH = 38;
+    this.settingsButtonRect = {
+      x: viewW - sgW - 18,
+      y: 18,
+      w: sgW, h: sgH,
+    };
+
     // Refill overlay (package picker). Always laid out so the click
     // hit-test works the moment the overlay opens — `showRefill`
     // gates draw + click.
@@ -456,6 +480,17 @@ export class StartMenu {
       }
       // Close button OR clicking outside the overlay dismisses it.
       this.showRefill = false;
+      return true;
+    }
+    // Settings overlay grabs all clicks while open.
+    if (this.showSettings) {
+      this._clickSettingsOverlay(x, y);
+      return true;
+    }
+    // Settings gear button (top-right corner) opens the overlay.
+    if (this.settingsButtonRect && this._hit(this.settingsButtonRect, x, y)) {
+      this._layoutSettingsOverlay(this._lastViewW || 1200, this._lastViewH || 800);
+      this.showSettings = true;
       return true;
     }
     // Custom Match overlay also grabs all clicks while open.
@@ -648,9 +683,14 @@ export class StartMenu {
       ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 8);
     }
 
+    // Settings gear button — drawn alongside the rest of the menu
+    // chrome so it sits below modal overlays.
+    if (this.settingsButtonRect) this._drawSettingsButton(ctx);
+
     // Refill overlay renders last so it sits on top of everything.
     if (this.showRefill) this._drawRefillOverlay(ctx, viewW, viewH);
     if (this.showCustom) this._drawCustomOverlay(ctx, viewW, viewH);
+    if (this.showSettings) this._drawSettingsOverlay(ctx, viewW, viewH);
 
     ctx.textAlign = "left";
     ctx.restore();
@@ -779,6 +819,107 @@ export class StartMenu {
       ctx.fillText(`$${cost.toLocaleString()}`, r.x + r.w - 8, r.y + 44);
     }
     ctx.textAlign = "left";
+  }
+
+  // ---- Settings overlay ------------------------------------------------
+  _layoutSettingsOverlay(viewW, viewH) {
+    const panelW = 380, panelH = 220;
+    const panelX = (viewW - panelW) / 2;
+    const panelY = (viewH - panelH) / 2;
+    this.settingsRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+    // Music row: full-width toggle pill below the title.
+    this.settingsRects.musicToggle = {
+      x: panelX + 24, y: panelY + 70,
+      w: panelW - 48, h: 56,
+    };
+    // Close button bottom-centred.
+    this.settingsRects.close = {
+      x: panelX + (panelW - 140) / 2, y: panelY + panelH - 60,
+      w: 140, h: 44,
+    };
+  }
+
+  _drawSettingsOverlay(ctx, viewW, viewH) {
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    const p = this.settingsRects.panel;
+    ctx.fillStyle = "rgba(10,18,28,0.96)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 22px system-ui, sans-serif";
+    ctx.fillText("SETTINGS", viewW / 2, p.y + 36);
+
+    const state = this._settingsGet();
+    const t = this.settingsRects.musicToggle;
+    const on = !state.musicMuted;
+    ctx.fillStyle = on ? "rgba(40,90,140,0.95)" : "rgba(60,30,30,0.85)";
+    ctx.fillRect(t.x, t.y, t.w, t.h);
+    ctx.strokeStyle = on ? "#7df" : "#c66";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(t.x, t.y, t.w, t.h);
+    ctx.fillStyle = "#cef";
+    ctx.textAlign = "left";
+    ctx.font = "bold 17px system-ui, sans-serif";
+    ctx.fillText("MUSIC", t.x + 18, t.y + t.h / 2 + 6);
+    ctx.textAlign = "right";
+    ctx.fillStyle = on ? "#9f8" : "#fcc";
+    ctx.font = "bold 20px system-ui, sans-serif";
+    ctx.fillText(on ? "ON" : "OFF", t.x + t.w - 18, t.y + t.h / 2 + 7);
+
+    // Hint below the toggle: tells the player about the P shortcut so
+    // they can mute mid-match without coming back here.
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#9bd";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("Tap to toggle  ·  P also mutes during a match", viewW / 2, t.y + t.h + 22);
+
+    const c = this.settingsRects.close;
+    ctx.fillStyle = "rgba(40,80,60,0.9)";
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = "#9f8";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText("CLOSE", c.x + c.w / 2, c.y + c.h / 2 + 6);
+  }
+
+  _drawSettingsButton(ctx) {
+    const r = this.settingsButtonRect;
+    const muted = this._settingsGet().musicMuted;
+    ctx.fillStyle = "rgba(20,40,60,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = muted ? "#fa8" : "#7df";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.textAlign = "center";
+    ctx.fillStyle = muted ? "#fda" : "#cef";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText("SETTINGS", r.x + r.w / 2, r.y + r.h / 2 + 5);
+    if (muted) {
+      // Small dot in the top-right of the button signals "music off".
+      ctx.fillStyle = "#fa8";
+      ctx.beginPath(); ctx.arc(r.x + r.w - 8, r.y + 8, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  _clickSettingsOverlay(x, y) {
+    if (!this.showSettings) return false;
+    if (this._hit(this.settingsRects.close, x, y)) { this.showSettings = false; return true; }
+    if (this._hit(this.settingsRects.musicToggle, x, y)) {
+      const cur = this._settingsGet();
+      this._settingsApply({ musicMuted: !cur.musicMuted });
+      return true;
+    }
+    // Click-through prevention: anywhere inside / outside the panel
+    // while the overlay is open should be swallowed.
+    return true;
   }
 
   // ---- Custom Match overlay --------------------------------------------

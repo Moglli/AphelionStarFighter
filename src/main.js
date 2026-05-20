@@ -18,6 +18,7 @@ import { resolveSpec } from "./races.js";
 import {
   loadEnergy, regenTick, spendEnergy, purchase as purchaseEnergy,
 } from "./energy.js";
+import { saveStore } from "./save.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -30,6 +31,19 @@ const game = createGame();
 window.game = game; // for console smoke-testing
 const audio = new GameAudio();
 let musicWasPlaying = false; // tracks state for start/stop edge detection
+
+// Restore persisted music mute state and wire the Settings overlay
+// + the P key shortcut to both apply the change to the live audio
+// graph AND persist it through saveStore.
+audio.setMuted(!!saveStore.get().settings.musicMuted);
+function applyMuteChange(muted) {
+  audio.setMuted(muted);
+  saveStore.update((d) => { d.settings.musicMuted = muted; });
+}
+input.startMenu.setSettings(
+  () => ({ musicMuted: audio.isMuted() }),
+  (patch) => { if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted); },
+);
 
 // Campaign state is loaded from localStorage on boot and kept in memory
 // so the menu can render mission progress + money. Mutations happen in
@@ -183,8 +197,9 @@ function frame(now) {
     }
   }
 
-  // P toggles music mute (works regardless of state).
-  if (input.consumeMuteToggle()) audio.toggleMute();
+  // P toggles music mute (works regardless of state). Routes through
+  // applyMuteChange so the new state persists to saveStore.
+  if (input.consumeMuteToggle()) applyMuteChange(!audio.isMuted());
 
   // Music plays only during active gameplay. Pause it on match-over
   // and on the start menu; resume when a new game kicks off (the
