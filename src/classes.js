@@ -176,18 +176,21 @@ export const CLASSES = {
     radius: 90,
     color: "#aaf",
     firingMode: "forward",
-    // Slower-firing pair of heavy forward guns. Hits hard per shot but
-    // sustained DPS is below the frigate — the cruiser leans on torps.
+    // Multi-stage salvo: each forward bank looses a tight 4-shot burst
+    // (0.10 s between shells) on a ~1.8 s cooldown. Per-shot damage is
+    // lower than the old single-shot to leave room for the volume, so
+    // the cruiser feels like it's hammering rather than tapping.
     weapon: {
-      damage: 28,
-      cooldown: 0.80,
-      projectileSpeed: 580,
-      range: 1050,
-      spread: 0.02,
+      damage: 18,
+      cooldown: 1.8,
+      projectileSpeed: 640,
+      range: 1100,
+      spread: 0.05,
       muzzles: 2,
       muzzleSpread: 55,
       projectileRadius: 7,
       projectileColors: { blue: "#5fc", red: "#fc3" },
+      salvo: { shotsPerVolley: 4, intraShotDelay: 0.10 },
     },
     shield: { max: 260, regen: 14, regenDelay: 5.0 },
     armor: { max: 280, wearRate: 0.5 },
@@ -233,16 +236,21 @@ export const CLASSES = {
     // barrage guns will fire. Small enough that you have to position the ship.
     broadsideArc: Math.PI / 4,
     weapon: {
-      // Barrage cannons: 3 per side, broadside.
-      damage: 70,
-      cooldown: 2.6, // per side; sides fire independently
-      projectileSpeed: 240, // slow, heavy shells
-      range: 1200,
-      spread: 0.04,
+      // Barrage cannons: 3 ports per side, fire as a multi-stage salvo.
+      // Each side, on cooldown, looses a 3-stage volley: all 3 gun ports
+      // fire 3 shells each (0.15s apart) — 9 shells per side per cycle.
+      // Per-shot damage is lower than the old single-shell so the
+      // headline number is in the volley weight, not the individual hit.
+      damage: 50,
+      cooldown: 4.0, // per side; sides fire independently
+      projectileSpeed: 280, // slow, heavy shells
+      range: 1300,
+      spread: 0.05,
       muzzles: 3, // gun ports per side
       muzzleSpread: 70, // spaced along the much longer hull
       projectileRadius: 10,
       projectileColors: { blue: "#a3f", red: "#f25" },
+      salvo: { shotsPerVolley: 3, intraShotDelay: 0.15 },
     },
     shield: { max: 600, regen: 22, regenDelay: 5.5 },
     armor: { max: 650, wearRate: 0.45 },

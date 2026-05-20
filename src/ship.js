@@ -132,6 +132,17 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     cooldown: 0,           // forward firing
     cooldownPort: 0,       // broadside: left side
     cooldownStarboard: 0,  // broadside: right side
+    // Multi-stage salvo state. Only consulted when spec.weapon.salvo is
+    // defined. Each shot in a salvo fires at the ship's *current* aim,
+    // so a moving target gets traced through the burst. Salvo continues
+    // independently of controller.firing — once committed, the volley
+    // lands in full.
+    salvoShotsLeft: 0,
+    salvoShotTimer: 0,
+    salvoPortShotsLeft: 0,
+    salvoPortShotTimer: 0,
+    salvoStbdShotsLeft: 0,
+    salvoStbdShotTimer: 0,
     controller, // mutable: { thrust, aim, firing, firingMissile }
     dead: false,
     isPlayer: false,
@@ -339,7 +350,7 @@ export function updateShip(ship, dt, world) {
   if (s.firingMode === "broadside") {
     ship.cooldownPort -= dt;
     ship.cooldownStarboard -= dt;
-    updateBroadsideFire(ship, world);
+    updateBroadsideFire(ship, world, dt);
   } else if (s.firingMode === "forward") {
     ship.cooldown -= dt;
     // Magazine reload: when empty, the timer ticks down and then refills.
@@ -351,16 +362,45 @@ export function updateShip(ship, dt, world) {
         ship.weaponReloadTimer = 0;
       }
     }
-    const hasAmmo = s.weapon.capacity == null || ship.weaponAmmo > 0;
-    if (c.firing && c.aim && ship.cooldown <= 0 && hasAmmo) {
-      fireForward(ship, world);
-      ship.cooldown = s.weapon.cooldown;
+    const hasAmmo = () => s.weapon.capacity == null || ship.weaponAmmo > 0;
+    const consumeAmmo = () => {
       if (s.weapon.capacity != null) {
         ship.weaponAmmo -= 1;
         if (ship.weaponAmmo <= 0) {
           ship.weaponReloading = true;
           ship.weaponReloadTimer = s.weapon.reloadTime;
         }
+      }
+    };
+
+    // Salvo continuation: keep stepping through a committed volley
+    // regardless of the controller's firing flag. Aborts if the
+    // magazine just ran dry.
+    if (ship.salvoShotsLeft > 0) {
+      ship.salvoShotTimer -= dt;
+      if (ship.salvoShotTimer <= 0) {
+        if (hasAmmo()) {
+          fireForward(ship, world);
+          consumeAmmo();
+          ship.salvoShotsLeft -= 1;
+          ship.salvoShotTimer = s.weapon.salvo.intraShotDelay;
+          if (!hasAmmo()) ship.salvoShotsLeft = 0;
+        } else {
+          ship.salvoShotsLeft = 0;
+        }
+      }
+    }
+
+    // Start a new burst (or single shot) only when the previous cycle
+    // has finished and the magazine has rounds.
+    const canStart = c.firing && c.aim && ship.cooldown <= 0 && hasAmmo() && ship.salvoShotsLeft <= 0;
+    if (canStart) {
+      fireForward(ship, world);
+      consumeAmmo();
+      ship.cooldown = s.weapon.cooldown;
+      if (s.weapon.salvo && hasAmmo()) {
+        ship.salvoShotsLeft = s.weapon.salvo.shotsPerVolley - 1;
+        ship.salvoShotTimer = s.weapon.salvo.intraShotDelay;
       }
     }
   }
@@ -482,7 +522,7 @@ function fireForward(ship, world) {
 // ---------------------------------------------------------------------------
 // Broadside fire (battleship barrage cannons).
 // ---------------------------------------------------------------------------
-function updateBroadsideFire(ship, world) {
+function updateBroadsideFire(ship, world, dt) {
   const s = ship.spec;
   const w = s.weapon;
   const fwd = V.fromAngle(ship.heading);
@@ -513,13 +553,48 @@ function updateBroadsideFire(ship, world) {
   const portLive = !portMod || !portMod.disabled;
   const stbdLive = !stbdMod || !stbdMod.disabled;
 
-  if (portLive && ship.cooldownPort <= 0 && hasTargetInArc(sidePort)) {
+  // Salvo continuation: each side has its own volley timer/counter, so
+  // a fast-rotating battleship can chain bursts down both flanks. The
+  // side recomputes its sideVec each shot because the ship may have
+  // turned mid-volley.
+  if (w.salvo) {
+    if (ship.salvoPortShotsLeft > 0) {
+      ship.salvoPortShotTimer -= dt;
+      if (ship.salvoPortShotTimer <= 0) {
+        const fwdNow = V.fromAngle(ship.heading);
+        const sidePortNow = { x: -fwdNow.y, y: fwdNow.x };
+        emitBroadside(ship, world, sidePortNow, fwdNow);
+        ship.salvoPortShotsLeft -= 1;
+        ship.salvoPortShotTimer = w.salvo.intraShotDelay;
+      }
+    }
+    if (ship.salvoStbdShotsLeft > 0) {
+      ship.salvoStbdShotTimer -= dt;
+      if (ship.salvoStbdShotTimer <= 0) {
+        const fwdNow = V.fromAngle(ship.heading);
+        const sideStbdNow = { x: fwdNow.y, y: -fwdNow.x };
+        emitBroadside(ship, world, sideStbdNow, fwdNow);
+        ship.salvoStbdShotsLeft -= 1;
+        ship.salvoStbdShotTimer = w.salvo.intraShotDelay;
+      }
+    }
+  }
+
+  if (portLive && ship.cooldownPort <= 0 && ship.salvoPortShotsLeft <= 0 && hasTargetInArc(sidePort)) {
     emitBroadside(ship, world, sidePort, fwd);
     ship.cooldownPort = w.cooldown;
+    if (w.salvo) {
+      ship.salvoPortShotsLeft = w.salvo.shotsPerVolley - 1;
+      ship.salvoPortShotTimer = w.salvo.intraShotDelay;
+    }
   }
-  if (stbdLive && ship.cooldownStarboard <= 0 && hasTargetInArc(sideStarboard)) {
+  if (stbdLive && ship.cooldownStarboard <= 0 && ship.salvoStbdShotsLeft <= 0 && hasTargetInArc(sideStarboard)) {
     emitBroadside(ship, world, sideStarboard, fwd);
     ship.cooldownStarboard = w.cooldown;
+    if (w.salvo) {
+      ship.salvoStbdShotsLeft = w.salvo.shotsPerVolley - 1;
+      ship.salvoStbdShotTimer = w.salvo.intraShotDelay;
+    }
   }
 }
 

@@ -122,6 +122,103 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Multi-stage salvos for BB + cruiser; PD damage nerfed vs ships
+
+**What changed**
+
+Two coordinated balance/feel passes:
+
+1. **PD nerfed vs ships.** Point-defence cannons were doing full
+   damage to anything that wandered into the bubble — a frigate's
+   4-cannon bank (6 dmg × 4 / 0.26s ≈ 92 dps) shredded fighters in
+   well under a second, and capitals chipped each other to death
+   passively when they drifted close. `applyDamage` now scales
+   incoming PD-cannon damage to `PD_VS_SHIP_MUL = 0.22` (22% of
+   listed). PD's anti-missile role is unaffected — that's
+   resolved in projectile-vs-projectile collision, not via
+   `applyDamage`.
+
+2. **BB + cruiser main guns are now multi-stage salvos.** Both
+   primary weapons gained a `salvo: { shotsPerVolley, intraShotDelay }`
+   field. Each cycle now fires a tight burst at the ship's current
+   aim instead of a single shell. Per-shot damage is lower so the
+   headline number is the volley weight, not the individual hit:
+   - **Battleship broadside**: 3 muzzles × 3 shots = 9 shells per
+     side per 4.0 s cycle, 0.15 s between shells, 50 dmg/shell.
+     Per-side DPS ≈ 112 (up from ~81 of the old single-shell), but
+     concentrated into 0.45 s bursts so missing the firing window
+     hurts more.
+   - **Cruiser forward**: 2 muzzles × 4 shots = 8 shells per 1.8 s
+     cycle, 0.10 s between shells, 18 dmg/shell. DPS ≈ 80
+     (vs ~70 prior).
+
+Once a salvo is committed it runs to completion regardless of
+`controller.firing`, so AI ships that swap targets mid-burst still
+land the full volley. Each shot uses the ship's *current* heading,
+so a salvo tracks a moving target through the burst.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | Cruiser + battleship `weapon` blocks got a `salvo` field and rebalanced damage/cooldown. Comments updated to call out the salvo profile. |
+| `src/ship.js` | `createShip` initializes `salvoShotsLeft`/`salvoShotTimer` (forward) and per-side variants for broadside. Forward-fire loop refactored to step a salvo independent of `c.firing`. `updateBroadsideFire` now takes `dt` and steps port/starboard salvos independently, recomputing the side vector each shot to track ship rotation mid-volley. |
+| `src/game.js` | `applyDamage` scales incoming damage by `PD_VS_SHIP_MUL = 0.22` when `p.fromKlass === "pd"`. Constant lifted to module scope with rationale comment. |
+
+**Design decisions / gotchas**
+
+- **Salvo continues past `c.firing` going false.** Intentional —
+  matches the "committed volley" feel. AI ships that abort a target
+  mid-burst still deliver the salvo. If a future mechanic needs
+  a true abort (e.g. EMP), zero out `salvoShotsLeft` directly.
+- **`updateBroadsideFire` recomputes `sideVec` each salvo shot.**
+  A turning battleship would otherwise spray its volley at the
+  initial side vector, looking glued. Don't cache `sidePort/sideStarboard`
+  across shots.
+- **PD nerf is keyed on `p.fromKlass === "pd"`.** Set in
+  `updatePDFire` in ship.js. If you ever add another cannon source
+  that should share the nerf (e.g. a deck-mounted plinker), tag
+  it with `fromKlass: "pd"` rather than introducing a second
+  multiplier.
+- **Cooldown is set when the salvo *starts*, not when it ends.**
+  So `cooldown = 4.0s` actually means "next volley starts ~4s
+  after this one's first shell" — total cycle = cooldown only if
+  cooldown > burst duration. Both current values satisfy that
+  (4.0 > 0.45, 1.8 > 0.4). Don't drop a cooldown below
+  `shotsPerVolley * intraShotDelay` or volleys will overlap and
+  the salvo state will double-fire.
+- **Magazine consumption is per-shot.** Forward path consumes one
+  round per salvo shot. If a reload kicks mid-volley, the rest
+  of the volley aborts (`salvoShotsLeft = 0`). Cruiser doesn't
+  have a magazine cap so this branch is dormant for now, but the
+  behaviour is correct for any future cap.
+- **Race overrides deep-merge.** Reavers' cruiser overrides
+  `weapon: { damage: 20, cooldown: 0.65 }` — the new `salvo`
+  field is preserved from the base spec via `resolveSpec`. If
+  you want a race to drop the salvo entirely, set
+  `salvo: null` in the override.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Spectate a battleship in arena: each broadside fires a visible
+  burst of ~9 shells over ~0.5 s, then pauses ~3.5 s before the
+  next volley on that side. Port + starboard cycle independently.
+- Spectate a cruiser: forward guns chatter in tight 4-shot
+  bursts on a ~1.8 s cycle.
+- Fly a fighter through a frigate's PD bubble: you should be
+  able to make a full strafing pass without dying — PD now plinks
+  rather than shreds.
+- Watch a missile salvo crossing PD range: missiles still die at
+  the original rate — the nerf doesn't touch PD's anti-missile
+  effectiveness (that resolves before `applyDamage` runs).
+
 ### 2026-05-20 — Per-type module art + capital-scale shield standoff
 
 **What changed**

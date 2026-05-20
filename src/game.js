@@ -589,8 +589,19 @@ function moduleStage(hp, hpMax) {
   return 3;
 }
 
+// PD vs ship multiplier. Point-defence cannons are the screen against
+// inbound missiles — their cannon rounds are *not* meant to be the
+// primary damage source vs other ships. Without this nerf a frigate's
+// 4-cannon PD bank (~92 dps inside the bubble) shreds fighters in
+// well under a second, and capitals chip each other to death
+// passively when they drift in range. Scaled to 22% damage vs ships
+// so PD still plinks (deters loitering inside the bubble) but isn't
+// the headline damage source it had become.
+const PD_VS_SHIP_MUL = 0.22;
+
 function applyDamage(ship, p, moduleTargets = null, particles = null) {
   let remaining = p.damage;
+  if (p.fromKlass === "pd") remaining *= PD_VS_SHIP_MUL;
 
   // Step 1: Shield (unless missile, which bypasses).
   if (p.kind !== "missile" && ship.shieldMax > 0 && ship.shield > 0) {
