@@ -21,6 +21,7 @@ import {
   pushWreck, pushDebris,
 } from "./wreckage.js";
 import { events } from "./events.js";
+import { PERKS } from "./roguelite.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -128,12 +129,13 @@ export function fleetCenter(game, side) {
 // on the start menu. Hostile race is rolled here so the enemy
 // composition is a surprise.
 //
-// Campaign mode passes a `campaign` config: { enemies, allies, playerOverride }.
-// `enemies` and `allies` are roster maps that override the race-defined
-// counts so mission difficulty can scale independently of race. The
-// player ship is then promoted with `playerOverride` (a deepMerge-style
-// patch describing purchased upgrades).
-export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", campaign = null, fleetMul = 1, customRoster = null) {
+// Roguelite mode passes a `modeConfig` bundle: { blue, red,
+// hostileRace, battleMode, capitalsManifest, playerSpecOverride,
+// run, node }. `blue`/`red` are roster maps that override the
+// race-defined counts; `capitalsManifest` is an ordered per-instance
+// HP array so wounded capitals respawn at the right hull%. Other modes
+// pass null — they fall through to the race-defined rosters.
+export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open", modeConfig = null, fleetMul = 1, customRoster = null) {
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
@@ -145,28 +147,59 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
+  game._matchEndedEmitted = false;
   game.spectating = false;
   game.spectateTargetId = null;
   game.spectateCamera = { x: 0, y: 0, locked: true };
   game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
   game.hostileRace = randomRaceKey();
   // Mode whitelist: legacy values map to "open"; anything in MODES is
-  // accepted verbatim. "campaign" stays as a special string so the
-  // existing campaign-only branches in spawnRoster keep working.
-  const knownLegacy = mode === "defend" || mode === "campaign" || mode === "open";
+  // accepted verbatim.
+  const knownLegacy = mode === "defend" || mode === "open";
   game.mode = knownLegacy ? mode : (MODES[mode] ? mode : "open");
   game.state = "playing";
-  game.campaign = campaign || null;
-  game.playerSpecOverride = (campaign && campaign.playerOverride) || null;
+  // modeConfig was renamed from "campaign" — it now carries roguelite
+  // payload OR any future mode's per-match config bundle.
+  game.modeConfig = modeConfig || null;
+  // rogueliteContext is the spawn-time scratch space: capitalsManifest
+  // and current pop pointers used by spawnCapitalWithEscort. Mode setup
+  // hook stashes here.
+  game.rogueliteContext = null;
+  game.playerSpecOverride = (modeConfig && modeConfig.playerSpecOverride) || null;
+  // Resolve perk-driven player overrides (roguelite). The perk sentinel
+  // is stamped by buildModeConfig in roguelite.js; resolve it here against
+  // the actual fighter spec so promotePlayer gets a normal specOverride.
+  if (game.playerSpecOverride && game.playerSpecOverride._perkKey) {
+    const key = game.playerSpecOverride._perkKey;
+    const perk = PERKS[key];
+    if (perk && perk.playerOverride) {
+      const baseSpec = (RACES[game.alliedRace] || RACES.terran).fighter || {};
+      // Patch the player ship using race-resolved fighter spec; createShip
+      // re-resolves the full spec so this patch only needs to carry fields
+      // that perks tweak.
+      const patch = perk.playerOverride({
+        turnRate: baseSpec.turnRate || 3.2,
+        hp: baseSpec.hp || 35,
+      });
+      delete game.playerSpecOverride._perkKey;
+      Object.assign(game.playerSpecOverride, patch);
+    }
+  }
+  if (game.playerSpecOverride && game.playerSpecOverride._fortifiedBridge) {
+    delete game.playerSpecOverride._fortifiedBridge;
+    // +20% HP. Resolved against base since we don't have spec here yet;
+    // createShip honours the patch via deepMerge.
+    game.playerSpecOverride.hp = Math.round(35 * 1.20);
+  }
   game.customRoster = customRoster || null;
   game.kills = 0;
   // Fleet-size multiplier from the menu. Clamped so a bad save / future
   // typo can't push the fleet to a frame-melting size.
   game.fleetMul = Math.max(0.25, Math.min(4, fleetMul));
 
-  // Mode hook (custom, future modes): given a chance to override the
-  // hostile race + roster before spawn. Falls back to the default
-  // spawnRoster + promotePlayer flow if no hook fires.
+  // Mode hook (custom, roguelite, future modes): given a chance to
+  // override the hostile race + roster before spawn. Falls back to the
+  // default spawnRoster + promotePlayer flow if no hook fires.
   const modeHooks = MODES[game.mode];
   if (modeHooks && typeof modeHooks.setup === "function") {
     modeHooks.setup(game, {
@@ -179,27 +212,29 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
 }
 
 function spawnRoster(game, rosterOverride = null) {
+  // Roguelite capitals manifest: per-instance HP+id, popped in order
+  // for blue capitals so a wounded battleship from the last battle
+  // spawns at its recorded hull%. Only used for the blue side; red
+  // capitals always spawn fresh.
+  const manifest = (game.modeConfig && game.modeConfig.capitalsManifest)
+    ? game.modeConfig.capitalsManifest.slice()
+    : null;
+
   for (const side of ["blue", "red"]) {
     const race = side === "blue" ? game.alliedRace : game.hostileRace;
-    // Resolution order: explicit override (custom mode) > campaign
-    // rosters > race-defined defaults. Override and campaign both
-    // bypass the fleet-size multiplier — those numbers were chosen
-    // deliberately.
+    // Resolution order: explicit override (custom + roguelite both pass
+    // their roster bundle as rosterOverride) > race-defined defaults.
+    // Roguelite + custom skip the fleet-size multiplier (counts are
+    // deliberate).
     let roster;
     if (rosterOverride && rosterOverride[side]) {
       roster = rosterOverride[side];
-    } else if (game.campaign) {
-      roster = side === "blue" ? game.campaign.allies : game.campaign.enemies;
     } else {
       roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
     }
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
-    // Apply fleet-size multiplier. Campaign + custom modes skip this
-    // (the rosters are hand-set); free skirmish + Defend scale per
-    // the menu chip. Every non-zero class is guaranteed at least one
-    // ship so Small fleets don't accidentally drop a whole class.
-    const mul = (game.campaign || rosterOverride) ? 1 : (game.fleetMul || 1);
+    const mul = rosterOverride ? 1 : (game.fleetMul || 1);
     for (const [klass, count] of Object.entries(roster)) {
       if (count <= 0) continue;
       const scaled = Math.max(1, Math.round(count * mul));
@@ -211,7 +246,17 @@ function spawnRoster(game, rosterOverride = null) {
         // Frigates, cruisers, battleships, and carriers each spawn with
         // a class-sized fighter escort attached to them.
         for (let i = 0; i < scaled; i++) {
-          spawnCapitalWithEscort(game, klass, side, race, zone, facing);
+          // Pop the next blue capital of this klass from the manifest;
+          // red capitals always spawn fresh.
+          let wounded = null;
+          if (side === "blue" && manifest) {
+            const idx = manifest.findIndex((m) => m.klass === klass);
+            if (idx !== -1) {
+              wounded = manifest[idx];
+              manifest.splice(idx, 1);
+            }
+          }
+          spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded);
         }
       } else {
         for (let i = 0; i < scaled; i++) {
@@ -356,12 +401,18 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
 // capital. Pack role is "hunt-fighter" — they screen against enemy
 // small craft; the pack target picker still upgrades them to a bomber
 // if one shows up. The first escort wears `escortOf` for HUD / debug.
-function spawnCapitalWithEscort(game, klass, side, race, zone, facing) {
+function spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded = null) {
   const pos = randomSpawnPos(zone);
   const capital = createShip({
     klass, race, side, pos, heading: facing,
     controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+    // Roguelite carryover — start the capital at the previous battle's
+    // hull%. Shields/armor still spawn at max each match.
+    initialHpFrac: wounded ? wounded.hpFrac : 1,
   });
+  // Stamp the run-state instanceId so captureBattleOutcome can match
+  // this live ship back to its slot in run.capitals when the match ends.
+  if (wounded) capital.runtimeInstanceId = wounded.instanceId;
   game.ships.push(capital);
 
   const escortSize = ESCORT_SIZE[klass] || 0;
@@ -482,6 +533,14 @@ export function getSpectateTarget(game) {
 // ---------------------------------------------------------------------------
 export function update(game, dt) {
   if (game.state !== "playing") return;
+
+  // Mode tick hook — optional per-frame logic for the active mode.
+  // Existing modes pass `tick: null` and are untouched; new modes
+  // (e.g. waves) get their tick callback invoked here.
+  const modeHooks = MODES[game.mode];
+  if (modeHooks && typeof modeHooks.tick === "function") {
+    modeHooks.tick(game, dt);
+  }
 
   game.packs = computePacks(game.ships);
 
@@ -611,6 +670,17 @@ export function update(game, dt) {
   }
 
   if (!game.matchOver) {
+    // Mode-specific end check runs first; if it doesn't decide a
+    // winner, fall through to the legacy defend/open rules.
+    if (modeHooks && typeof modeHooks.checkEnd === "function") {
+      const w = modeHooks.checkEnd(game);
+      if (w === "blue" || w === "red") {
+        game.matchOver = true;
+        game.winner = w;
+      }
+    }
+  }
+  if (!game.matchOver) {
     if (game.mode === "defend") {
       // First side to lose every station node loses the match.
       const blueStation = game.ships.some(
@@ -625,6 +695,18 @@ export function update(game, dt) {
       if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
       else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
     }
+  }
+  // Edge-detect: emit matchEnded exactly once, the frame matchOver
+  // first flips true. progression.js + the roguelite controller in
+  // main.js both subscribe; capture-then-restart is keyed off this.
+  if (game.matchOver && !game._matchEndedEmitted) {
+    game._matchEndedEmitted = true;
+    events.emit("matchEnded", {
+      mode: game.mode,
+      winner: game.winner,
+      score: game.kills || 0,
+      durationSeconds: 0,
+    });
   }
 }
 
@@ -641,6 +723,9 @@ export function restart(game) {
   game.spectating = false;
   game.spectateTargetId = null;
   game.state = "menu";
+  game._matchEndedEmitted = false;
+  game.modeConfig = null;
+  game.rogueliteContext = null;
 }
 
 // ---------------------------------------------------------------------------

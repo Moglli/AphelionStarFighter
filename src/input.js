@@ -4,7 +4,12 @@
 
 import { MAP_SIZES } from "./arena.js";
 import { RACES, RACE_KEYS } from "./races.js";
-import { UPGRADES, UPGRADE_KEYS, MAX_MISSION, nextCost } from "./campaign.js";
+import { SIDES } from "./classes.js";
+import {
+  ACTS_PER_RUN, COLS_PER_ACT, ROWS_PER_ACT,
+  STARTER_FUEL, FUEL_PER_EDGE,
+  repairCostFor, eventCardById, PERKS, BOON_TABLE,
+} from "./roguelite.js";
 import {
   MAX_ENERGY, COST_PER_GAME, PACKAGES,
   canSpend, timeUntilNext, formatDuration,
@@ -387,11 +392,11 @@ export class AdmiralPanel {
 // explicit START button. Each chip toggles its row's selection; START
 // emits the chosen { mapW, mapH, race, mode } bundle.
 const MODE_OPTIONS = [
-  { key: "open",     label: "Open Battle",     tagline: "Wipe the enemy fleet" },
-  { key: "defend",   label: "Defend Station",  tagline: "Destroy enemy station" },
-  { key: "campaign", label: "Campaign",        tagline: "100-mission tour" },
-  { key: "custom",   label: "Custom",          tagline: "Pick fleets + races" },
-  { key: "admiral",  label: "Admiral",         tagline: "Command, don't pilot" },
+  { key: "open",      label: "Open Battle",     tagline: "Wipe the enemy fleet" },
+  { key: "defend",    label: "Defend Station",  tagline: "Destroy enemy station" },
+  { key: "roguelite", label: "Frontier",        tagline: "Procedural war" },
+  { key: "custom",    label: "Custom",          tagline: "Pick fleets + races" },
+  { key: "admiral",   label: "Admiral",         tagline: "Command, don't pilot" },
 ];
 
 // Roster classes editable in the Custom Match overlay. Order matters —
@@ -453,7 +458,6 @@ export class StartMenu {
     this.sizeRects = [];
     this.modeRects = [];
     this.raceRects = [];
-    this.upgradeRects = [];
     this.startRect = null;
     this.selectedSize = "medium";
     this.selectedMode = "open";
@@ -461,9 +465,39 @@ export class StartMenu {
     this.selectedFleet = "medium";
     this.fleetRects = [];
     this.justStarted = null;
-    // Campaign state ref + click callback wired by main.js.
-    this.campaign = null;
-    this.onPurchase = null;
+    // Roguelite controller state — wired by main.js via setRoguelite().
+    // `runState` holds { meta, run, refresh }. `onRunChoice` dispatches
+    // every overlay action back to main.js.
+    this.runState = null;
+    this.onRunChoice = null;
+    // Overlay visibility flags. Only one of these is true at a time
+    // (the click router enforces this; setting more than one would
+    // result in double-handling).
+    this.showRunSetup = false;
+    this.showRunMap = false;
+    this.showResupply = false;
+    this.showEvent = false;
+    this.showBattleChoice = false;
+    // Cached layout rects for each overlay.
+    this.runSetupRects = { panel: null, factionChips: [], beginBtn: null, cancelBtn: null };
+    this.runMapRects = {
+      panel: null, nodes: [], edges: [],
+      fleetPanel: null, header: null,
+      newRunBtn: null, abandonBtn: null, closeBtn: null,
+    };
+    this.resupplyRects = {
+      panel: null, repairBtns: [], recruitFighterBtn: null, recruitBomberBtn: null,
+      refuelBtn: null, boonBtns: [], closeBtn: null, continueBtn: null,
+    };
+    this.eventRects = { panel: null, choiceBtns: [], lastResult: null };
+    this.battleChoiceRects = { panel: null, fly: null, command: null, back: null };
+    // Pending node context for the overlays that need it.
+    this._pendingResupplyNode = null;
+    this._pendingEventNode = null;
+    this._pendingBattleNode = null;
+    // Random boons offered at the current resupply node, refreshed each
+    // visit so the same node doesn't repaint the same three picks.
+    this._resupplyBoonOffers = null;
     // Energy state ref + IAP callback wired by main.js.
     this.energy = null;
     this.onEnergyPurchase = null;
@@ -512,9 +546,9 @@ export class StartMenu {
     this._settingsApply = applyFn || this._settingsApply;
   }
 
-  setCampaign(state, onPurchase) {
-    this.campaign = state;
-    this.onPurchase = onPurchase;
+  setRoguelite(state, onRunChoice) {
+    this.runState = state;
+    this.onRunChoice = onRunChoice;
   }
 
   setEnergy(state, onPurchase) {
@@ -580,29 +614,12 @@ export class StartMenu {
       y: fleetY, w: fleetBtnW, h: chipH,
     }));
 
-    // Campaign upgrade grid (only used when Campaign mode is selected).
-    // Two rows of three tiles below the fleet row.
     let nextY = fleetY + chipH + rowGap;
-    this.upgradeRects = [];
-    if (this.selectedMode === "campaign") {
-      const tileW = Math.min(220, (viewW - 60) / 3 - gapX);
-      const tileH = 56;
-      const cols = 3;
-      const totalRowW = cols * tileW + (cols - 1) * gapX;
-      const startX = (viewW - totalRowW) / 2;
-      nextY += 28; // header room ("Mission X/100  Credits: ...")
-      for (let i = 0; i < UPGRADE_KEYS.length; i++) {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        this.upgradeRects.push({
-          key: UPGRADE_KEYS[i],
-          x: startX + col * (tileW + gapX),
-          y: nextY + row * (tileH + 10),
-          w: tileW, h: tileH,
-        });
-      }
-      const rows = Math.ceil(UPGRADE_KEYS.length / cols);
-      nextY += rows * tileH + (rows - 1) * 10 + rowGap;
+    // Frontier mode: show a one-line status under the chip row instead
+    // of a tile grid. Run state is rendered inside the run-map overlay,
+    // which is the actual interaction surface for this mode.
+    if (this.selectedMode === "roguelite") {
+      nextY += 36;
     }
 
     // START button.
@@ -691,6 +708,14 @@ export class StartMenu {
       }
       return true; // overlay swallows everything else
     }
+    // Roguelite overlays — each grabs all clicks while open. Order
+    // matters: battle-choice / event / resupply sit ON TOP of the run
+    // map, so check them first.
+    if (this.showBattleChoice) { this._clickBattleChoice(x, y); return true; }
+    if (this.showEvent)        { this._clickEvent(x, y);        return true; }
+    if (this.showResupply)     { this._clickResupply(x, y);     return true; }
+    if (this.showRunMap)       { this._clickRunMap(x, y);       return true; }
+    if (this.showRunSetup)     { this._clickRunSetup(x, y);     return true; }
     // Energy bar opens the refill overlay.
     if (this.energyBarRect && this._hit(this.energyBarRect, x, y)) {
       this.showRefill = true;
@@ -715,18 +740,27 @@ export class StartMenu {
     for (const r of this.fleetRects) {
       if (this._hit(r, x, y)) { this.selectedFleet = r.key; return true; }
     }
-    for (const r of this.upgradeRects) {
-      if (this._hit(r, x, y)) {
-        if (this.onPurchase) this.onPurchase(r.key);
-        return true;
-      }
-    }
     if (this.startRect && this._hit(this.startRect, x, y)) {
       // Custom mode: START opens the configuration overlay instead of
       // launching. The overlay's own START launches the match.
       if (this.selectedMode === "custom") {
         this._layoutCustomOverlay(this._lastViewW || 1200, this._lastViewH || 800);
         this.showCustom = true;
+        return true;
+      }
+      // Frontier mode: START opens either the run-setup overlay (no
+      // run in progress) or the run-map overlay (resume active run).
+      // It never launches a match directly — battles only fire when
+      // the player picks a node on the map.
+      if (this.selectedMode === "roguelite") {
+        const hasRun = this.runState && this.runState.run;
+        if (hasRun) {
+          this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showRunMap = true;
+        } else {
+          this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showRunSetup = true;
+        }
         return true;
       }
       // Out-of-energy clicks pop the refill overlay instead of starting
@@ -816,20 +850,31 @@ export class StartMenu {
       }
     }
 
-    // Campaign panel: progress header + upgrade tiles.
-    if (this.selectedMode === "campaign" && this.upgradeRects.length > 0) {
-      const camp = this.campaign;
-      const firstRect = this.upgradeRects[0];
-      const headerY = firstRect.y - 16;
+    // Frontier panel: one-line status under the chip rows. Run state
+    // is rendered inside the run-map overlay; the menu just shows
+    // whether a run is in progress so the player knows what "START"
+    // does next.
+    if (this.selectedMode === "roguelite") {
+      const meta = this.runState && this.runState.meta;
+      const run = this.runState && this.runState.run;
       ctx.fillStyle = "#cef";
-      ctx.font = "bold 16px system-ui, sans-serif";
-      const m = camp ? camp.mission : 1;
-      const money = camp ? camp.money : 0;
-      const status = camp && camp.completed
-        ? `CAMPAIGN COMPLETE — Free Skirmish`
-        : `MISSION ${m} / ${MAX_MISSION}`;
-      ctx.fillText(`${status}    Credits: ${money.toLocaleString()}`, viewW / 2, headerY);
-      for (const r of this.upgradeRects) this._drawUpgrade(ctx, r);
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const statusY = this.startRect.y - 22;
+      if (run) {
+        const totalNodes = run.graphs.reduce((n, g) => n + g.nodes.length, 0);
+        ctx.fillText(
+          `ACTIVE RUN — ${RACES[run.faction].name.toUpperCase()} · ACT ${run.act}/${ACTS_PER_RUN} · ${run.visitedNodeIds.length}/${totalNodes} cleared`,
+          viewW / 2, statusY,
+        );
+      } else if (meta) {
+        ctx.fillStyle = "#9bd";
+        ctx.font = "13px system-ui, sans-serif";
+        ctx.fillText(
+          `Runs cleared: ${meta.runsWon} / ${meta.runsCompleted}   ·   Perks: ${meta.unlockedPerks.length}/${Object.keys(PERKS).length}`,
+          viewW / 2, statusY,
+        );
+      }
     }
 
     const s = this.startRect;
@@ -876,12 +921,10 @@ export class StartMenu {
       ctx.fillStyle = "#fff";
       ctx.font = "bold 24px system-ui, sans-serif";
       let label = "START";
-      if (this.selectedMode === "campaign" && this.campaign) {
-        label = this.campaign.completed
-          ? "FREE SKIRMISH"
-          : `START MISSION ${this.campaign.mission}`;
-      } else if (this.selectedMode === "custom") {
+      if (this.selectedMode === "custom") {
         label = "CONFIGURE…";
+      } else if (this.selectedMode === "roguelite") {
+        label = (this.runState && this.runState.run) ? "RESUME RUN" : "NEW RUN";
       }
       ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 9);
     }
@@ -891,9 +934,15 @@ export class StartMenu {
     if (this.settingsButtonRect) this._drawSettingsButton(ctx);
 
     // Refill overlay renders last so it sits on top of everything.
-    if (this.showRefill) this._drawRefillOverlay(ctx, viewW, viewH);
-    if (this.showCustom) this._drawCustomOverlay(ctx, viewW, viewH);
-    if (this.showSettings) this._drawSettingsOverlay(ctx, viewW, viewH);
+    if (this.showRefill)       this._drawRefillOverlay(ctx, viewW, viewH);
+    if (this.showCustom)       this._drawCustomOverlay(ctx, viewW, viewH);
+    if (this.showSettings)     this._drawSettingsOverlay(ctx, viewW, viewH);
+    // Roguelite stack — run map below, sub-overlays above.
+    if (this.showRunMap)       this._drawRunMap(ctx, viewW, viewH);
+    if (this.showRunSetup)     this._drawRunSetup(ctx, viewW, viewH);
+    if (this.showResupply)     this._drawResupply(ctx, viewW, viewH);
+    if (this.showEvent)        this._drawEvent(ctx, viewW, viewH);
+    if (this.showBattleChoice) this._drawBattleChoice(ctx, viewW, viewH);
 
     ctx.textAlign = "left";
     ctx.restore();
@@ -1003,45 +1052,6 @@ export class StartMenu {
     ctx.fillStyle = "#fcc";
     ctx.font = "bold 14px system-ui, sans-serif";
     ctx.fillText("CLOSE", cr.x + cr.w / 2, cr.y + cr.h / 2 + 5);
-    ctx.textAlign = "left";
-  }
-
-  _drawUpgrade(ctx, r) {
-    const def = UPGRADES[r.key];
-    if (!def || !this.campaign) return;
-    const lvl = this.campaign.upgrades[r.key] || 0;
-    const maxed = lvl >= def.maxLevel;
-    const cost = maxed ? null : nextCost(this.campaign, r.key);
-    const afford = !maxed && this.campaign.money >= cost;
-
-    ctx.fillStyle = maxed ? "rgba(40,80,60,0.85)"
-                  : afford ? "rgba(30,60,100,0.92)"
-                           : "rgba(40,40,55,0.85)";
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = maxed ? "#7d9" : afford ? "#9cf" : "#566";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(def.name, r.x + 8, r.y + 16);
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillStyle = "#9bd";
-    ctx.fillText(def.desc, r.x + 8, r.y + 30);
-
-    ctx.textAlign = "right";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillStyle = "#fff";
-    ctx.fillText(`Lv ${lvl}/${def.maxLevel}`, r.x + r.w - 8, r.y + 16);
-    ctx.font = "12px system-ui, sans-serif";
-    if (maxed) {
-      ctx.fillStyle = "#9f8";
-      ctx.fillText("MAX", r.x + r.w - 8, r.y + 44);
-    } else {
-      ctx.fillStyle = afford ? "#fe8" : "#866";
-      ctx.fillText(`$${cost.toLocaleString()}`, r.x + r.w - 8, r.y + 44);
-    }
     ctx.textAlign = "left";
   }
 
@@ -1659,6 +1669,959 @@ export class StartMenu {
       ctx.fillStyle = selected ? "rgba(220,240,255,0.85)" : "#7bd";
       ctx.fillText(sublabel, r.x + r.w / 2, r.y + r.h / 2 + 15);
     }
+  }
+
+  // =====================================================================
+  // ROGUELITE OVERLAYS — Run setup, Run map, Resupply, Event, Battle choice.
+  //
+  // All overlays follow the same chrome pattern as the Custom Match
+  // overlay (`_layoutCustomOverlay` / `_drawCustomOverlay`):
+  //   - Full-screen scrim `rgba(2, 8, 18, 0.65)`.
+  //   - Centered panel with a 2px stroke + accent rule along the top.
+  //   - CANCEL / CLOSE pill on the bottom-left, primary CTA on bottom-right.
+  // Each `_click*` method swallows every click that lands on the panel —
+  // overlays are modal.
+  // =====================================================================
+
+  // ---- Run setup (NEW RUN) -------------------------------------------
+  _layoutRunSetup(viewW, viewH) {
+    const panelW = Math.min(720, viewW - 80);
+    const panelH = 380;
+    const panelX = (viewW - panelW) / 2;
+    const panelY = (viewH - panelH) / 2;
+    this.runSetupRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+
+    // Faction chips — 4 across (extensible: layout adapts to count).
+    const unlocked = (this.runState && this.runState.meta && this.runState.meta.unlockedFactions) || RACE_KEYS;
+    const n = unlocked.length;
+    const chipW = Math.min(150, (panelW - 80) / n - 12);
+    const chipH = 80;
+    const chipsTotalW = n * chipW + (n - 1) * 12;
+    const chipsStartX = panelX + (panelW - chipsTotalW) / 2;
+    const chipsY = panelY + 130;
+    this.runSetupRects.factionChips = unlocked.map((k, i) => ({
+      key: k, label: RACES[k] ? RACES[k].name : k,
+      x: chipsStartX + i * (chipW + 12),
+      y: chipsY, w: chipW, h: chipH,
+    }));
+
+    // Buttons.
+    const btnH = 44, btnW = 140;
+    this.runSetupRects.beginBtn = {
+      x: panelX + panelW - btnW - 24,
+      y: panelY + panelH - btnH - 20,
+      w: btnW, h: btnH,
+    };
+    this.runSetupRects.cancelBtn = {
+      x: panelX + 24,
+      y: panelY + panelH - btnH - 20,
+      w: 110, h: btnH,
+    };
+    // Default selection is the menu's currently-picked race.
+    this._runSetupFaction = this.selectedRace;
+  }
+
+  _drawRunSetup(ctx, viewW, viewH) {
+    // Scrim.
+    ctx.fillStyle = "rgba(2,8,18,0.78)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    const p = this.runSetupRects.panel;
+    ctx.fillStyle = "rgba(8,16,28,0.95)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+    // Accent rule.
+    ctx.fillStyle = "#5af";
+    ctx.fillRect(p.x, p.y, p.w, 3);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 26px system-ui, sans-serif";
+    ctx.fillText("BEGIN FRONTIER RUN", p.x + p.w / 2, p.y + 44);
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.fillText("PICK YOUR FACTION · STARTER FLEET FIXED · 3 ACTS",
+                 p.x + p.w / 2, p.y + 70);
+
+    // Faction chips.
+    for (const r of this.runSetupRects.factionChips) {
+      const selected = r.key === this._runSetupFaction;
+      const accent = RACES[r.key] ? RACES[r.key].accent : "#7df";
+      ctx.fillStyle = selected ? "rgba(40,80,120,0.95)" : "rgba(24,36,56,0.85)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = selected ? accent : "#456";
+      ctx.lineWidth = selected ? 2.5 : 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      // Accent dot.
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.arc(r.x + r.w / 2, r.y + 18, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.fillText(r.label, r.x + r.w / 2, r.y + 42);
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillStyle = "#9bd";
+      const tag = (RACES[r.key] && RACES[r.key].tagline) || "";
+      ctx.fillText(tag.slice(0, 22), r.x + r.w / 2, r.y + 58);
+      // War progress notch.
+      const wp = (this.runState && this.runState.meta && this.runState.meta.warProgress[r.key]) || 0;
+      if (wp > 0) {
+        ctx.fillStyle = "#fc8";
+        ctx.font = "10px system-ui, sans-serif";
+        ctx.fillText(`× ${wp}`, r.x + r.w / 2, r.y + r.h - 8);
+      }
+    }
+
+    // BEGIN button.
+    const b = this.runSetupRects.beginBtn;
+    const beginBg = ctx.createLinearGradient(0, b.y, 0, b.y + b.h);
+    beginBg.addColorStop(0, "rgba(80,170,110,0.95)");
+    beginBg.addColorStop(1, "rgba(40,110,75,0.95)");
+    ctx.fillStyle = beginBg;
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = "#bff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText("BEGIN", b.x + b.w / 2, b.y + b.h / 2 + 6);
+
+    // CANCEL button.
+    const c = this.runSetupRects.cancelBtn;
+    ctx.fillStyle = "rgba(60,40,40,0.85)";
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = "#a66";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = "#fbb";
+    ctx.fillText("CANCEL", c.x + c.w / 2, c.y + c.h / 2 + 6);
+    ctx.textAlign = "left";
+  }
+
+  _clickRunSetup(x, y) {
+    if (this._hit(this.runSetupRects.cancelBtn, x, y)) {
+      this.showRunSetup = false; return;
+    }
+    if (this._hit(this.runSetupRects.beginBtn, x, y)) {
+      if (this.onRunChoice) {
+        this.onRunChoice("new-run", { faction: this._runSetupFaction });
+      }
+      this.showRunSetup = false;
+      // Auto-open the run map so the player lands in their first act.
+      this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
+      this.showRunMap = true;
+      return;
+    }
+    for (const r of this.runSetupRects.factionChips) {
+      if (this._hit(r, x, y)) { this._runSetupFaction = r.key; return; }
+    }
+  }
+
+  // ---- Run map -------------------------------------------------------
+  _layoutRunMap(viewW, viewH) {
+    const panelW = Math.min(1100, viewW - 60);
+    const panelH = Math.min(720, viewH - 80);
+    const panelX = (viewW - panelW) / 2;
+    const panelY = (viewH - panelH) / 2;
+    this.runMapRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+
+    // Fleet panel on the right.
+    const fleetW = 280;
+    this.runMapRects.fleetPanel = {
+      x: panelX + panelW - fleetW - 16,
+      y: panelY + 80,
+      w: fleetW, h: panelH - 160,
+    };
+
+    // Map region on the left.
+    const mapX = panelX + 24;
+    const mapY = panelY + 90;
+    const mapW = panelW - fleetW - 56;
+    const mapH = panelH - 170;
+    const run = this.runState && this.runState.run;
+    this.runMapRects.nodes = [];
+    this.runMapRects.edges = [];
+    if (run) {
+      const graph = run.graphs[run.act - 1];
+      if (graph) {
+        const colSpacing = mapW / Math.max(1, COLS_PER_ACT - 1);
+        const rowSpacing = mapH / (ROWS_PER_ACT + 1);
+        for (const n of graph.nodes) {
+          const nx = mapX + n.col * colSpacing;
+          const ny = mapY + (n.row + 1) * rowSpacing;
+          this.runMapRects.nodes.push({
+            id: n.id, type: n.type, faction: n.faction,
+            x: nx, y: ny, r: 22,
+          });
+        }
+        // Edge rendering uses node positions; cache them.
+        for (const e of graph.edges) {
+          const a = this.runMapRects.nodes.find((r) => r.id === e.fromId);
+          const b = this.runMapRects.nodes.find((r) => r.id === e.toId);
+          if (a && b) this.runMapRects.edges.push({ ax: a.x, ay: a.y, bx: b.x, by: b.y, fromId: e.fromId, toId: e.toId, fuelCost: e.fuelCost });
+        }
+      }
+    }
+
+    // Footer buttons.
+    const btnH = 40;
+    this.runMapRects.abandonBtn = {
+      x: panelX + 24,
+      y: panelY + panelH - btnH - 18,
+      w: 130, h: btnH,
+    };
+    this.runMapRects.closeBtn = {
+      x: panelX + panelW - 130 - 24,
+      y: panelY + panelH - btnH - 18,
+      w: 130, h: btnH,
+    };
+  }
+
+  _drawRunMap(ctx, viewW, viewH) {
+    ctx.fillStyle = "rgba(2,8,18,0.78)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    const p = this.runMapRects.panel;
+    if (!p) return;
+    ctx.fillStyle = "rgba(8,16,28,0.95)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = "#5af";
+    ctx.fillRect(p.x, p.y, p.w, 3);
+
+    const run = this.runState && this.runState.run;
+    if (!run) {
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#cef";
+      ctx.font = "bold 22px system-ui, sans-serif";
+      ctx.fillText("NO ACTIVE RUN", p.x + p.w / 2, p.y + p.h / 2);
+      this._drawCloseFooterBtn(ctx);
+      ctx.textAlign = "left";
+      return;
+    }
+
+    // Header.
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 22px system-ui, sans-serif";
+    ctx.fillText(`ACT ${run.act} OF ${ACTS_PER_RUN}`, p.x + 24, p.y + 40);
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    const faction = RACES[run.faction] ? RACES[run.faction].name : run.faction;
+    ctx.fillText(`Commander · ${faction}`, p.x + 24, p.y + 60);
+
+    // Top-right currency strip.
+    ctx.textAlign = "right";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillStyle = "#fe8";
+    ctx.fillText(`${run.resources.credits} credits`, p.x + p.w - 24, p.y + 40);
+    ctx.fillStyle = "#8df";
+    ctx.fillText(`${run.resources.fuel} fuel`, p.x + p.w - 24, p.y + 60);
+
+    // Edges first so nodes sit on top.
+    for (const e of this.runMapRects.edges) {
+      const isCurrent = e.fromId === run.nodePos;
+      const isVisited = run.visitedNodeIds.includes(e.fromId) && run.visitedNodeIds.includes(e.toId);
+      ctx.strokeStyle = isCurrent
+        ? "rgba(140,210,255,0.85)"
+        : isVisited
+          ? "rgba(140,210,255,0.25)"
+          : "rgba(120,140,170,0.35)";
+      ctx.lineWidth = isCurrent ? 2.5 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(e.ax, e.ay);
+      ctx.lineTo(e.bx, e.by);
+      ctx.stroke();
+    }
+
+    // Nodes.
+    const reachable = new Set();
+    for (const e of this.runMapRects.edges) {
+      if (e.fromId === run.nodePos) reachable.add(e.toId);
+    }
+    for (const n of this.runMapRects.nodes) {
+      const isCurrent = n.id === run.nodePos;
+      const isVisited = run.visitedNodeIds.includes(n.id);
+      const isReachable = reachable.has(n.id);
+      let state;
+      if (isCurrent) state = "current";
+      else if (isVisited) state = "visited";
+      else if (isReachable) state = "reachable";
+      else state = "locked";
+      this._drawNodeIcon(ctx, n, state);
+    }
+
+    // Fleet panel.
+    this._drawFleetPanel(ctx, this.runMapRects.fleetPanel, run);
+
+    // Footer.
+    const ab = this.runMapRects.abandonBtn;
+    ctx.fillStyle = "rgba(60,30,30,0.85)";
+    ctx.fillRect(ab.x, ab.y, ab.w, ab.h);
+    ctx.strokeStyle = "#c66";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(ab.x, ab.y, ab.w, ab.h);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fbb";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("ABANDON RUN", ab.x + ab.w / 2, ab.y + ab.h / 2 + 5);
+
+    this._drawCloseFooterBtn(ctx);
+    ctx.textAlign = "left";
+  }
+
+  _drawCloseFooterBtn(ctx) {
+    const c = this.runMapRects.closeBtn;
+    if (!c) return;
+    ctx.fillStyle = "rgba(30,50,40,0.85)";
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = "#6c9";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#bfe";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("BACK TO MENU", c.x + c.w / 2, c.y + c.h / 2 + 5);
+    ctx.textAlign = "left";
+  }
+
+  _drawNodeIcon(ctx, n, state) {
+    const accent = (n.faction && RACES[n.faction]) ? RACES[n.faction].accent : "#7df";
+    const alpha = state === "locked" ? 0.25
+                : state === "visited" ? 0.45
+                : state === "reachable" ? 1.0 : 1.0;
+    ctx.globalAlpha = alpha;
+    // Shape per type.
+    ctx.beginPath();
+    if (n.type === "battle") {
+      ctx.moveTo(n.x, n.y - n.r);
+      ctx.lineTo(n.x + n.r, n.y + n.r);
+      ctx.lineTo(n.x - n.r, n.y + n.r);
+      ctx.closePath();
+      ctx.fillStyle = accent;
+    } else if (n.type === "elite") {
+      ctx.moveTo(n.x, n.y - n.r * 1.2);
+      ctx.lineTo(n.x + n.r * 1.2, n.y + n.r * 1.2);
+      ctx.lineTo(n.x - n.r * 1.2, n.y + n.r * 1.2);
+      ctx.closePath();
+      ctx.fillStyle = accent;
+    } else if (n.type === "resupply") {
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = "#6c9";
+    } else if (n.type === "event") {
+      ctx.moveTo(n.x, n.y - n.r);
+      ctx.lineTo(n.x + n.r, n.y);
+      ctx.lineTo(n.x, n.y + n.r);
+      ctx.lineTo(n.x - n.r, n.y);
+      ctx.closePath();
+      ctx.fillStyle = "#fc6";
+    } else if (n.type === "boss") {
+      ctx.arc(n.x, n.y, n.r * 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#f76";
+    }
+    ctx.fill();
+    ctx.strokeStyle = state === "current" ? "#fff" : "#012";
+    ctx.lineWidth = state === "current" ? 3 : 1.5;
+    ctx.stroke();
+
+    // Glyph (single letter inside).
+    ctx.fillStyle = "#012";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const glyph = n.type === "battle" ? "B"
+                : n.type === "elite" ? "E"
+                : n.type === "resupply" ? "R"
+                : n.type === "event" ? "?"
+                : "X";
+    ctx.fillText(glyph, n.x, n.y + 5);
+
+    // Current-position halo.
+    if (state === "current") {
+      ctx.strokeStyle = "rgba(140,210,255,0.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r + 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  _drawFleetPanel(ctx, panel, run) {
+    if (!panel) return;
+    ctx.fillStyle = "rgba(12,20,32,0.92)";
+    ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
+    ctx.strokeStyle = "#356";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
+    ctx.fillStyle = SIDES.blue.primary;
+    ctx.fillRect(panel.x, panel.y, panel.w, 2);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText("FLEET", panel.x + 14, panel.y + 22);
+
+    // Capital list with HP bars.
+    let cy = panel.y + 42;
+    for (const cap of run.capitals) {
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillStyle = "#cef";
+      ctx.fillText(this._capitalName(cap.klass), panel.x + 14, cy);
+      // HP bar.
+      const barX = panel.x + 110;
+      const barW = panel.w - 130;
+      const barH = 8;
+      ctx.fillStyle = "rgba(40,60,80,0.85)";
+      ctx.fillRect(barX, cy - 8, barW, barH);
+      const fillW = barW * cap.hpFrac;
+      ctx.fillStyle = cap.hpFrac > 0.6 ? "#7df"
+                    : cap.hpFrac > 0.3 ? "#fc6"
+                    : "#f76";
+      ctx.fillRect(barX, cy - 8, fillW, barH);
+      ctx.fillStyle = "#cef";
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillText(`${Math.round(cap.hpFrac * 100)}%`, barX + barW + 4, cy);
+      cy += 22;
+    }
+
+    // Small craft.
+    cy += 8;
+    ctx.fillStyle = "#9bd";
+    ctx.font = "bold 11px system-ui, sans-serif";
+    ctx.fillText("SMALL CRAFT", panel.x + 14, cy);
+    cy += 16;
+    ctx.fillStyle = "#cef";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(`Fighter × ${run.smallCraft.fighter}`, panel.x + 14, cy);
+    cy += 18;
+    ctx.fillText(`Bomber  × ${run.smallCraft.bomber}`, panel.x + 14, cy);
+
+    // Boons.
+    if (run.boons.length > 0) {
+      cy += 22;
+      ctx.fillStyle = "#9bd";
+      ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.fillText("BOONS", panel.x + 14, cy);
+      cy += 16;
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillStyle = "#fe8";
+      for (const b of run.boons) {
+        ctx.fillText(`• ${b.desc}`, panel.x + 14, cy);
+        cy += 14;
+      }
+    }
+  }
+
+  _capitalName(klass) {
+    if (klass === "frigate")    return "Frigate";
+    if (klass === "cruiser")    return "Cruiser";
+    if (klass === "battleship") return "Battleship";
+    if (klass === "carrier")    return "Carrier";
+    return klass;
+  }
+
+  _clickRunMap(x, y) {
+    const run = this.runState && this.runState.run;
+    if (this._hit(this.runMapRects.closeBtn, x, y)) {
+      this.showRunMap = false; return;
+    }
+    if (this._hit(this.runMapRects.abandonBtn, x, y)) {
+      if (this.onRunChoice) this.onRunChoice("abandon-run", {});
+      this.showRunMap = false; return;
+    }
+    if (!run) return;
+    // Node clicks.
+    for (const n of this.runMapRects.nodes) {
+      const dx = x - n.x, dy = y - n.y;
+      if (dx * dx + dy * dy > n.r * n.r + 64) continue;
+      // Must be a reachable edge target.
+      let reachable = false;
+      for (const e of this.runMapRects.edges) {
+        if (e.fromId === run.nodePos && e.toId === n.id) {
+          reachable = run.resources.fuel >= e.fuelCost;
+          break;
+        }
+      }
+      if (!reachable) return;
+      // Route to the right sub-overlay or launch a battle.
+      const graphNode = run.graphs[run.act - 1].nodes.find((m) => m.id === n.id);
+      if (!graphNode) return;
+      if (graphNode.type === "battle" || graphNode.type === "elite" || graphNode.type === "boss") {
+        this._pendingBattleNode = graphNode;
+        this._layoutBattleChoice(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showBattleChoice = true;
+      } else if (graphNode.type === "resupply") {
+        // Resupply nodes open the depot overlay. Fuel cost + node
+        // completion happen when the player clicks CONTINUE inside the
+        // overlay (which dispatches enter-node-and-complete).
+        this._pendingResupplyNode = graphNode;
+        this._resupplyBoonOffers = this._pickBoonOffers();
+        this._layoutResupply(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showResupply = true;
+      } else if (graphNode.type === "event") {
+        this._pendingEventNode = graphNode;
+        this._layoutEvent(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showEvent = true;
+      }
+      return;
+    }
+  }
+
+  _pickBoonOffers() {
+    // Random 3 boons from the table; same boon can't appear twice.
+    const pool = BOON_TABLE.slice();
+    const out = [];
+    while (out.length < 3 && pool.length > 0) {
+      const idx = Math.floor(Math.random() * pool.length);
+      out.push(pool.splice(idx, 1)[0]);
+    }
+    return out;
+  }
+
+  // ---- Resupply overlay ---------------------------------------------
+  _layoutResupply(viewW, viewH) {
+    const panelW = Math.min(720, viewW - 60);
+    const panelH = Math.min(560, viewH - 80);
+    const panelX = (viewW - panelW) / 2;
+    const panelY = (viewH - panelH) / 2;
+    this.resupplyRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+
+    const run = this.runState && this.runState.run;
+    this.resupplyRects.repairBtns = [];
+    if (run) {
+      let ry = panelY + 90;
+      for (const cap of run.capitals) {
+        this.resupplyRects.repairBtns.push({
+          instanceId: cap.instanceId,
+          klass: cap.klass,
+          x: panelX + 24, y: ry,
+          w: panelW - 48, h: 38,
+        });
+        ry += 44;
+      }
+    }
+    // Recruit row.
+    const ry2 = panelY + panelH - 240;
+    this.resupplyRects.recruitFighterBtn = {
+      x: panelX + 24, y: ry2, w: (panelW - 60) / 2, h: 38,
+    };
+    this.resupplyRects.recruitBomberBtn = {
+      x: panelX + 36 + (panelW - 60) / 2, y: ry2,
+      w: (panelW - 60) / 2, h: 38,
+    };
+    this.resupplyRects.refuelBtn = {
+      x: panelX + 24, y: ry2 + 50,
+      w: panelW - 48, h: 38,
+    };
+    // Boon row — 3 buttons across.
+    const boonY = ry2 + 110;
+    const boonW = (panelW - 60) / 3;
+    this.resupplyRects.boonBtns = [];
+    for (let i = 0; i < 3; i++) {
+      this.resupplyRects.boonBtns.push({
+        slot: i,
+        x: panelX + 24 + i * (boonW + 6),
+        y: boonY, w: boonW, h: 48,
+      });
+    }
+    this.resupplyRects.continueBtn = {
+      x: panelX + panelW - 140 - 24,
+      y: panelY + panelH - 56,
+      w: 140, h: 40,
+    };
+    this.resupplyRects.closeBtn = {
+      x: panelX + 24,
+      y: panelY + panelH - 56,
+      w: 100, h: 40,
+    };
+  }
+
+  _drawResupply(ctx, viewW, viewH) {
+    ctx.fillStyle = "rgba(2,8,18,0.78)";
+    ctx.fillRect(0, 0, viewW, viewH);
+
+    const p = this.resupplyRects.panel;
+    if (!p) return;
+    ctx.fillStyle = "rgba(8,16,28,0.95)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#6c9";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = "#6c9";
+    ctx.fillRect(p.x, p.y, p.w, 3);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 22px system-ui, sans-serif";
+    ctx.fillText("RESUPPLY DEPOT", p.x + p.w / 2, p.y + 38);
+
+    const run = this.runState && this.runState.run;
+    if (!run) { ctx.textAlign = "left"; return; }
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.fillText(`${run.resources.credits} credits  ·  ${run.resources.fuel} fuel`,
+                 p.x + p.w / 2, p.y + 60);
+
+    // Repair rows.
+    ctx.textAlign = "left";
+    for (const r of this.resupplyRects.repairBtns) {
+      const cap = run.capitals.find((c) => c.instanceId === r.instanceId);
+      if (!cap) continue;
+      const cost = repairCostFor(cap);
+      const afford = run.resources.credits >= cost && cap.hpFrac < 1;
+      ctx.fillStyle = afford ? "rgba(30,60,90,0.92)" : "rgba(40,40,55,0.85)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = afford ? "#9cf" : "#566";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = "#cef";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText(
+        `${this._capitalName(r.klass)} — ${Math.round(cap.hpFrac * 100)}%  →  100%`,
+        r.x + 12, r.y + 24,
+      );
+      ctx.textAlign = "right";
+      ctx.fillStyle = afford ? "#fe8" : "#866";
+      ctx.fillText(
+        cap.hpFrac >= 1 ? "FULL" : `${cost} cr`,
+        r.x + r.w - 12, r.y + 24,
+      );
+      ctx.textAlign = "left";
+    }
+
+    // Recruit / refuel.
+    const rf = this.resupplyRects.recruitFighterBtn;
+    const rb = this.resupplyRects.recruitBomberBtn;
+    const re = this.resupplyRects.refuelBtn;
+    this._drawShopBtn(ctx, rf, "Recruit Fighter (+1)", `8 cr`, run.resources.credits >= 8);
+    this._drawShopBtn(ctx, rb, "Recruit Bomber (+1)", `20 cr`, run.resources.credits >= 20);
+    this._drawShopBtn(ctx, re, "Refuel (+1 fuel)", `10 cr`, run.resources.credits >= 10);
+
+    // Boons.
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#9bd";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.fillText("REFITS (1 FUEL EACH)", p.x + p.w / 2, this.resupplyRects.boonBtns[0].y - 6);
+    ctx.textAlign = "left";
+    for (const b of this.resupplyRects.boonBtns) {
+      const offer = this._resupplyBoonOffers && this._resupplyBoonOffers[b.slot];
+      if (!offer) continue;
+      const afford = run.resources.fuel >= 1;
+      ctx.fillStyle = afford ? "rgba(50,30,70,0.92)" : "rgba(40,40,55,0.85)";
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = afford ? "#c9f" : "#566";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = "#fcf";
+      ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.fillText(offer.key, b.x + 8, b.y + 16);
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillStyle = "#bce";
+      ctx.fillText(offer.desc, b.x + 8, b.y + 32);
+    }
+
+    // Continue + close.
+    const c = this.resupplyRects.continueBtn;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(80,170,110,0.95)";
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = "#bff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.fillText("CONTINUE", c.x + c.w / 2, c.y + c.h / 2 + 6);
+
+    const cl = this.resupplyRects.closeBtn;
+    ctx.fillStyle = "rgba(40,50,60,0.85)";
+    ctx.fillRect(cl.x, cl.y, cl.w, cl.h);
+    ctx.strokeStyle = "#789";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(cl.x, cl.y, cl.w, cl.h);
+    ctx.fillStyle = "#bce";
+    ctx.fillText("BACK", cl.x + cl.w / 2, cl.y + cl.h / 2 + 6);
+
+    ctx.textAlign = "left";
+  }
+
+  _drawShopBtn(ctx, r, label, cost, afford) {
+    ctx.fillStyle = afford ? "rgba(30,60,90,0.92)" : "rgba(40,40,55,0.85)";
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = afford ? "#9cf" : "#566";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#cef";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText(label, r.x + 12, r.y + 24);
+    ctx.textAlign = "right";
+    ctx.fillStyle = afford ? "#fe8" : "#866";
+    ctx.fillText(cost, r.x + r.w - 12, r.y + 24);
+    ctx.textAlign = "left";
+  }
+
+  _clickResupply(x, y) {
+    if (this._hit(this.resupplyRects.closeBtn, x, y)) {
+      // BACK — return to run map without consuming the node. Player
+      // can re-enter or pick a sibling node.
+      this.showResupply = false; return;
+    }
+    if (this._hit(this.resupplyRects.continueBtn, x, y)) {
+      // Resupply costs no fuel at the node itself — the jump cost was
+      // already deducted when picking the node from the map. Complete
+      // it via the non-combat path so main.js calls completeNode().
+      if (this._pendingResupplyNode && this.onRunChoice) {
+        // First debit fuel (the edge cost), then complete.
+        this.onRunChoice("enter-node-and-complete", {
+          nodeId: this._pendingResupplyNode.id,
+        });
+      }
+      this._pendingResupplyNode = null;
+      this.showResupply = false;
+      return;
+    }
+    for (const r of this.resupplyRects.repairBtns) {
+      if (this._hit(r, x, y) && this.onRunChoice) {
+        this.onRunChoice("buy-repair", { instanceId: r.instanceId });
+        return;
+      }
+    }
+    if (this._hit(this.resupplyRects.recruitFighterBtn, x, y) && this.onRunChoice) {
+      this.onRunChoice("buy-recruit", { klass: "fighter" }); return;
+    }
+    if (this._hit(this.resupplyRects.recruitBomberBtn, x, y) && this.onRunChoice) {
+      this.onRunChoice("buy-recruit", { klass: "bomber" }); return;
+    }
+    if (this._hit(this.resupplyRects.refuelBtn, x, y) && this.onRunChoice) {
+      this.onRunChoice("buy-refuel", { units: 1 }); return;
+    }
+    for (const b of this.resupplyRects.boonBtns) {
+      if (this._hit(b, x, y) && this.onRunChoice) {
+        const offer = this._resupplyBoonOffers && this._resupplyBoonOffers[b.slot];
+        if (offer) this.onRunChoice("apply-boon", { boonKey: offer.key });
+        return;
+      }
+    }
+  }
+
+  // ---- Event overlay ------------------------------------------------
+  _layoutEvent(viewW, viewH) {
+    const panelW = Math.min(640, viewW - 60);
+    const panelH = Math.min(420, viewH - 100);
+    const panelX = (viewW - panelW) / 2;
+    const panelY = (viewH - panelH) / 2;
+    this.eventRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+
+    const card = this._pendingEventNode
+      ? eventCardById(this._pendingEventNode.eventId)
+      : null;
+    this.eventRects.choiceBtns = [];
+    if (card) {
+      const btnH = 48;
+      let by = panelY + panelH - card.options.length * (btnH + 8) - 20;
+      for (let i = 0; i < card.options.length; i++) {
+        this.eventRects.choiceBtns.push({
+          choiceIndex: i,
+          x: panelX + 24, y: by,
+          w: panelW - 48, h: btnH,
+        });
+        by += btnH + 8;
+      }
+    }
+  }
+
+  _drawEvent(ctx, viewW, viewH) {
+    ctx.fillStyle = "rgba(2,8,18,0.78)";
+    ctx.fillRect(0, 0, viewW, viewH);
+    const p = this.eventRects.panel;
+    if (!p) return;
+    ctx.fillStyle = "rgba(8,16,28,0.95)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#fc6";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = "#fc6";
+    ctx.fillRect(p.x, p.y, p.w, 3);
+
+    const card = this._pendingEventNode
+      ? eventCardById(this._pendingEventNode.eventId)
+      : null;
+    if (!card) return;
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 22px system-ui, sans-serif";
+    ctx.fillText(card.title.toUpperCase(), p.x + p.w / 2, p.y + 40);
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillStyle = "#bce";
+    // Wrap body into multiple lines for readability.
+    this._wrapText(ctx, card.body, p.x + 32, p.y + 72, p.w - 64, 18);
+
+    // If a choice was just applied, show the result line above the
+    // buttons so the player sees what happened before clicking
+    // CONTINUE.
+    if (this.eventRects.lastResult) {
+      ctx.fillStyle = "#fe8";
+      ctx.font = "bold 12px system-ui, sans-serif";
+      ctx.fillText("» " + this.eventRects.lastResult,
+                   p.x + p.w / 2, p.y + p.h - this.eventRects.choiceBtns.length * 56 - 24);
+    }
+
+    // Choice buttons.
+    ctx.textAlign = "left";
+    for (const r of this.eventRects.choiceBtns) {
+      const opt = card.options[r.choiceIndex];
+      ctx.fillStyle = "rgba(40,50,60,0.92)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = "#9cf";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = "#cef";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText(opt.label, r.x + 12, r.y + r.h / 2 + 5);
+    }
+    ctx.textAlign = "left";
+  }
+
+  _clickEvent(x, y) {
+    const card = this._pendingEventNode
+      ? eventCardById(this._pendingEventNode.eventId)
+      : null;
+    if (!card) { this.showEvent = false; return; }
+
+    for (const r of this.eventRects.choiceBtns) {
+      if (this._hit(r, x, y)) {
+        if (this.onRunChoice) {
+          this.onRunChoice("apply-event", {
+            eventId: this._pendingEventNode.eventId,
+            choiceIndex: r.choiceIndex,
+          });
+        }
+        // Auto-advance: complete the node and close.
+        if (this.onRunChoice && this._pendingEventNode) {
+          this.onRunChoice("complete-node-noncombat", {
+            nodeId: this._pendingEventNode.id,
+          });
+        }
+        this._pendingEventNode = null;
+        this.eventRects.lastResult = null;
+        this.showEvent = false;
+        return;
+      }
+    }
+  }
+
+  _wrapText(ctx, text, x, y, maxW, lineH) {
+    const words = text.split(" ");
+    let line = "";
+    let yy = y;
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      if (ctx.measureText(test).width > maxW && line) {
+        ctx.fillText(line, x + maxW / 2, yy);
+        line = w;
+        yy += lineH;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x + maxW / 2, yy);
+  }
+
+  // ---- Battle choice modal ------------------------------------------
+  _layoutBattleChoice(viewW, viewH) {
+    const panelW = 440, panelH = 240;
+    const panelX = (viewW - panelW) / 2;
+    const panelY = (viewH - panelH) / 2;
+    this.battleChoiceRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
+    const btnW = 160, btnH = 56;
+    this.battleChoiceRects.fly = {
+      x: panelX + 24, y: panelY + 90, w: btnW, h: btnH,
+    };
+    this.battleChoiceRects.command = {
+      x: panelX + panelW - btnW - 24, y: panelY + 90, w: btnW, h: btnH,
+    };
+    this.battleChoiceRects.back = {
+      x: panelX + (panelW - 110) / 2,
+      y: panelY + panelH - 50,
+      w: 110, h: 36,
+    };
+  }
+
+  _drawBattleChoice(ctx, viewW, viewH) {
+    ctx.fillStyle = "rgba(2,8,18,0.78)";
+    ctx.fillRect(0, 0, viewW, viewH);
+    const p = this.battleChoiceRects.panel;
+    if (!p) return;
+    ctx.fillStyle = "rgba(8,16,28,0.95)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cef";
+    ctx.font = "bold 20px system-ui, sans-serif";
+    ctx.fillText("HOW WILL YOU FIGHT?", p.x + p.w / 2, p.y + 40);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = "#9bd";
+    ctx.fillText("Pilot a fighter or command from the bridge.",
+                 p.x + p.w / 2, p.y + 60);
+
+    const fly = this.battleChoiceRects.fly;
+    const cmd = this.battleChoiceRects.command;
+    ctx.fillStyle = "rgba(80,170,110,0.95)";
+    ctx.fillRect(fly.x, fly.y, fly.w, fly.h);
+    ctx.strokeStyle = "#bff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(fly.x, fly.y, fly.w, fly.h);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.fillText("FLY", fly.x + fly.w / 2, fly.y + fly.h / 2 + 6);
+
+    ctx.fillStyle = "rgba(110,80,170,0.95)";
+    ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h);
+    ctx.strokeStyle = "#cbf";
+    ctx.strokeRect(cmd.x, cmd.y, cmd.w, cmd.h);
+    ctx.fillStyle = "#fff";
+    ctx.fillText("COMMAND", cmd.x + cmd.w / 2, cmd.y + cmd.h / 2 + 6);
+
+    const back = this.battleChoiceRects.back;
+    ctx.fillStyle = "rgba(40,50,60,0.85)";
+    ctx.fillRect(back.x, back.y, back.w, back.h);
+    ctx.strokeStyle = "#789";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(back.x, back.y, back.w, back.h);
+    ctx.fillStyle = "#bce";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("BACK", back.x + back.w / 2, back.y + back.h / 2 + 5);
+    ctx.textAlign = "left";
+  }
+
+  _clickBattleChoice(x, y) {
+    if (this._hit(this.battleChoiceRects.back, x, y)) {
+      this._pendingBattleNode = null;
+      this.showBattleChoice = false;
+      return;
+    }
+    const choose = (mode) => {
+      if (this._pendingBattleNode && this.onRunChoice) {
+        this.onRunChoice("enter-node", {
+          nodeId: this._pendingBattleNode.id,
+          battleMode: mode,
+        });
+      }
+      this._pendingBattleNode = null;
+      this.showBattleChoice = false;
+      this.showRunMap = false; // hide map while battle plays out
+    };
+    if (this._hit(this.battleChoiceRects.fly, x, y)) { choose("fly"); return; }
+    if (this._hit(this.battleChoiceRects.command, x, y)) { choose("command"); return; }
   }
 }
 

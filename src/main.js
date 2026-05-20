@@ -12,10 +12,11 @@ import { prerenderSprites } from "./sprites.js";
 import { drawParticle } from "./particles.js";
 import { GameAudio } from "./audio.js";
 import {
-  loadCampaign, saveCampaign, getMissionConfig,
-  buildPlayerUpgrade, purchaseUpgrade, recordVictory,
-} from "./campaign.js";
-import { resolveSpec } from "./races.js";
+  loadRun, loadMeta, startNewRun, abandonRun, discardRun,
+  buildModeConfig, captureBattleOutcome, completeNode, enterNode,
+  isRunOver, recordRunEnd,
+  buyRepair, buyRecruit, buyRefuel, applyBoon, applyEventChoice,
+} from "./roguelite.js";
 import {
   loadEnergy, regenTick, spendEnergy, purchase as purchaseEnergy,
 } from "./energy.js";
@@ -107,19 +108,142 @@ input.admiralPanel.setHooks(
   (klass, missiles) => { if (game.directives && game.directives[klass]) game.directives[klass].missiles = missiles; },
 );
 
-// Campaign state is loaded from localStorage on boot and kept in memory
-// so the menu can render mission progress + money. Mutations happen in
-// purchase / victory callbacks below and re-save themselves.
-const campaign = loadCampaign();
-input.startMenu.setCampaign(campaign, (key) => purchaseUpgrade(campaign, key));
+// Roguelite "Frontier" controller — owns the live run state. The
+// StartMenu reads the run via setRoguelite + the onChoice callback;
+// matchEnded captures fleet state back into the run; runEnded clears
+// it.
+let activeRun = loadRun();
+let pendingNode = null; // node the player has just chosen to enter — used post-startGame
+input.startMenu.setRoguelite({
+  meta: loadMeta(),
+  run: activeRun,
+  refresh,
+}, handleRunChoice);
+
+function refresh() {
+  activeRun = loadRun();
+  input.startMenu.setRoguelite({
+    meta: loadMeta(),
+    run: activeRun,
+    refresh,
+  }, handleRunChoice);
+}
+
+function handleRunChoice(action, payload) {
+  if (action === "new-run") {
+    activeRun = startNewRun(payload.faction, payload.seed);
+    refresh();
+    return;
+  }
+  if (action === "abandon-run") {
+    abandonRun();
+    activeRun = null;
+    refresh();
+    return;
+  }
+  if (action === "enter-node") {
+    if (!activeRun) return;
+    const { nodeId, battleMode } = payload;
+    if (!enterNode(activeRun, nodeId)) return;
+    activeRun.battleMode = battleMode || "fly";
+    pendingNode = activeRun.graphs[activeRun.act - 1].nodes.find((n) => n.id === nodeId);
+    // Build the modeConfig bundle and launch the battle.
+    const cfg = buildModeConfig(activeRun, pendingNode, activeRun.battleMode);
+    // Map size scales with act so later acts feel bigger.
+    const mapW = 5000 + (activeRun.act - 1) * 2000;
+    const mapH = 3500 + (activeRun.act - 1) * 1500;
+    startGame(game, mapW, mapH, activeRun.faction, "roguelite", cfg, 1);
+    input.admiralActive = !!game.admiralMode;
+    audio.start();
+    return;
+  }
+  if (action === "complete-node-noncombat") {
+    // Event nodes — the choice was already applied. Now just advance.
+    if (!activeRun) return;
+    if (!enterNode(activeRun, payload.nodeId)) return;
+    completeNode(activeRun, payload.nodeId);
+    refresh();
+    return;
+  }
+  if (action === "enter-node-and-complete") {
+    // Resupply nodes — pay fuel, advance, payout. All purchases inside
+    // the overlay have already mutated the run via buyRepair / etc.
+    if (!activeRun) return;
+    if (!enterNode(activeRun, payload.nodeId)) return;
+    completeNode(activeRun, payload.nodeId);
+    refresh();
+    return;
+  }
+  if (action === "buy-repair") {
+    if (activeRun) { buyRepair(activeRun, payload.instanceId); refresh(); }
+    return;
+  }
+  if (action === "buy-recruit") {
+    if (activeRun) { buyRecruit(activeRun, payload.klass); refresh(); }
+    return;
+  }
+  if (action === "buy-refuel") {
+    if (activeRun) { buyRefuel(activeRun, payload.units || 1); refresh(); }
+    return;
+  }
+  if (action === "apply-boon") {
+    if (activeRun) { applyBoon(activeRun, payload.boonKey); refresh(); }
+    return;
+  }
+  if (action === "apply-event") {
+    if (activeRun) {
+      applyEventChoice(activeRun, payload.eventId, payload.choiceIndex);
+      refresh();
+    }
+    return;
+  }
+}
+
+// When a battle ends, walk live ships → run.capitals + run.smallCraft,
+// then either continue the run or end it. Subscribing here (not inside
+// roguelite.js) so we have direct access to the live game object.
+events.on("matchEnded", ({ mode, winner }) => {
+  if (mode !== "roguelite" || !activeRun || !pendingNode) return;
+  // Snapshot the run reference up front — completeNode can clear it
+  // synchronously on a final-boss win via the runEnded handler below.
+  const runRef = activeRun;
+  captureBattleOutcome(runRef, game);
+  if (winner === "blue") {
+    completeNode(runRef, pendingNode.id);
+  }
+  pendingNode = null;
+  // If the run is still alive after capture+complete, check whether
+  // the fleet wipe condition fired (locked design rule: losing a single
+  // battle doesn't end the run — only losing every capital does).
+  if (activeRun && isRunOver(activeRun)) {
+    recordRunEnd(activeRun, false);
+    discardRun();
+    activeRun = null;
+  }
+  refresh();
+});
+
+// Run-completed cleanup: when act 3's boss is cleared, roguelite.js
+// emits runEnded with won=true. We don't clear the run here so the
+// player can see the victory state — handleRunChoice("abandon-run")
+// from the menu clears it.
+events.on("runEnded", ({ won }) => {
+  // The roguelite.js completeNode flow already wrote saveStore. Pull
+  // the latest into our cached reference.
+  if (!won) {
+    activeRun = null;
+  } else {
+    activeRun = loadRun();
+  }
+  refresh();
+});
 
 // Energy / stamina state — gates how many matches can be played per
 // real-time window. PASSIVE regen ticks each frame via regenTick().
 const energy = loadEnergy();
 input.startMenu.setEnergy(energy, (packId) => purchaseEnergy(energy, packId));
-// Edge-detect the match-over transition so we credit a campaign
-// victory exactly once even though matchOver stays true until the
-// player taps to leave.
+// Edge-detect the match-over transition so the run controller knows
+// when to capture battle outcomes.
 let prevMatchOver = false;
 
 let viewW = 0, viewH = 0;
@@ -173,35 +297,21 @@ function frame(now) {
     if (choice && !spendEnergy(energy)) {
       input.startMenu.showRefill = true;
     } else if (choice) {
-      if (choice.mode === "campaign" && !campaign.completed) {
-        // Campaign mission: roster + map are mission-defined, player
-        // ship gets the upgrade specOverride. Campaign rosters are
-        // hand-tuned for mission balance, so the fleet-size chip is
-        // ignored here.
-        const mc = getMissionConfig(campaign.mission, choice.race);
-        const baseSpec = resolveSpec(choice.race, "fighter");
-        const playerOverride = buildPlayerUpgrade(campaign, baseSpec);
-        startGame(game, mc.mapW, mc.mapH, choice.race, "campaign", {
-          enemies: mc.enemies,
-          allies: mc.allies,
-          playerOverride,
-        }, 1);
-        // Stash a reference + the staged reward so the match-over HUD
-        // can display it without re-deriving.
-        game.campaign.totalMoney = campaign.money;
-        game.campaign.lastReward = mc.reward;
-        game.campaign.missionNumber = mc.mission;
-      } else {
-        // Open / Defend / Custom / Admiral, or Campaign-completed
-        // (falls through to a free skirmish at the player's chosen
-        // map size + fleet size). Custom carries its full roster
-        // bundle through; Admiral flips the input layer to show the
-        // command panel.
-        const mode = choice.mode === "campaign" ? "open" : choice.mode;
-        startGame(game, choice.mapW, choice.mapH, choice.race, mode, null,
-                  choice.fleetMul, choice.customRoster || null);
-        input.admiralActive = !!game.admiralMode;
+      if (choice.mode === "roguelite") {
+        // Roguelite battles are launched indirectly: clicking a node on
+        // the run map calls handleRunChoice("enter-node", ...) which
+        // builds the modeConfig and calls startGame itself. The "START"
+        // path from a Frontier-mode chip click should never fire — the
+        // chip opens overlays via _emitStart returning early. Defensive
+        // no-op for any future regression.
+        return;
       }
+      // Open / Defend / Custom / Admiral. Custom carries its full
+      // roster bundle through; Admiral flips the input layer to show
+      // the command panel.
+      startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode, null,
+                choice.fleetMul, choice.customRoster || null);
+      input.admiralActive = !!game.admiralMode;
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();
     }
@@ -270,19 +380,25 @@ function frame(now) {
       }
     }
 
-    // Edge-trigger: match just ended this frame. Bank a campaign
-    // victory exactly once.
-    if (game.matchOver && !prevMatchOver) {
-      if (game.mode === "campaign" && game.winner === "blue" && game.campaign) {
-        recordVictory(campaign);
-        game.campaign.totalMoney = campaign.money;
-      }
-    }
+    // Edge-trigger: match just ended this frame. Roguelite handling
+    // (capture fleet state, advance run) lives inside the matchEnded
+    // listener registered above; this block only handles the
+    // return-to-menu input.
     prevMatchOver = game.matchOver;
 
     if (game.matchOver && input.consumeEnterPress()) {
+      const wasRoguelite = game.mode === "roguelite";
       restart(game);
       audio.stop();
+      refresh();
+      // If a Frontier run is still alive, re-open the run map so the
+      // player lands back at the fleet/map view instead of the bare
+      // main menu.
+      if (wasRoguelite && activeRun) {
+        input.startMenu.selectedMode = "roguelite";
+        input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
+        input.startMenu.showRunMap = true;
+      }
     }
   }
 
@@ -380,7 +496,16 @@ function draw() {
 }
 
 window.addEventListener("pointerdown", () => {
-  if (game.matchOver && game.state === "playing") restart(game);
+  if (game.matchOver && game.state === "playing") {
+    const wasRoguelite = game.mode === "roguelite";
+    restart(game);
+    refresh();
+    if (wasRoguelite && activeRun) {
+      input.startMenu.selectedMode = "roguelite";
+      input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
+      input.startMenu.showRunMap = true;
+    }
+  }
 });
 
 requestAnimationFrame(frame);

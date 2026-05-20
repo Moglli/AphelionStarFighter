@@ -157,6 +157,17 @@ class Progression {
       this._toast(`Wave ${wave} cleared  +${xp} XP`, "xp");
     });
 
+    events.on("runEnded", ({ won, reason }) => {
+      if (won) {
+        this._toast(`FRONTIER RUN COMPLETE`, "win");
+      } else if (reason === "wiped") {
+        this._toast(`Run ended — fleet lost`, "xp");
+      }
+      // Meta-progression bookkeeping (runsCompleted, warProgress,
+      // perk unlocks) is owned by recordRunEnd in roguelite.js — we
+      // only render the user-facing toast here.
+    });
+
     events.on("matchEnded", ({ mode, winner, score }) => {
       this._awardXp(PARTICIPATION_XP, /*silent*/ true);
       const won = winner === "blue";
