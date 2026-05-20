@@ -85,7 +85,14 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-const ZOOM = 0.5;
+// Camera zoom. Default reads similar to the old fixed value so existing
+// gameplay (piloting a fighter) doesn't shift. In spectator and admiral
+// mode the user can pinch / scroll to zoom; the active value is read
+// each frame and applied to the world transform + ship draw.
+const DEFAULT_ZOOM = 0.5;
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 2.0;
+let zoom = DEFAULT_ZOOM;
 
 const FIXED_DT = 1 / 60;
 const MAX_ACCUM = 0.25;
@@ -161,6 +168,23 @@ function frame(now) {
       if (game.spectating) exitSpectate(game);
       else enterSpectate(game);
     }
+    // Camera zoom: pinch (touch) + wheel (mouse) feed a single delta
+    // pool. Spectator and admiral get to use it; piloting keeps the
+    // default zoom so the player isn't fighting muscle-memory aim at
+    // varying scales. Reset to default when leaving those modes so a
+    // zoomed-out admiral doesn't carry a wide view into the next match.
+    if (game.spectating || game.admiralMode) {
+      const dz = input.consumePinchDelta();
+      if (dz !== 0) {
+        zoom *= (1 + dz);
+        if (zoom < MIN_ZOOM) zoom = MIN_ZOOM;
+        else if (zoom > MAX_ZOOM) zoom = MAX_ZOOM;
+      }
+    } else if (zoom !== DEFAULT_ZOOM) {
+      zoom = DEFAULT_ZOOM;
+      input.consumePinchDelta(); // drop any pending input
+    }
+
     if (game.spectating) {
       if (input.consumeSpectateNext()) cycleSpectate(game, +1);
       if (input.consumeSpectatePrev()) cycleSpectate(game, -1);
@@ -253,11 +277,11 @@ function draw() {
       : { x: ARENA.width / 2, y: ARENA.height / 2 };
   }
 
-  drawArena(ctx, game.starfield, camera, viewW, viewH, ZOOM);
+  drawArena(ctx, game.starfield, camera, viewW, viewH, zoom);
 
   ctx.save();
   ctx.translate(viewW / 2, viewH / 2);
-  ctx.scale(ZOOM, ZOOM);
+  ctx.scale(zoom, zoom);
   ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
@@ -269,7 +293,7 @@ function draw() {
   if (game.particles) {
     for (const p of game.particles) if (p.kind === "smoke") drawParticle(ctx, p);
   }
-  for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, ZOOM);
+  for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, zoom);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
   // Persistent debris on top of live ships — fresh chunks visibly chip

@@ -1657,6 +1657,16 @@ export class InputManager {
     this.mouseRightDown = false;
     this._rightClickEdge = false;
 
+    // Multi-touch tracking for pinch zoom. We log every live touch
+    // pointer (any pointerType==="touch") so we can detect 2+ active
+    // fingers regardless of whether they were claimed by sticks. When
+    // two touches are active the per-move handler emits a scalar
+    // pendingZoomDelta that the game loop consumes each frame in
+    // spectator / admiral mode.
+    this._touches = new Map();        // pointerId -> {x, y}
+    this._pinchPrevDist = null;
+    this._pendingZoomDelta = 0;       // accumulates frame-to-frame
+
     // Latches for edge-triggered keys.
     this._enterLatched = false;
     this._mLatched = false;
@@ -1682,6 +1692,13 @@ export class InputManager {
       if (e.pointerType !== "touch") this.mouseInside = false;
     });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Scroll-wheel zoom is the desktop equivalent of pinch. Negative
+    // deltaY (wheel up) zooms in; we normalise by 500 so a typical
+    // 100px wheel notch becomes a +0.2 zoom delta.
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this._pendingZoomDelta += -e.deltaY / 500;
+    }, { passive: false });
     canvas.style.touchAction = "none";
 
     const TRAPPED = new Set([
@@ -1718,6 +1735,14 @@ export class InputManager {
     // action buttons.
     if (e.pointerType !== "touch") {
       this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
+    } else {
+      // Track every touch pointer for pinch detection. A second active
+      // touch seeds the pinch baseline distance; the per-move handler
+      // accumulates zoom delta from changes to that distance.
+      this._touches.set(e.pointerId, { x, y });
+      if (this._touches.size === 2) {
+        this._pinchPrevDist = this._touchDistance();
+      }
     }
 
     // Pre-match menu: route the click to size-selection and swallow
@@ -1779,6 +1804,18 @@ export class InputManager {
     const { x, y } = this.pos(e);
     if (e.pointerType !== "touch") {
       this.mouse.x = x; this.mouse.y = y;
+    } else if (this._touches.has(e.pointerId)) {
+      // Update the tracked touch position; if two fingers are down,
+      // emit a zoom delta from the change in inter-finger distance.
+      const t = this._touches.get(e.pointerId);
+      t.x = x; t.y = y;
+      if (this._touches.size === 2) {
+        const newDist = this._touchDistance();
+        if (this._pinchPrevDist && newDist > 0) {
+          this._pendingZoomDelta += (newDist / this._pinchPrevDist) - 1;
+        }
+        this._pinchPrevDist = newDist;
+      }
     }
     // Pre-match menu owns the pointer while open — sliders inside the
     // Custom Match overlay need move events to drag. Returns false
@@ -1792,6 +1829,12 @@ export class InputManager {
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
   }
   onUp(e) {
+    if (e.pointerType === "touch" && this._touches.has(e.pointerId)) {
+      this._touches.delete(e.pointerId);
+      // Less than two fingers — drop the pinch baseline so the next
+      // two-finger gesture starts fresh instead of jumping.
+      if (this._touches.size < 2) this._pinchPrevDist = null;
+    }
     if (this.menuActive) {
       this.startMenu.pointerUp();
       return;
@@ -1842,6 +1885,28 @@ export class InputManager {
   consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }
   consumeMuteToggle()      { return this._consumeKey("KeyP", "_pLatched"); }
   consumeSpectatePrev()    { return this._consumeKey("KeyB", "_bLatched"); }
+
+  // Scalar zoom delta accumulated since the last consume call. Pinch
+  // gestures + scroll wheel both feed this; the game loop reads it
+  // each frame in spectator / admiral mode and applies it to the
+  // camera zoom. Touch baseline distance is preserved across the
+  // consume so a continuing pinch keeps adjusting smoothly.
+  consumePinchDelta() {
+    const d = this._pendingZoomDelta;
+    this._pendingZoomDelta = 0;
+    return d;
+  }
+
+  // Euclidean distance between the two oldest tracked touches. Returns
+  // 0 if fewer than two touches are live. Only valid while
+  // _touches.size === 2 — callers gate on that.
+  _touchDistance() {
+    const it = this._touches.values();
+    const a = it.next().value;
+    const b = it.next().value;
+    if (!a || !b) return 0;
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
 
   controller() {
     const touchThrust = this.left.value;

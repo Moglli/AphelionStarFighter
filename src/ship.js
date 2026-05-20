@@ -1069,9 +1069,11 @@ function drawScar(ctx, sc) {
   ctx.translate(sc.lx, sc.ly);
   ctx.rotate(sc.seed * Math.PI * 2);
   if (sc.kind === "armor-flake") {
-    // Light scratched-metal chip — bright patch with a dark seam.
-    ctx.fillStyle = "rgba(190,190,200,0.55)";
-    ctx.strokeStyle = "rgba(30,30,40,0.7)";
+    // Subtle scratched plate — muted gray with a dark seam, no rim
+    // halo. Reads as a chip in the armor without drawing the eye
+    // away from the actual hole / module craters.
+    ctx.fillStyle = "rgba(140,148,160,0.45)";
+    ctx.strokeStyle = "rgba(20,24,32,0.55)";
     ctx.lineWidth = 0.6;
     ctx.beginPath();
     const n = 6;
@@ -1086,13 +1088,19 @@ function drawScar(ctx, sc) {
     ctx.fill();
     ctx.stroke();
   } else {
-    // Hull hole — hot orange rim, dark irregular bore.
-    ctx.strokeStyle = "rgba(255,130,50,0.7)";
-    ctx.lineWidth = Math.max(0.8, r * 0.25);
+    // Hull hole — sooty crater in the same visual language as a
+    // destroyed module node: dark irregular bore, dark sooty rim,
+    // optional charred inner ring for bigger holes. No bright orange
+    // ring (that read as a "floating rind" hovering above the hull).
+    // Dark sooty outer ring — subtle, just enough to seat the crater
+    // in the hull surface.
+    ctx.strokeStyle = "rgba(20,16,18,0.75)";
+    ctx.lineWidth = Math.max(0.6, r * 0.18);
     ctx.beginPath();
-    ctx.arc(0, 0, r * 1.05, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 1.04, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    // Crater fill — irregular dark polygon.
+    ctx.fillStyle = "rgba(0,0,0,0.92)";
     ctx.beginPath();
     const n = 7;
     for (let i = 0; i < n; i++) {
@@ -1104,6 +1112,14 @@ function drawScar(ctx, sc) {
     }
     ctx.closePath();
     ctx.fill();
+    // Charred inner accent for larger craters — a slightly darker
+    // off-centre disc that gives depth without painting a halo.
+    if (r > 4) {
+      ctx.fillStyle = "rgba(40,28,24,0.55)";
+      ctx.beginPath();
+      ctx.arc(r * 0.15, r * 0.1, r * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.restore();
 }
@@ -1392,25 +1408,10 @@ export function drawShip(ctx, ship, zoom = 1) {
         ctx.fillRect(cell.lx - halfW, cell.ly - halfH, padW, padH);
       }
     }
-    // Wounded-cell halo: cells that took damage but didn't die yet show
-    // a translucent rust overlay with a small orange dot at hp==1.
-    // Skipped at far zoom (detail==false) — the halo is invisible at
-    // that scale and we save the full-grid walk on every ship.
-    const cellHpMax = ship.cellHpMax || 1;
-    if (detail && cellHpMax > 1) {
-      ctx.fillStyle = "rgba(80,40,20,0.45)";
-      for (const cell of ship.cells) {
-        if (cell.culled || cell.dead) continue;
-        if (cell.hp >= cellHpMax) continue;
-        ctx.fillRect(cell.lx - halfW, cell.ly - halfH, cw, ch);
-      }
-      ctx.fillStyle = "rgba(255,140,40,0.8)";
-      for (const cell of ship.cells) {
-        if (cell.culled || cell.dead) continue;
-        if (cell.hp !== 1) continue;
-        ctx.fillRect(cell.lx - 0.5, cell.ly - 0.5, 1, 1);
-      }
-    }
+    // Wounded-cell halo intentionally removed: the prior rust overlay +
+    // orange dot read as a "floating rind" hovering over the hull. Cells
+    // now go straight from pristine sprite to punched-out void; the
+    // hit-flash below + scar craters carry the damage feedback.
     // Bright rim around the freshest chip so a hit reads visibly even
     // before the chunk has finished tearing out.
     let anyFlash = false;

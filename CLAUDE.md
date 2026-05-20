@@ -122,6 +122,114 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Pinch zoom + non-linear capital HP + crater-style hull damage
+
+**What changed**
+
+Four coordinated player-facing changes:
+
+1. **Pinch zoom in spectator and admiral mode.** Two-finger pinch on
+   touch + scroll-wheel on desktop both feed a single zoom delta.
+   Clamped to `[0.15, 2.0]`; default `0.5`. Piloting keeps the default
+   zoom so muscle-memory aim isn't disrupted, and leaving spectator /
+   admiral resets the zoom so it doesn't carry into the next match.
+2. **Non-linear hull-HP scaling by class tier.** Capitals were too
+   brittle — a battleship crumbled in ~30 s of focused fire which made
+   big ships feel small. New multiplier curve (fighter 1.0, bomber
+   1.3, frigate 2.0, cruiser 3.0, BB 4.5, carrier 4.5, station 3.0)
+   ramps superlinearly so a Terran battleship goes from 1100 → ~4950
+   hull and Hegemony's tank battleship from 1500 → ~6750. Module
+   destruction (laser, missile pods, broadsides) becomes the practical
+   way to disable a capital instead of grinding hull.
+3. **Floating rind removed.** The translucent rust overlay + bright
+   orange dot on wounded cells, AND the hot-orange rim around
+   hull-hole scars, both read as a "floating rind" hovering above the
+   silhouette. Both gone. Wounded cells now go straight from pristine
+   sprite to punched-out void; the hit-flash + crater scars carry the
+   feedback. Armor-flake patches also toned down to a muted gray.
+4. **Hull-hole scars rendered as crater nodes.** Same visual language
+   as a destroyed module: dark sooty rim, irregular dark bore, a
+   charred inner accent on larger holes. Combined with the existing
+   dead-cell void rendering, hull damage now reads as discrete "big
+   holes" similar to a destroyed laser / missile bay node.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/races.js` | `HP_TIER_MUL` table + `resolveSpec` multiplies merged spec's `hp` by the class tier after race overrides deep-merge. Station gets the multiplier on the base spec (it bypasses the race-mods branch). |
+| `src/ship.js` | `drawScar` for `hull-hole`: replaced the hot-orange rim with a dark sooty rim + charred inner disc. Armor-flake palette muted. Wounded-cell halo block (rust overlay + orange dot at hp==1) deleted entirely. |
+| `src/input.js` | `InputManager` tracks `_touches` map of live touch pointers + `_pinchPrevDist` baseline + `_pendingZoomDelta`. `onDown`/`onMove`/`onUp` log + update + drop touches; two-finger move accumulates zoom delta. Wheel listener feeds the same delta pool. New `consumePinchDelta()` + `_touchDistance()` helpers. |
+| `src/main.js` | `const ZOOM = 0.5` → `let zoom = DEFAULT_ZOOM (0.5)` with `MIN_ZOOM = 0.15` / `MAX_ZOOM = 2.0`. Frame loop consumes pinch delta only when `game.spectating || game.admiralMode`, applies to zoom, clamps. Resets zoom + drops any pending delta when not in those modes. Render path threads `zoom` (was `ZOOM`) through to `drawArena` + ship draws. |
+
+**Design decisions / gotchas**
+
+- **Zoom only applies in spectator + admiral.** Piloting keeps the
+  default — aim feel depends on a known scale and we don't want
+  fights to be at a different zoom every time. If we ever support
+  player-pilot zoom, make the change opt-in via a settings toggle so
+  existing muscle memory isn't disrupted.
+- **Pinch baseline drops on a finger lift.** When the second finger
+  goes up the next two-finger gesture starts fresh from a new
+  baseline — otherwise the zoom would lurch when re-engaging.
+- **Wheel delta is normalised by 500.** Typical wheel notch is 100px
+  → 0.2 delta → ~22% zoom per notch. Tweak if it feels too coarse
+  or too fine; don't try to make it match macOS smooth-scroll exactly
+  (different per-OS deltaY scaling will fight you).
+- **HP tier multiplier is applied AFTER race deep-merge.** Race
+  overrides like Hegemony BB 1500 / Reavers BB 770 are preserved
+  proportionally; both ride on top of the same 4.5× capital
+  multiplier. If you ever want race-specific tier multipliers, add
+  a `hpMul` field to the race spec and multiply by `(mods.hpMul ||
+  HP_TIER_MUL[klass])` here.
+- **Cell-hull-cost wasn't scaled.** Each cell death still drains
+  `ship.hp` by 0.25–1.0 depending on class. After the 4.5× BB
+  multiplier, ~700 alive cells × 1.0 cost ≈ 700 HP drainable via
+  cells — only 14% of the 4950 hull. Most hull HP now drains via
+  direct damage (the line `ship.hp -= remaining` in `applyDamage`).
+  This is intentional: the cell voids are decorative and visible
+  damage will outpace HP bar drop on capitals (you'll see the swiss
+  cheese before the bar empties). If that becomes a complaint,
+  bump `CELL_HULL_COST` for capitals proportionally — but watch
+  out for double-counting since `applyDamage` already drains hull
+  directly.
+- **`drawScar` accent on bigger craters is `r > 4` gated.** Below
+  that the secondary disc would just be 1–2 pixels and look like
+  noise. Don't lower the threshold without verifying on fighters.
+- **Armor-flake gray softened, not removed.** Armor damage still
+  needs SOME visual to read; the muted gray patch is "scratched
+  plate" without painting attention back to the area. Hull craters
+  do the heavy lifting now.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Arena → press V to spectate. Pinch to zoom in/out on a phone; scroll
+  the wheel on desktop. The zoom should be smooth and clamped — past
+  ~2× the view fills the screen, below ~0.15× ships become invisible
+  dots so the clamps cut in.
+- Pinch to zoom out, then press V to exit spectate. Zoom should snap
+  back to the default piloting view automatically.
+- Pick **Admiral** mode → start. The admiral panel is at the bottom;
+  pinch / scroll zooms the world while you're still controlling
+  fleets — useful for picking out which capital is in trouble.
+- Battleship-on-battleship duel: a clean broadside-to-broadside
+  exchange used to end in ~30 s; now expect 90–120 s of fire to chew
+  through shield → armor → 4950 hull. Module destruction is the
+  shortcut — kill the laser / missile bays / broadsides one by one.
+- Take damage on a battleship hull: holes appear as dark sooty
+  craters, not orange-rimmed rinds. The cell grid still punches dark
+  voids alongside the craters.
+- Fly into a frigate's PD bubble: cells take chip damage but the
+  surface stays clean (no rust overlay) until cells start dying and
+  punching dark voids.
+
 ### 2026-05-20 — Custom Match: slider-driven roster redesign
 
 **What changed**

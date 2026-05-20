@@ -248,14 +248,43 @@ export const RACES = {
 
 export const RACE_KEYS = Object.keys(RACES);
 
+// Non-linear hull-HP scaling by class tier. Capitals were too brittle —
+// a battleship would crumble in ~30 s of focused fire which made big
+// ships feel small. Multiplier curve ramps superlinearly: light craft
+// keep their base HP, capitals scale 3–4.5× so module destruction
+// (laser, missile pods, broadsides) becomes the practical way to
+// disable a capital instead of grinding hull. Applied AFTER race
+// overrides deep-merge, so race-specific HP variance (Reavers'
+// glass-cannons, Hegemony's tanks) still rides on top.
+const HP_TIER_MUL = {
+  fighter:    1.0,
+  bomber:     1.3,
+  frigate:    2.0,
+  cruiser:    3.0,
+  battleship: 4.5,
+  carrier:    4.5,
+  station:    3.0,
+};
+
 export function resolveSpec(raceKey, klass) {
   const base = CLASSES[klass];
   const race = RACES[raceKey] || RACES.terran;
   // `race.station` is a spawn descriptor ({ spread, nodes }), not a spec
   // override. Per-node mods are applied via createShip's specOverride.
-  if (klass === "station") return base;
+  if (klass === "station") {
+    const mul = HP_TIER_MUL[klass] || 1;
+    if (mul !== 1 && base.hp) {
+      return { ...base, hp: Math.round(base.hp * mul) };
+    }
+    return base;
+  }
   const mods = race[klass] || {};
-  return deepMerge(base, mods);
+  const merged = deepMerge(base, mods);
+  const mul = HP_TIER_MUL[klass] || 1;
+  if (mul !== 1 && merged.hp) {
+    merged.hp = Math.round(merged.hp * mul);
+  }
+  return merged;
 }
 
 export function getStationDef(raceKey) {
