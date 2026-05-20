@@ -375,6 +375,36 @@ export function spawnEnginePlumeVFX(particles, x, y, backwardAngle, severity) {
   }
 }
 
+// Shield impact VFX. Outward shockwave + 4-6 sparks at the bubble
+// hit point, tinted shield-blue (or shield-collapse white when the
+// final hit drops the shield). `cost` scales the ring growth + spark
+// count so a small fighter ping feels different from a missile slam.
+export function spawnShieldImpact(particles, x, y, cost, collapsed = false) {
+  const size = Math.max(6, Math.min(28, 6 + cost * 0.18));
+  particles.push(createShockwave(x, y, {
+    size: 4,
+    growth: size * 18,
+    color: collapsed ? "rgba(220,230,255," : "rgba(120,200,255,",
+    ttl: 0.36 + Math.random() * 0.08,
+  }));
+  if (collapsed) {
+    // Second ring expands faster + longer to mark the bubble drop.
+    particles.push(createShockwave(x, y, {
+      size: 8,
+      growth: size * 28,
+      color: "rgba(180,220,255,",
+      ttl: 0.5,
+    }));
+  }
+  const sparkCount = collapsed ? 10 : (cost > 30 ? 6 : 3);
+  for (let i = 0; i < sparkCount; i++) {
+    particles.push(createSpark(x, y, {
+      color: collapsed ? "#e8f4ff" : "#bce8ff",
+      speed: 120 + Math.random() * 160,
+    }));
+  }
+}
+
 // Hull venting damage VFX: smoke + occasional fire from a hull point on
 // the silhouette edge. Used for ship-wide HP-low ambient damage so a
 // half-dead capital visibly trails smoke from breached compartments.

@@ -68,10 +68,12 @@ const DEFAULT_SAVE = Object.freeze({
     musicVolume: 0.6,
     sfxVolume: 0.8,
     controlSensitivity: 1.0,
-    // Persistent mute toggle, set from the Settings overlay or the P
-    // shortcut. mergeWithDefaults deep-merges, so adding this field
-    // doesn't need a schema bump — existing saves boot with `false`.
+    // Persistent mute toggles, set from the Settings overlay or the
+    // P shortcut (music only). mergeWithDefaults deep-merges, so
+    // adding these fields doesn't need a schema bump — existing
+    // saves boot with the defaults.
     musicMuted: false,
+    sfxMuted: false,
   },
 });
 

@@ -502,8 +502,8 @@ export class StartMenu {
     // callback (so persistence happens through saveStore, not here).
     this.showSettings = false;
     this.settingsButtonRect = null;
-    this.settingsRects = { panel: null, musicToggle: null, close: null };
-    this._settingsGet = () => ({ musicMuted: false });
+    this.settingsRects = { panel: null, musicToggle: null, sfxToggle: null, close: null };
+    this._settingsGet = () => ({ musicMuted: false, sfxMuted: false });
     this._settingsApply = () => {};
   }
 
@@ -1047,14 +1047,22 @@ export class StartMenu {
 
   // ---- Settings overlay ------------------------------------------------
   _layoutSettingsOverlay(viewW, viewH) {
-    const panelW = 380, panelH = 220;
+    const panelW = 380, panelH = 300;
     const panelX = (viewW - panelW) / 2;
     const panelY = (viewH - panelH) / 2;
     this.settingsRects.panel = { x: panelX, y: panelY, w: panelW, h: panelH };
-    // Music row: full-width toggle pill below the title.
+    // Music + SFX toggle pills stacked. Each row is a full-width pill
+    // so the touch target is generous on phones.
+    const rowH = 52;
+    const rowGap = 10;
+    const rowsTop = panelY + 70;
     this.settingsRects.musicToggle = {
-      x: panelX + 24, y: panelY + 70,
-      w: panelW - 48, h: 56,
+      x: panelX + 24, y: rowsTop,
+      w: panelW - 48, h: rowH,
+    };
+    this.settingsRects.sfxToggle = {
+      x: panelX + 24, y: rowsTop + rowH + rowGap,
+      w: panelW - 48, h: rowH,
     };
     // Close button bottom-centred.
     this.settingsRects.close = {
@@ -1064,44 +1072,36 @@ export class StartMenu {
   }
 
   _drawSettingsOverlay(ctx, viewW, viewH) {
-    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillStyle = "rgba(2,8,18,0.86)";
     ctx.fillRect(0, 0, viewW, viewH);
 
     const p = this.settingsRects.panel;
-    ctx.fillStyle = "rgba(10,18,28,0.96)";
+    ctx.fillStyle = "rgba(8,16,28,0.92)";
     ctx.fillRect(p.x, p.y, p.w, p.h);
     ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(p.x, p.y, p.w, p.h);
+    // Accent rule at the top so the panel reads in the same chrome
+    // family as the rest of the HUD.
+    ctx.fillStyle = "#5af";
+    ctx.fillRect(p.x, p.y, p.w, 3);
 
     ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
+    ctx.fillStyle = "#e6f4ff";
     ctx.font = "bold 22px system-ui, sans-serif";
     ctx.fillText("SETTINGS", viewW / 2, p.y + 36);
 
     const state = this._settingsGet();
-    const t = this.settingsRects.musicToggle;
-    const on = !state.musicMuted;
-    ctx.fillStyle = on ? "rgba(40,90,140,0.95)" : "rgba(60,30,30,0.85)";
-    ctx.fillRect(t.x, t.y, t.w, t.h);
-    ctx.strokeStyle = on ? "#7df" : "#c66";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(t.x, t.y, t.w, t.h);
-    ctx.fillStyle = "#cef";
-    ctx.textAlign = "left";
-    ctx.font = "bold 17px system-ui, sans-serif";
-    ctx.fillText("MUSIC", t.x + 18, t.y + t.h / 2 + 6);
-    ctx.textAlign = "right";
-    ctx.fillStyle = on ? "#9f8" : "#fcc";
-    ctx.font = "bold 20px system-ui, sans-serif";
-    ctx.fillText(on ? "ON" : "OFF", t.x + t.w - 18, t.y + t.h / 2 + 7);
+    this._drawAudioToggleRow(ctx, this.settingsRects.musicToggle, "MUSIC", !state.musicMuted);
+    this._drawAudioToggleRow(ctx, this.settingsRects.sfxToggle,   "SFX",   !state.sfxMuted);
 
-    // Hint below the toggle: tells the player about the P shortcut so
-    // they can mute mid-match without coming back here.
+    // Hint below the rows: tells the player about the P shortcut so
+    // they can mute music mid-match without coming back here.
     ctx.textAlign = "center";
     ctx.fillStyle = "#9bd";
     ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("Tap to toggle  ·  P also mutes during a match", viewW / 2, t.y + t.h + 22);
+    ctx.fillText("Tap rows to toggle  ·  P mutes music mid-match",
+      viewW / 2, this.settingsRects.sfxToggle.y + this.settingsRects.sfxToggle.h + 24);
 
     const c = this.settingsRects.close;
     ctx.fillStyle = "rgba(40,80,60,0.9)";
@@ -1112,6 +1112,26 @@ export class StartMenu {
     ctx.fillStyle = "#fff";
     ctx.font = "bold 16px system-ui, sans-serif";
     ctx.fillText("CLOSE", c.x + c.w / 2, c.y + c.h / 2 + 6);
+  }
+
+  // Settings toggle row: full-width pill with the option label on the
+  // left and an ON / OFF indicator on the right. Filled blue when on,
+  // muted red when off — keeps the same visual language as the rest
+  // of the chrome.
+  _drawAudioToggleRow(ctx, t, label, on) {
+    ctx.fillStyle = on ? "rgba(40,90,140,0.95)" : "rgba(60,30,30,0.85)";
+    ctx.fillRect(t.x, t.y, t.w, t.h);
+    ctx.strokeStyle = on ? "#7df" : "#c66";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(t.x, t.y, t.w, t.h);
+    ctx.fillStyle = "#cef";
+    ctx.textAlign = "left";
+    ctx.font = "bold 17px system-ui, sans-serif";
+    ctx.fillText(label, t.x + 18, t.y + t.h / 2 + 6);
+    ctx.textAlign = "right";
+    ctx.fillStyle = on ? "#9f8" : "#fcc";
+    ctx.font = "bold 20px system-ui, sans-serif";
+    ctx.fillText(on ? "ON" : "OFF", t.x + t.w - 18, t.y + t.h / 2 + 7);
   }
 
   _drawSettingsButton(ctx) {
@@ -1139,6 +1159,11 @@ export class StartMenu {
     if (this._hit(this.settingsRects.musicToggle, x, y)) {
       const cur = this._settingsGet();
       this._settingsApply({ musicMuted: !cur.musicMuted });
+      return true;
+    }
+    if (this.settingsRects.sfxToggle && this._hit(this.settingsRects.sfxToggle, x, y)) {
+      const cur = this._settingsGet();
+      this._settingsApply({ sfxMuted: !cur.sfxMuted });
       return true;
     }
     // Click-through prevention: anywhere inside / outside the panel

@@ -83,12 +83,21 @@ export class GameAudio {
     this.master = null;
     this.compressor = null;
     this.layerGain = {};
-    this.muted = false;
+    this.muted = false;          // music mute
+    this.sfxMuted = false;       // SFX mute (separate bus)
+    this.sfxGain = null;
     this.playing = false;
     this.timer = null;
     this.nextNoteTime = 0;
     this.step = 0;
     this.noiseBuf = null;
+    // Per-frame SFX rate cap. Each call to a sfx method increments the
+    // count; the limiter zeroes itself when consumed by tickSfxBudget()
+    // each game frame. Without this, a battleship broadside (9 shells
+    // in 0.5 s, multiplied across a brawl) overwhelms the compressor
+    // and the entire mix turns to mud.
+    this._sfxBudget = 0;
+    this._sfxMaxPerFrame = 6;
   }
 
   // Lazy-init the audio graph. Must be called from a user-gesture
@@ -125,7 +134,17 @@ export class GameAudio {
     this.layerGain.bass  = mk(0.65);
     this.layerGain.lead  = mk(0.55);
 
-    // One-shot white-noise buffer reused by snare and hat each tick.
+    // SFX bus — separate gain from the music layer so the menu's SFX
+    // toggle can silence shots/impacts without killing the soundtrack.
+    // Higher base level than music so the impact thunks read above
+    // the kick + snare. Connects through the same compressor so the
+    // final mix never clips.
+    this.sfxGain = this.ctx.createGain();
+    this.sfxGain.gain.value = this.sfxMuted ? 0 : 0.55;
+    this.sfxGain.connect(this.compressor);
+
+    // One-shot white-noise buffer reused by snare and hat each tick,
+    // plus the SFX hit + explosion voices.
     const len = Math.floor(this.ctx.sampleRate * 0.4);
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
@@ -169,6 +188,167 @@ export class GameAudio {
   }
 
   isMuted() { return this.muted; }
+
+  // ---- SFX bus ----------------------------------------------------------
+  // SFX mute is independent of the music mute — the master gain stays
+  // up; only the sfx bus drops to zero. Persists via main.js + saveStore.
+  setSfxMuted(m) {
+    if (this.sfxMuted === m) return;
+    this.sfxMuted = m;
+    if (this.sfxGain) {
+      const now = this.ctx.currentTime;
+      this.sfxGain.gain.cancelScheduledValues(now);
+      this.sfxGain.gain.linearRampToValueAtTime(this.sfxMuted ? 0 : 0.55, now + 0.05);
+    }
+  }
+  isSfxMuted() { return this.sfxMuted; }
+
+  // Each game frame the main loop calls this to reset the per-frame
+  // budget. Returns true while the budget is positive so the caller
+  // can short-circuit before doing any voice synthesis work.
+  tickSfxBudget() {
+    this._sfxBudget = this._sfxMaxPerFrame;
+  }
+
+  _sfxOk() {
+    if (!this.ctx || this.sfxMuted) return false;
+    if (this._sfxBudget <= 0) return false;
+    this._sfxBudget--;
+    return true;
+  }
+
+  // Short laser/cannon zap. `volume` is the caller-attenuated 0..1
+  // amplitude (distance falloff applied upstream). `kind` selects the
+  // pitch profile: fighter rounds are sharp/quick, capital cannons
+  // boom lower and longer.
+  sfxCannon({ volume = 1, kind = "fighter" } = {}) {
+    if (!this._sfxOk()) return;
+    if (volume <= 0.02) return;
+    const t = this.ctx.currentTime;
+    const heavy = kind === "battleship" || kind === "cruiser";
+    const startHz = heavy ? 520 : 1200;
+    const endHz   = heavy ? 110 : 280;
+    const dur     = heavy ? 0.18 : 0.09;
+    const o = this.ctx.createOscillator();
+    o.type = "square";
+    o.frequency.setValueAtTime(startHz, t);
+    o.frequency.exponentialRampToValueAtTime(endHz, t + dur);
+    const f = this.ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.value = heavy ? 1200 : 2400;
+    f.Q.value = 4;
+    const g = this.ctx.createGain();
+    const peak = (heavy ? 0.5 : 0.32) * volume;
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.linearRampToValueAtTime(peak, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(f); f.connect(g); g.connect(this.sfxGain);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+
+  // Whooshy hiss for missile launch — short pitched noise burst.
+  sfxMissile({ volume = 1 } = {}) {
+    if (!this._sfxOk()) return;
+    if (volume <= 0.02) return;
+    const t = this.ctx.currentTime;
+    const n = this.ctx.createBufferSource();
+    n.buffer = this.noiseBuf;
+    n.playbackRate.value = 0.6 + Math.random() * 0.2;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.setValueAtTime(900, t);
+    bp.frequency.exponentialRampToValueAtTime(280, t + 0.4);
+    bp.Q.value = 2.4;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.linearRampToValueAtTime(0.5 * volume, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    n.connect(bp); bp.connect(g); g.connect(this.sfxGain);
+    n.start(t, Math.random() * 0.1); n.stop(t + 0.5);
+  }
+
+  // Impact thunk. Two flavours:
+  //   shielded: bright high-Q ping with a tonal "shimmer" — energy
+  //             being absorbed by the bubble.
+  //   hull:     low filtered noise burst + body thump — physical
+  //             metallic hit through to the plate.
+  sfxHit({ shielded = false, volume = 1 } = {}) {
+    if (!this._sfxOk()) return;
+    if (volume <= 0.02) return;
+    const t = this.ctx.currentTime;
+    if (shielded) {
+      const o = this.ctx.createOscillator();
+      o.type = "triangle";
+      o.frequency.setValueAtTime(940, t);
+      o.frequency.exponentialRampToValueAtTime(420, t + 0.22);
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 1400;
+      bp.Q.value = 6;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.linearRampToValueAtTime(0.45 * volume, t + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      o.connect(bp); bp.connect(g); g.connect(this.sfxGain);
+      o.start(t); o.stop(t + 0.3);
+    } else {
+      const n = this.ctx.createBufferSource();
+      n.buffer = this.noiseBuf;
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.setValueAtTime(1400, t);
+      lp.frequency.exponentialRampToValueAtTime(220, t + 0.15);
+      lp.Q.value = 3;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.linearRampToValueAtTime(0.55 * volume, t + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      n.connect(lp); lp.connect(g); g.connect(this.sfxGain);
+      n.start(t, Math.random() * 0.1); n.stop(t + 0.22);
+      // Sub-thump body for the metallic feel.
+      const o = this.ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.setValueAtTime(130, t);
+      o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      const og = this.ctx.createGain();
+      og.gain.setValueAtTime(0.6 * volume, t);
+      og.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      o.connect(og); og.connect(this.sfxGain);
+      o.start(t); o.stop(t + 0.15);
+    }
+  }
+
+  // Big boom for ship explosions. `intensity` 0..1 scales pitch low
+  // (bigger explosion = lower rumble) and duration.
+  sfxExplosion({ volume = 1, intensity = 0.6 } = {}) {
+    if (!this._sfxOk()) return;
+    if (volume <= 0.02) return;
+    const t = this.ctx.currentTime;
+    const dur = 0.45 + intensity * 0.55;
+    const n = this.ctx.createBufferSource();
+    n.buffer = this.noiseBuf;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(1800, t);
+    lp.frequency.exponentialRampToValueAtTime(120, t + dur);
+    lp.Q.value = 2;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.linearRampToValueAtTime(0.85 * volume, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    n.connect(lp); lp.connect(g); g.connect(this.sfxGain);
+    n.start(t, Math.random() * 0.1); n.stop(t + dur + 0.05);
+    // Tonal kick for impact weight — pitch ramps from mid-low to sub.
+    const o = this.ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.setValueAtTime(220 - intensity * 100, t);
+    o.frequency.exponentialRampToValueAtTime(35, t + dur * 0.7);
+    const og = this.ctx.createGain();
+    og.gain.setValueAtTime(0.7 * volume, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(og); og.connect(this.sfxGain);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
 
   // Lookahead scheduler — Chris Wilson's classic Web Audio pattern.
   // Wakes every 25 ms and queues every step whose start time falls

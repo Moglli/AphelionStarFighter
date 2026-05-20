@@ -20,6 +20,7 @@ import {
   loadEnergy, regenTick, spendEnergy, purchase as purchaseEnergy,
 } from "./energy.js";
 import { saveStore } from "./save.js";
+import { events } from "./events.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -33,18 +34,69 @@ window.game = game; // for console smoke-testing
 const audio = new GameAudio();
 let musicWasPlaying = false; // tracks state for start/stop edge detection
 
-// Restore persisted music mute state and wire the Settings overlay
-// + the P key shortcut to both apply the change to the live audio
-// graph AND persist it through saveStore.
+// Restore persisted music + SFX mute states and wire the Settings
+// overlay + the P key shortcut (music only) to both apply the change
+// to the live audio graph AND persist it through saveStore.
 audio.setMuted(!!saveStore.get().settings.musicMuted);
+audio.setSfxMuted(!!saveStore.get().settings.sfxMuted);
 function applyMuteChange(muted) {
   audio.setMuted(muted);
   saveStore.update((d) => { d.settings.musicMuted = muted; });
 }
+function applySfxMuteChange(muted) {
+  audio.setSfxMuted(muted);
+  saveStore.update((d) => { d.settings.sfxMuted = muted; });
+}
 input.startMenu.setSettings(
-  () => ({ musicMuted: audio.isMuted() }),
-  (patch) => { if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted); },
+  () => ({ musicMuted: audio.isMuted(), sfxMuted: audio.isSfxMuted() }),
+  (patch) => {
+    if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted);
+    if (typeof patch.sfxMuted === "boolean") applySfxMuteChange(patch.sfxMuted);
+  },
 );
+
+// SFX routing: gameplay code emits weaponFired / hit / shipDestroyed
+// events with world-space positions; the camera-attenuated distance
+// drives volume so a battle on the far side of the map is muted while
+// a knife-fight at the player's position is at full volume.
+let _lastCamera = { x: 0, y: 0 };
+const SFX_RANGE = 1800;        // world units past which volume → 0
+const SFX_CANNON_PROB = 0.35;  // gate cannon emissions so brawls aren't a wall of sound
+function sfxAttenuation(x, y) {
+  const dx = x - _lastCamera.x;
+  const dy = y - _lastCamera.y;
+  const d = Math.hypot(dx, dy);
+  if (d >= SFX_RANGE) return 0;
+  // Soft inverse curve — louder up close, gentle falloff to range.
+  return Math.max(0, 1 - (d / SFX_RANGE) ** 1.3);
+}
+events.on("weaponFired", ({ x, y, kind, isPlayer }) => {
+  if (!audio.ctx) return;
+  // Player always plays full-volume cannon SFX. AI cannons probability-gated
+  // so a 200-ship brawl doesn't deafen the player.
+  if (!isPlayer && Math.random() > SFX_CANNON_PROB) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.04) return;
+  audio.sfxCannon({ volume: att, kind });
+});
+events.on("missileFired", ({ x, y, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.04) return;
+  audio.sfxMissile({ volume: att });
+});
+events.on("hit", ({ x, y, shielded, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y) * 0.7;
+  if (att <= 0.08) return;
+  audio.sfxHit({ shielded, volume: att });
+});
+events.on("shipDestroyed", ({ x, y, intensity }) => {
+  if (!audio.ctx) return;
+  const att = sfxAttenuation(x, y);
+  if (att <= 0.05) return;
+  audio.sfxExplosion({ volume: att, intensity: intensity || 0.6 });
+});
 
 // Admiral panel — reads and writes game.directives directly. The map
 // is allocated by modes/admiral.js at match start; null in other
@@ -276,6 +328,10 @@ function draw() {
       ? { x: player.pos.x, y: player.pos.y }
       : { x: ARENA.width / 2, y: ARENA.height / 2 };
   }
+
+  _lastCamera.x = camera.x;
+  _lastCamera.y = camera.y;
+  audio.tickSfxBudget();
 
   drawArena(ctx, game.starfield, camera, viewW, viewH, zoom);
 

@@ -6,6 +6,7 @@ import { getSprite, ENGINES, ENGINE_X, buildCells, killCellsForModule } from "./
 import {
   buildModules, pdTurretToModuleName, podToModuleName, pickBomberAimModule,
 } from "./modules.js";
+import { events } from "./events.js";
 
 let nextId = 1;
 
@@ -151,6 +152,7 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     shieldMax: spec.shield ? spec.shield.max : 0,
     shieldHitTimer: 0, // counts up since last hit; regen kicks in past regenDelay
     shieldFlash: 0,    // visual: brief brighten when hit
+    shieldHits: [],    // localized arc flares from recent absorbs
     // Armor plating (big ships only). Never regenerates. Sits between
     // shield and hull and absorbs damage at spec.armor.wearRate.
     armor: spec.armor ? spec.armor.max : 0,
@@ -330,6 +332,16 @@ export function updateShip(ship, dt, world) {
   }
   if (ship.shieldFlash > 0) ship.shieldFlash = Math.max(0, ship.shieldFlash - dt * 4);
   if (ship.armorFlash > 0) ship.armorFlash = Math.max(0, ship.armorFlash - dt * 4);
+  // Tick down per-hit shield-arc flares — recorded in game.js
+  // applyDamage when a shield absorbs a projectile. Each entry holds
+  // an angle in ship-local space + a ttl; drop entries that age out
+  // so the array stays bounded.
+  if (ship.shieldHits && ship.shieldHits.length > 0) {
+    for (let i = ship.shieldHits.length - 1; i >= 0; i--) {
+      ship.shieldHits[i].ttl -= dt;
+      if (ship.shieldHits[i].ttl <= 0) ship.shieldHits.splice(i, 1);
+    }
+  }
   if (ship.modules) {
     for (const m of ship.modules) {
       if (m.flash > 0) m.flash = Math.max(0, m.flash - dt * 4);
@@ -518,6 +530,10 @@ function fireForward(ship, world) {
       fromKlass: ship.klass,
     }));
   }
+  events.emit("weaponFired", {
+    x: ship.pos.x, y: ship.pos.y,
+    kind: ship.klass, isPlayer: ship.isPlayer,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +646,10 @@ function emitBroadside(ship, world, sideVec, fwd) {
       fromKlass: ship.klass,
     }));
   }
+  events.emit("weaponFired", {
+    x: ship.pos.x, y: ship.pos.y,
+    kind: ship.klass, isPlayer: ship.isPlayer,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -761,6 +781,10 @@ function updateRingFire(ship, world) {
       fromKlass: "frigate",
     }));
     ship.ringCooldowns[i] = rc.cooldown;
+    events.emit("weaponFired", {
+      x: origin.x, y: origin.y,
+      kind: "frigate", isPlayer: ship.isPlayer,
+    });
   }
 }
 
@@ -894,6 +918,10 @@ function updateMissilePodFire(ship, world) {
       cluster: pods.cluster || null,
     }));
     ship.podCooldowns[i] = pods.cooldown;
+    events.emit("missileFired", {
+      x: origin.x, y: origin.y,
+      isPlayer: ship.isPlayer,
+    });
   }
 }
 
@@ -942,6 +970,10 @@ function fireFighterMissile(ship, world) {
     acquireRange: m.acquireRange,
     initialTarget: target,
   }));
+  events.emit("missileFired", {
+    x: origin.x, y: origin.y,
+    isPlayer: ship.isPlayer,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1562,17 +1594,47 @@ export function drawShip(ctx, ship, zoom = 1) {
   // Offset scales with hull radius so capital ships get a visible
   // stand-off bubble — a flat +6px hugs a battleship at 156px so
   // tightly it looks like an outline. Floor of 6px keeps the small
-  // craft (fighter/bomber) bubble unchanged.
+  // craft (fighter/bomber) bubble unchanged. Per-hit arc flares ride
+  // on top so impacts read at the spot they actually land.
   if (ship.shieldMax > 0 && ship.shield > 0) {
     const frac = ship.shield / ship.shieldMax;
     const baseAlpha = 0.08 + 0.18 * frac;
     const alpha = Math.min(0.85, baseAlpha + ship.shieldFlash);
     const shieldOffset = Math.max(6, s.radius * 0.18);
+    const bubbleR = s.radius + shieldOffset;
     ctx.strokeStyle = "rgba(120, 220, 255, " + alpha.toFixed(3) + ")";
     ctx.lineWidth = 2 + ship.shieldFlash * 4;
     ctx.beginPath();
-    ctx.arc(ship.pos.x, ship.pos.y, s.radius + shieldOffset, 0, Math.PI * 2);
+    ctx.arc(ship.pos.x, ship.pos.y, bubbleR, 0, Math.PI * 2);
     ctx.stroke();
+
+    // Per-hit arc flare: a short, bright arc of the bubble centred
+    // on the impact angle. Multiple recent hits stack so a missile
+    // salvo lights up the shield from several directions at once.
+    // Ship-local angle → world by rotating with ship.heading; render
+    // in world space directly (we're outside the ctx.save/restore
+    // of the rotated ship frame here).
+    if (ship.shieldHits && ship.shieldHits.length > 0) {
+      for (const h of ship.shieldHits) {
+        const t = h.ttl / h.maxTtl; // 1 at fresh, → 0 at expire
+        // Arc width shrinks as the flare ages; brightness too.
+        const half = 0.35 * t + 0.10;
+        const worldAng = ship.heading + h.ang;
+        const a0 = worldAng - half;
+        const a1 = worldAng + half;
+        ctx.strokeStyle = "rgba(220, 245, 255, " + (0.85 * t).toFixed(3) + ")";
+        ctx.lineWidth = 4 + 6 * t;
+        ctx.beginPath();
+        ctx.arc(ship.pos.x, ship.pos.y, bubbleR, a0, a1);
+        ctx.stroke();
+        // Inner brighter core line.
+        ctx.strokeStyle = "rgba(255, 255, 255, " + (0.6 * t).toFixed(3) + ")";
+        ctx.lineWidth = 1.5 + 2 * t;
+        ctx.beginPath();
+        ctx.arc(ship.pos.x, ship.pos.y, bubbleR, a0 + half * 0.3, a1 - half * 0.3);
+        ctx.stroke();
+      }
+    }
   }
 
   // HP bar (with an armor strip stacked above for capitals).

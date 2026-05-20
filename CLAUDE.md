@@ -122,6 +122,121 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — Procedural SFX + SFX mute + shield impact visual
+
+**What changed**
+
+The game shipped with procedural music but no combat SFX. Three
+coordinated additions: an SFX synth layer in `GameAudio`, gameplay
+event hooks that drive it (with camera-attenuated volume), and a
+proper shield-hit visual (outward ripple + localized bubble arc) so
+shield absorbs read as more than a brightness bump.
+
+1. **Procedural SFX layer.** Four voices: `sfxCannon` (square zap,
+   pitch profile differs for capital vs fighter rounds), `sfxMissile`
+   (filtered-noise woosh), `sfxHit` (bright triangle ping for
+   shielded, low-filtered noise + sub-thump for hull), and
+   `sfxExplosion` (long lowpass noise + sub kick). Each goes through
+   a separate `sfxGain` bus that the menu can mute independently of
+   music. Per-frame voice budget caps spawn rate so a 200-ship brawl
+   doesn't melt the compressor.
+2. **Gameplay event hooks.** `weaponFired`, `missileFired`, `hit`
+   (shielded vs hull), `shipDestroyed` events emitted from ship.js
+   firing paths and game.js `applyDamage` / wreck-spawn loop.
+   `main.js` subscribes and routes to `audio.sfx*` with distance
+   attenuation from the active camera. Player events bypass
+   attenuation; AI cannons are probability-gated (35%) so battle
+   chatter sounds present without overwhelming.
+3. **Shield impact visual.** Two layers — an outward shockwave +
+   sparks at the impact point (tinted shield-blue, white on bubble
+   collapse), plus a per-hit localized arc flare on the bubble that
+   rotates with the ship. Up to 6 active flares per ship; each
+   fades over 0.45s. Replaces the previous "just brighten the whole
+   bubble" feedback so missile salvos light up the shield from
+   multiple directions visibly.
+4. **Settings overlay** got an SFX toggle row below the existing
+   music toggle. Panel height bumped 220 → 300. Toggle row uses a
+   shared `_drawAudioToggleRow` helper. `settings.sfxMuted` added to
+   the save schema (deep-merges into existing saves at boot).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/audio.js` | New `sfxGain` bus + `sfxMuted` state. Methods `setSfxMuted`/`isSfxMuted`. Four SFX voices: `sfxCannon` / `sfxMissile` / `sfxHit` / `sfxExplosion`. Per-frame voice budget (`_sfxBudget` / `tickSfxBudget`). |
+| `src/events.js` | (unchanged — existing pub/sub bus is the dispatch layer) |
+| `src/main.js` | Wired sfx-mute through saveStore + settings overlay. `events.on(...)` listeners for weaponFired/missileFired/hit/shipDestroyed route to audio with camera-attenuated volume. `_lastCamera` + `audio.tickSfxBudget()` updated each frame in `draw()`. |
+| `src/ship.js` | `events.emit("weaponFired", ...)` from `fireForward`, `emitBroadside`, `updateRingFire` (per-shot). `events.emit("missileFired", ...)` from missile-pod + fighter missile paths. New `shieldHits: []` on every ship; ticked down each frame in `updateShip`. `drawShip` paints localized arc flares on the bubble from `ship.shieldHits`. |
+| `src/game.js` | `events.emit("hit", ...)` from `applyDamage` (shielded vs hull variants). `events.emit("shipDestroyed", ...)` from the wreck-spawn loop with intensity scaled by hull radius. New `recordShieldHit(ship, p)` stashes ship-local angle. Shield-absorb path calls `spawnShieldImpact` to spawn the ripple + sparks. |
+| `src/particles.js` | New `spawnShieldImpact(particles, x, y, cost, collapsed)` — outward shockwave + sparks, second ring on collapse. |
+| `src/save.js` | `settings.sfxMuted: false` default. |
+| `src/input.js` | Settings overlay panel height 220 → 300; new `sfxToggle` rect + click handler; `_drawAudioToggleRow` helper used for both rows. `_settingsGet` typed expanded to include `sfxMuted`. |
+
+**Design decisions / gotchas**
+
+- **`sfxGain` is a separate bus from music.** Don't fold the SFX
+  voices through the existing `compressor` directly — the per-bus
+  mute lets the menu silence one without the other, which is the
+  whole point of giving SFX its own toggle.
+- **Per-frame voice budget = 6.** A single broadside is 9 shells
+  fired over 0.45s; without the cap that's 9 cannons in one frame
+  for each of N firing ships. The budget gates voice creation at
+  the audio layer, not the event layer — events still fire (cheap),
+  but only the first 6 hit the synth each frame.
+- **AI weapon SFX is probability-gated at 35%.** This is the
+  cheapest knob if the SFX mix gets too noisy in big brawls. Drop
+  it to 0.2 for quieter background chatter; raise to 0.5 if the
+  battle sounds too sparse.
+- **Player events bypass attenuation.** The player's own cannons,
+  missile launches, and hits taken always play at full volume —
+  `isPlayer: true` short-circuits the distance falloff. If you
+  ever add player-on-player multiplayer this needs to become "own
+  pov" attenuation.
+- **`shieldHits` array bounded at 6.** Older entries shift out
+  when a 7th lands. 6 is enough for a missile salvo to visibly
+  paint the bubble from multiple angles without the bubble
+  becoming pure white.
+- **`recordShieldHit` localizes by `-ship.heading`.** The stored
+  angle is ship-local so the arc rides with a manoeuvring capital
+  instead of decaling in world space. Don't store world angles
+  here — a turning battleship would smear arc flares around the
+  bubble over the 0.45s lifetime.
+- **`spawnShieldImpact` is gated on `particles &&` in `applyDamage`.**
+  Beam ticks (which also call applyDamage) may not have particles
+  available; the guard keeps them safe. A beam continuously
+  re-records shield hits per tick which lights up the bubble
+  steadily under sustained fire — feels right.
+- **Settings overlay uses the new chrome family** (rgba(8,16,28,0.92)
+  + #5af border + accent rule) to match the rest of the HUD; the
+  prior dialog look was the only panel still on the old style.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # vite dev server
+```
+
+In-game:
+- Start any match. Fly a fighter. Hold fire — cannon zaps fire at
+  the cooldown rate. Distance attenuation: shoot, then turn 90° and
+  fly away; AI cannons in the brawl behind you fade with distance.
+- Take fire on the shield: each absorb should produce a localized
+  bright arc on the bubble pointing roughly at the incoming
+  projectile, plus a small outward ripple where it hit. A missile
+  salvo absorbed by the shield should light up the bubble from
+  multiple directions simultaneously.
+- Watch the shield collapse: the final hit (that strips the
+  bubble) spawns a second wider ring + more sparks.
+- Take a hull hit through stripped shield: a low metallic thunk
+  plays. Capital ship dies nearby: rumble explosion attenuated
+  by camera distance.
+- Open Settings (top-right menu chip). Two toggle rows now: MUSIC
+  and SFX. Flip SFX off — gun and hit SFX stop instantly; music
+  keeps playing. Flip music off — soundtrack drops, SFX continues.
+- Mute persists across reloads — saved via saveStore.
+
 ### 2026-05-20 — Engine fire + hull venting VFX scaling with damage
 
 **What changed**
