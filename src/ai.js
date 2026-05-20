@@ -1,4 +1,5 @@
 import * as V from "./vec.js";
+import { pickAimModule, moduleOffsetWorld } from "./modules.js";
 
 // Find nearest enemy to a ship.
 function nearestEnemy(ship, ships) {
@@ -13,15 +14,36 @@ function nearestEnemy(ship, ships) {
   return best;
 }
 
+// Pick the world-space aim point for `target`. When the target carries
+// modules (capitals + bombers — basically anything bigger than a
+// fighter) the AI prioritises the next live module in the PD →
+// broadside → missile → laser order so cannons chew through screening
+// + weapon systems before going for hull. Falls back to target.pos
+// for fighters and any target with no live modules left.
+function aimPointFor(target) {
+  if (!target) return null;
+  const mod = pickAimModule(target);
+  if (mod) {
+    const wpos = moduleOffsetWorld(target, mod);
+    if (wpos) return wpos;
+  }
+  return target.pos;
+}
+
 // Lead a moving target so a projectile of `speed` will hit. Approximation
-// (one iteration is plenty for our purposes).
+// (one iteration is plenty for our purposes). Aim point is module-aware
+// via `aimPointFor` so strafing fighters / frigates lead the PD turret
+// or weapon bay they're chewing rather than the hull centroid.
 function leadAim(shooter, target, speed) {
-  const rel = V.sub(target.pos, shooter.pos);
+  const aimPt = aimPointFor(target);
+  const rel = V.sub(aimPt, shooter.pos);
   const dist = V.len(rel);
   const t = dist / speed;
+  // Lead by the TARGET's velocity, not the aim point's (modules ride
+  // with the ship so they share the same velocity vector).
   return {
-    x: target.pos.x + target.vel.x * t - shooter.pos.x,
-    y: target.pos.y + target.vel.y * t - shooter.pos.y,
+    x: aimPt.x + target.vel.x * t - shooter.pos.x,
+    y: aimPt.y + target.vel.y * t - shooter.pos.y,
   };
 }
 

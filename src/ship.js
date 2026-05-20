@@ -5,6 +5,7 @@ import { createProjectile, createMissile } from "./projectile.js";
 import { getSprite, ENGINES, ENGINE_X, buildCells, killCellsForModule } from "./sprites.js";
 import {
   buildModules, pdTurretToModuleName, podToModuleName, pickBomberAimModule,
+  pickAimModule, moduleOffsetWorld,
 } from "./modules.js";
 import { events } from "./events.js";
 
@@ -763,8 +764,14 @@ function updateRingFire(ship, world) {
     const tgt = pickRingTarget(ship, mountWorldAng, rc.arc, range2, world);
     if (!tgt) continue;
     const origin = ringMountOrigin(ship, i);
-    // Lead-aim — same linear prediction as PD.
-    const tx = tgt.pos.x, ty = tgt.pos.y;
+    // Lead-aim — same linear prediction as PD. If the target carries
+    // modules (capitals), shift the aim point onto the next live
+    // PD / weapon module so frigate ring cannons strip the screen
+    // and weapon systems before chewing hull. Falls back to target
+    // centre for fighters / bombers / unmoduled targets.
+    const aimMod = pickAimModule(tgt);
+    const aimPos = aimMod ? moduleOffsetWorld(tgt, aimMod) : tgt.pos;
+    const tx = aimPos.x, ty = aimPos.y;
     const tvx = tgt.vel ? tgt.vel.x : 0;
     const tvy = tgt.vel ? tgt.vel.y : 0;
     const rx = tx - origin.x, ry = ty - origin.y;

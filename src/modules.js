@@ -251,13 +251,43 @@ export function findSplashModulesLocal(ship, lx, ly, blastWorld) {
 // broadsides, then anything else still alive. Returns module name or
 // null if target has no modules / all dead.
 export function pickBomberAimModule(target) {
+  const m = pickAimModule(target);
+  return m ? m.name : null;
+}
+
+// Generic module-priority picker used by AI cannon aim. Returns the
+// module object (not just the name) so the caller can read `offset`
+// for a world-space aim point. Order matches pickBomberAimModule:
+// PD → broadside → missile → torpedo bay → laser → hangar. Engines
+// are intentionally NOT in the list — they're rear-mounted and a hit
+// usually lands on something else en route. PD comes first because
+// destroying a screen turret materially changes the engagement; gun
+// systems come next because silencing them shortens the fight.
+const AIM_PRIORITY = ["pd-", "broadside-", "missile-", "torpedo-bay", "laser", "hangar"];
+export function pickAimModule(target) {
   if (!target || !target.modules) return null;
-  const order = ["pd-", "broadside-", "missile-", "torpedo-bay", "laser", "hangar"];
-  for (const prefix of order) {
+  for (const prefix of AIM_PRIORITY) {
     for (const m of target.modules) {
       if (m.disabled) continue;
-      if (m.name === prefix || m.name.startsWith(prefix)) return m.name;
+      if (m.name === prefix || m.name.startsWith(prefix)) return m;
     }
   }
   return null;
+}
+
+// World-space position of a module relative to its ship — same math
+// as moduleWorldPos but takes a module object directly (no name
+// lookup). Used by AI aim code that's already holding the module
+// from pickAimModule.
+export function moduleOffsetWorld(ship, module) {
+  if (!ship || !module) return null;
+  const R = ship.spec.radius;
+  const lx = module.offset.x * R;
+  const ly = module.offset.y * R;
+  const c = Math.cos(ship.heading);
+  const s = Math.sin(ship.heading);
+  return {
+    x: ship.pos.x + lx * c - ly * s,
+    y: ship.pos.y + lx * s + ly * c,
+  };
 }

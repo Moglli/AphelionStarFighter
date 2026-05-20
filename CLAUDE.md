@@ -122,6 +122,108 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-20 — AI targets PD + weapon modules before hull
+
+**What changed**
+
+AI ships were sending cannon fire at the dead centre of capital
+targets — visually clean but tactically pointless, since the
+defensive modules (PD turrets, broadside batteries, missile bays)
+sat untouched until the hull bar finally dropped. With the recent
+HP_TIER_MUL pass + the defense buff, capital hulls take 90–150s to
+chew through; the player wants module destruction to feel like the
+shortcut, and AI fire that lands on hull only contributes to grind.
+
+Now: any AI ship aiming a cannon at a target with live modules
+shifts its aim onto the next live module, in priority order:
+**PD → broadside → missile bay / pod → torpedo bay → laser → hangar.**
+Engines are intentionally NOT in the priority — they're rear-mounted
+and the natural strafe angle usually clips something else first.
+Fighter targets and any capital with no live modules left fall back
+to centre aim.
+
+The targeting helper (`pickAimModule`) is shared with the existing
+`pickBomberAimModule` so bomber missile homing keeps the same
+behaviour for free. As soon as a module is destroyed all aiming
+ships re-target the next one on the priority list — which produces
+natural focus fire (everyone hits the same PD turret first, then
+moves on once it's gone).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/modules.js` | New `pickAimModule(target)` returns the module object (not just name) for general AI use; `pickBomberAimModule` re-implemented as a thin wrapper. New `moduleOffsetWorld(ship, module)` returns the world-space anchor — same math as `moduleWorldPos` but takes the module reference directly so callers holding it from `pickAimModule` skip the name lookup. Aim priority extracted as `AIM_PRIORITY` constant. |
+| `src/ai.js` | New `aimPointFor(target)` returns the world-space aim point (preferred module world position, or target centre). `leadAim` rebuilt around it so every AI ship calling leadAim (currently fighter strafing in `flybyAI`) automatically gets module-aware aim. Velocity-lead still uses target velocity, not module velocity — they're identical since modules ride with the ship. |
+| `src/ship.js` | `updateRingFire` (frigate ring cannons) shifts its lead-aim onto the preferred module when present. PD turrets keep their existing dispatch — they target missiles + small craft, not modules. |
+
+**Design decisions / gotchas**
+
+- **Priority order matches `pickBomberAimModule`.** Bomber missile
+  homing already used this ordering and the behaviour was good;
+  unifying the helper means there's one place to retune. If you
+  want fighter cannons to deprioritise PD (because PD has too
+  little HP to be a worthwhile target), edit `AIM_PRIORITY` in
+  modules.js — bomber missile aim will follow automatically.
+- **Engines not in the priority list.** Adding engines would make
+  fighters strafing from behind always aim at engine modules,
+  which on capitals are clustered close to the centre anyway and
+  feels less satisfying as a tactical choice. Players can still
+  manually aim at engines.
+- **Focus fire is emergent.** Every ship picks the *first* live
+  module in the priority list. With ~50 fighters all looking at
+  the same battleship, they all aim at the same PD turret until
+  it dies, then all shift to the next. Don't add randomisation
+  inside `pickAimModule` — the focus-fire pattern is the win.
+- **Velocity lead is target.vel, not module.vel.** Modules ride
+  with the ship; their world-space velocity is identical. The
+  one frame of staleness from `aimPt` being computed before the
+  velocity application is irrelevant at the leading time scale
+  (<0.3 s for fighter rounds).
+- **Aim only — not target selection.** AI ships still PICK their
+  target via the existing pack-role / proximity logic. The module
+  priority only kicks in once a target has been chosen. Don't try
+  to make a fighter pick its target based on module presence;
+  that would route fighters away from other fighters and break
+  the existing escort / pack dynamics.
+- **`pickAimModule` returns the module object so callers can read
+  `offset` without a second lookup.** Don't change it to return
+  just a name — that would force `moduleByName[name]` everywhere
+  it's used in AI paths.
+- **Battleship `rush` mode aim left unchanged.** BB rush sets
+  heading at the target so the ship physically moves toward it.
+  Module aim shifts heading by a few degrees, which is
+  imperceptible at capital ranges. BB broadside fire is auto-arc
+  dispatch — it doesn't lead a specific point. Carrier has no
+  cannons. Cruiser is missile/laser artillery, not a cannon
+  platform.
+
+**How to verify**
+
+```bash
+npm install
+npm run build      # production build — should succeed
+npm run dev        # vite dev server
+```
+
+In-game:
+- Arena vs Hegemony (heaviest PD wall). Spectate a friendly
+  fighter pack engaging an enemy battleship. They should now
+  visibly clip a PD turret first; once destroyed, attention
+  shifts to the next live PD turret. After the PD ring is
+  stripped, fire concentrates on the broadside batteries, then
+  the missile bays.
+- Watch a frigate ring-cannon brawl with an enemy cruiser: the
+  frigate's four ring cannons each aim at the closest live
+  module on the cruiser rather than the cruiser centre. With the
+  cruiser's two missile pods + four PD turrets, the frigate
+  visibly walks fire across the modules.
+- Engage in admiral mode and watch the order modules disappear
+  from a battleship: PD turrets first, then port/starboard
+  broadsides, then missile silos, then the heavy laser.
+- Fighter-on-fighter / bomber-on-fighter aim is unchanged —
+  no modules → no offset → leads target centre as before.
+
 ### 2026-05-20 — Frontier UI overhaul: starmap + scrollable galaxy + emblem cards
 
 **What changed**
