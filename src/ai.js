@@ -127,6 +127,56 @@ export function updateAI(ship, world, dt) {
   } else {
     orbitAI(ship, target, dt, world);
   }
+
+  applyAdmiralPosture(ship, world);
+}
+
+// Admiral-mode directive override. Runs after the per-class AI has set
+// c.aim / c.firing so we can cleanly replace those values when the
+// admiral has issued HOLD or PRESS. Only the allied (blue) side is
+// commanded — enemy AI is unaffected so the player faces a normal
+// opponent.
+function applyAdmiralPosture(ship, world) {
+  if (!world.directives || ship.side !== "blue") return;
+  const dir = world.directives[ship.klass];
+  if (!dir) return;
+  if (dir.posture === "hold") {
+    // Pull back to the allied fleet centroid. Drop fire orders — HOLD
+    // means literal hold-fire, the ships should disengage cleanly.
+    const c = ship.controller;
+    let sx = 0, sy = 0, n = 0;
+    for (const o of world.ships) {
+      if (o.dead || o.side !== "blue" || o === ship) continue;
+      sx += o.pos.x; sy += o.pos.y; n++;
+    }
+    if (n > 0) {
+      const cx = sx / n, cy = sy / n;
+      const dx = cx - ship.pos.x, dy = cy - ship.pos.y;
+      const d = Math.hypot(dx, dy);
+      // Within 200u of the centroid: stop steering toward the centre
+      // (which would cause oscillation through it). Hold current
+      // heading instead.
+      if (d > 200) c.aim = { x: dx, y: dy };
+    }
+    c.firing = false;
+    c.firingMissile = false;
+  } else if (dir.posture === "press") {
+    // Steer toward enemy fleet centroid, keep existing firing flags.
+    // This makes capitals charge instead of orbiting and pulls
+    // fighters/bombers into the fight even if their per-class AI was
+    // sitting on a flank/regroup beat.
+    const c = ship.controller;
+    let sx = 0, sy = 0, n = 0;
+    for (const o of world.ships) {
+      if (o.dead || o.side === ship.side) continue;
+      sx += o.pos.x; sy += o.pos.y; n++;
+    }
+    if (n > 0) {
+      const cx = sx / n, cy = sy / n;
+      c.aim = { x: cx - ship.pos.x, y: cy - ship.pos.y };
+    }
+  }
+  // "free" is the no-op — the per-class AI's outputs stand as-is.
 }
 
 // Steering force that pushes a capital ship away from any other capital it

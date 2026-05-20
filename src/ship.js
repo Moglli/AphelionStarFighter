@@ -749,6 +749,15 @@ function pickPodTarget(ship, world, acquireRange) {
 }
 
 function updateMissilePodFire(ship, world) {
+  // Admiral missile-hold: when the player has issued "hold missile
+  // fire" for this ship's class, the pod cooldowns keep ticking (so
+  // releasing the hold doesn't dump a stockpile) but no missiles
+  // launch. Only the allied side honors directives — enemy fleets
+  // run normal AI.
+  if (world.directives && ship.side === "blue") {
+    const dir = world.directives[ship.klass];
+    if (dir && dir.missiles === "hold") return;
+  }
   const pods = ship.spec.missilePods;
   // Pick one target per tick — pods on the same hull will spread out
   // naturally over time because each has its own cooldown phase.

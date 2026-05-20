@@ -45,6 +45,15 @@ input.startMenu.setSettings(
   (patch) => { if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted); },
 );
 
+// Admiral panel — reads and writes game.directives directly. The map
+// is allocated by modes/admiral.js at match start; null in other
+// modes so the AI fast-paths through the directive check.
+input.admiralPanel.setHooks(
+  () => game.directives,
+  (klass, posture) => { if (game.directives && game.directives[klass]) game.directives[klass].posture = posture; },
+  (klass, missiles) => { if (game.directives && game.directives[klass]) game.directives[klass].missiles = missiles; },
+);
+
 // Campaign state is loaded from localStorage on boot and kept in memory
 // so the menu can render mission progress + money. Mutations happen in
 // purchase / victory callbacks below and re-save themselves.
@@ -123,12 +132,15 @@ function frame(now) {
         game.campaign.lastReward = mc.reward;
         game.campaign.missionNumber = mc.mission;
       } else {
-        // Open / Defend / Custom, or Campaign-completed (falls through
-        // to a free skirmish at the player's chosen map size + fleet
-        // size). Custom carries its full roster bundle through.
+        // Open / Defend / Custom / Admiral, or Campaign-completed
+        // (falls through to a free skirmish at the player's chosen
+        // map size + fleet size). Custom carries its full roster
+        // bundle through; Admiral flips the input layer to show the
+        // command panel.
         const mode = choice.mode === "campaign" ? "open" : choice.mode;
         startGame(game, choice.mapW, choice.mapH, choice.race, mode, null,
                   choice.fleetMul, choice.customRoster || null);
+        input.admiralActive = !!game.admiralMode;
       }
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();
@@ -274,6 +286,8 @@ function draw() {
       if (player) input.fireBtn.draw(ctx);
       input.spectateBtn.draw(ctx, game.spectating);
     }
+    // Admiral command panel — only in admiral mode, only mid-match.
+    if (game.admiralMode) input.admiralPanel.draw(ctx);
   }
   input.drawSticks(ctx);
 }

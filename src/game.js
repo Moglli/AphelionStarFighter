@@ -85,8 +85,29 @@ export function createGame() {
     // Game mode: "open" (fleet vs fleet, current default) or "defend"
     // (each side has a multi-node station; first station down loses).
     mode: "open",
+    // Admiral-mode directive map. Populated by modes/admiral.js when
+    // the player starts an Admiral match; null in all other modes so
+    // the AI fast-paths through the directive check.
+    directives: null,
+    admiralMode: false,
   };
   return game;
+}
+
+// Centroid of all live ships of a given side. Used by the Admiral
+// directives: HOLD ships pull back to their own side's centroid;
+// PRESS ships aim toward the enemy's. Falls back to the spawn-zone
+// centre if the side has been wiped — keeps a recall-order from
+// producing NaN aim vectors.
+export function fleetCenter(game, side) {
+  let sx = 0, sy = 0, n = 0;
+  for (const s of game.ships) {
+    if (s.dead || s.side !== side) continue;
+    sx += s.pos.x; sy += s.pos.y; n++;
+  }
+  if (n > 0) return { x: sx / n, y: sy / n };
+  const zone = game.arena && game.arena.spawn && game.arena.spawn[side];
+  return zone ? { x: zone.x, y: zone.y } : { x: 0, y: 0 };
 }
 
 // Called from main when the player picks map size + allied race + mode

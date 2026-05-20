@@ -215,6 +215,173 @@ export class MissileButton {
   }
 }
 
+// Admiral-mode command panel. Bottom-of-screen, two columns of three
+// per-class rows. Each row carries posture chips (HOLD / FREE / PRESS)
+// and, where the class has missile pods, a missile-hold toggle. Reads
+// + writes `game.directives` via the wired getter/setter pair so the
+// AI sees changes the same frame.
+const ADMIRAL_PANEL_CLASSES = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+// Classes whose missile pods the admiral can hold. Fighters have a
+// single player-fired missile (no AI launch) and carriers have no
+// pods at all, so they don't get an M toggle.
+const ADMIRAL_MISSILE_CLASSES = new Set(["bomber", "frigate", "cruiser", "battleship"]);
+const ADMIRAL_POSTURES = ["hold", "free", "press"];
+
+export class AdmiralPanel {
+  constructor() {
+    this._rects = []; // flat list of { kind, klass, posture?, x, y, w, h }
+    this._getDirectives = () => null;
+    this._setPosture = () => {};
+    this._setMissiles = () => {};
+    this.panelRect = null;
+  }
+
+  setHooks(getDirectives, setPosture, setMissiles) {
+    this._getDirectives = getDirectives;
+    this._setPosture = setPosture;
+    this._setMissiles = setMissiles;
+  }
+
+  layout(viewW, viewH) {
+    // Two columns × three rows along the bottom edge. Panel is centred
+    // horizontally so it doesn't fight the minimap on the right or the
+    // target panel on the left.
+    const colW = 360;
+    const colGap = 24;
+    const rowH = 40;
+    const rowGap = 4;
+    const padX = 14, padY = 12;
+    const cols = 2;
+    const rows = 3;
+    const innerW = colW * cols + colGap;
+    const innerH = rowH * rows + rowGap * (rows - 1);
+    const panelW = innerW + padX * 2;
+    const panelH = innerH + padY * 2;
+    const panelX = (viewW - panelW) / 2;
+    const panelY = viewH - panelH - 16;
+    this.panelRect = { x: panelX, y: panelY, w: panelW, h: panelH };
+
+    const labelW = 86;
+    const postureW = 56;
+    const postureGap = 4;
+    const missileW = 32;
+    const rectsStartY = panelY + padY;
+
+    this._rects = [];
+    for (let i = 0; i < ADMIRAL_PANEL_CLASSES.length; i++) {
+      const klass = ADMIRAL_PANEL_CLASSES[i];
+      const col = Math.floor(i / rows);
+      const row = i % rows;
+      const rowLeft = panelX + padX + col * (colW + colGap);
+      const rowTop = rectsStartY + row * (rowH + rowGap);
+
+      // Label rect — also acts as a click target for the class header
+      // (no action yet; reserved for future "select class on canvas"
+      // gestures).
+      this._rects.push({
+        kind: "label", klass,
+        x: rowLeft, y: rowTop, w: labelW, h: rowH - rowGap,
+      });
+
+      // Posture chips.
+      for (let p = 0; p < ADMIRAL_POSTURES.length; p++) {
+        this._rects.push({
+          kind: "posture", klass, posture: ADMIRAL_POSTURES[p],
+          x: rowLeft + labelW + 4 + p * (postureW + postureGap),
+          y: rowTop, w: postureW, h: rowH - rowGap,
+        });
+      }
+
+      // Missile toggle for classes that have pods.
+      if (ADMIRAL_MISSILE_CLASSES.has(klass)) {
+        this._rects.push({
+          kind: "missile", klass,
+          x: rowLeft + labelW + 4 + ADMIRAL_POSTURES.length * (postureW + postureGap),
+          y: rowTop, w: missileW, h: rowH - rowGap,
+        });
+      }
+    }
+  }
+
+  hit(x, y) {
+    if (!this.panelRect) return false;
+    const r = this.panelRect;
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  // Returns true if the click hit a control. The InputManager uses
+  // this to swallow the click so it doesn't also trigger spectate
+  // camera pan.
+  handleClick(x, y) {
+    for (const r of this._rects) {
+      if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue;
+      if (r.kind === "posture") {
+        this._setPosture(r.klass, r.posture);
+        return true;
+      }
+      if (r.kind === "missile") {
+        const d = this._getDirectives();
+        const cur = d && d[r.klass] ? d[r.klass].missiles : "on";
+        this._setMissiles(r.klass, cur === "on" ? "hold" : "on");
+        return true;
+      }
+      if (r.kind === "label") return true; // swallow without action
+    }
+    // Click was inside the panel chrome but missed every control —
+    // still swallow so the spectate camera doesn't pan under it.
+    if (this.hit(x, y)) return true;
+    return false;
+  }
+
+  draw(ctx) {
+    const directives = this._getDirectives();
+    if (!directives) return;
+    const p = this.panelRect;
+    ctx.save();
+    ctx.fillStyle = "rgba(8,16,28,0.88)";
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = "#5af";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+
+    for (const r of this._rects) {
+      const d = directives[r.klass] || { posture: "free", missiles: "on" };
+      if (r.kind === "label") {
+        ctx.fillStyle = "#9bd";
+        ctx.font = "bold 13px system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(r.klass.toUpperCase(), r.x + 4, r.y + r.h / 2 + 5);
+      } else if (r.kind === "posture") {
+        const selected = d.posture === r.posture;
+        const tint = r.posture === "hold" ? "#fa8"
+                   : r.posture === "press" ? "#f97"
+                                           : "#7df";
+        ctx.fillStyle = selected ? "rgba(40,80,120,0.95)" : "rgba(18,30,46,0.85)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = selected ? tint : "rgba(120,160,200,0.6)";
+        ctx.lineWidth = selected ? 2 : 1;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.fillStyle = selected ? "#fff" : tint;
+        ctx.font = "bold 11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(r.posture.toUpperCase(), r.x + r.w / 2, r.y + r.h / 2 + 4);
+      } else if (r.kind === "missile") {
+        const held = d.missiles === "hold";
+        ctx.fillStyle = held ? "rgba(80,40,30,0.95)" : "rgba(30,60,40,0.9)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeStyle = held ? "#fa8" : "#9f8";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.fillStyle = held ? "#fa8" : "#9f8";
+        ctx.font = "bold 13px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("M", r.x + r.w / 2, r.y + r.h / 2 + 5);
+      }
+    }
+    ctx.restore();
+  }
+}
+
 // Pre-match menu: lets the player pick a map size, game mode, and Allied
 // race before the world spawns. Layout is three rows of chips plus an
 // explicit START button. Each chip toggles its row's selection; START
@@ -224,6 +391,7 @@ const MODE_OPTIONS = [
   { key: "defend",   label: "Defend Station",  tagline: "Destroy enemy station" },
   { key: "campaign", label: "Campaign",        tagline: "100-mission tour" },
   { key: "custom",   label: "Custom",          tagline: "Pick fleets + races" },
+  { key: "admiral",  label: "Admiral",         tagline: "Command, don't pilot" },
 ];
 
 // Roster classes editable in the Custom Match overlay. Order matters —
@@ -1187,6 +1355,8 @@ export class InputManager {
     this.missileBtn = new MissileButton();
     this.fireBtn = new FireButton();
     this.spectateBtn = new SpectateButton();
+    this.admiralPanel = new AdmiralPanel();
+    this.admiralActive = false; // set from main.js when game.admiralMode
     this.startMenu = new StartMenu();
     this.menuActive = false;
 
@@ -1247,6 +1417,7 @@ export class InputManager {
     this.fireBtn.layout(viewW, viewH);
     this.spectateBtn.layout(viewW, viewH);
     this.startMenu.layout(viewW, viewH);
+    this.admiralPanel.layout(viewW, viewH);
   }
 
   onDown(e) {
@@ -1269,6 +1440,13 @@ export class InputManager {
         const rect = this.canvas.getBoundingClientRect();
         this.startMenu.layout(rect.width, rect.height);
       }
+      return;
+    }
+
+    // Admiral panel grabs clicks first so its controls don't fall
+    // through to the spectate-pan handler. Only active in admiral
+    // mode; main.js flips this flag on startGame.
+    if (this.admiralActive && this.admiralPanel.handleClick(x, y)) {
       return;
     }
 
