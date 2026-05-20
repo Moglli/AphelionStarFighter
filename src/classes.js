@@ -335,8 +335,6 @@ export const CLASSES = {
       fighter: 18.0,
       bomber: 36.0,
     },
-    // Escort fighter squadron spawned alongside the carrier at game start.
-    escortSize: 6,
     aiRange: 0,
     aiOrbit: 0,
   },

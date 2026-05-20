@@ -260,37 +260,41 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
   }
 }
 
-// Carrier + fighter escort squadron. Each carrier spawns with a ring of
-// fighters that share a packId so they engage as a wing. The escort's
-// pack role is "hunt-fighter" — they screen against enemy small craft;
-// the pack target picker still upgrades them to a bomber if one shows up.
-function spawnCarrierWithEscort(game, side, race, zone, count, facing) {
-  for (let n = 0; n < count; n++) {
-    const pos = randomSpawnPos(zone);
-    const carrier = createShip({
-      klass: "carrier", race, side, pos, heading: facing,
+// Capital + fighter escort squadron. Spawns one capital of `klass` and
+// ESCORT_SIZE[klass] fighter escorts in a tight ring around it. Escorts
+// share a packId so the pack AI engages them as a wing centred on the
+// capital. Pack role is "hunt-fighter" — they screen against enemy
+// small craft; the pack target picker still upgrades them to a bomber
+// if one shows up. The first escort wears `escortOf` for HUD / debug.
+function spawnCapitalWithEscort(game, klass, side, race, zone, facing) {
+  const pos = randomSpawnPos(zone);
+  const capital = createShip({
+    klass, race, side, pos, heading: facing,
+    controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+  });
+  game.ships.push(capital);
+
+  const escortSize = ESCORT_SIZE[klass] || 0;
+  if (escortSize <= 0) return;
+  const packId = nextPackId++;
+  // Spread ring slightly so 15 fighters around a battleship don't
+  // overlap each other at spawn.
+  const ringR = capital.spec.radius + Math.max(70, escortSize * 6);
+  for (let i = 0; i < escortSize; i++) {
+    const ang = (i / escortSize) * Math.PI * 2;
+    const epos = {
+      x: pos.x + Math.cos(ang) * ringR,
+      y: pos.y + Math.sin(ang) * ringR,
+    };
+    const heading = facing + (Math.random() - 0.5) * 0.3;
+    const escort = createShip({
+      klass: "fighter", race, side, pos: epos, heading,
       controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
     });
-    game.ships.push(carrier);
-
-    const escortSize = carrier.spec.escortSize || 6;
-    const packId = nextPackId++;
-    for (let i = 0; i < escortSize; i++) {
-      const ang = (i / escortSize) * Math.PI * 2;
-      const dist = carrier.spec.radius + 70;
-      const epos = {
-        x: pos.x + Math.cos(ang) * dist,
-        y: pos.y + Math.sin(ang) * dist,
-      };
-      const heading = facing + (Math.random() - 0.5) * 0.3;
-      const escort = createShip({
-        klass: "fighter", race, side, pos: epos, heading,
-        controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
-      });
-      escort.packId = packId;
-      escort.packRole = "hunt-fighter";
-      game.ships.push(escort);
-    }
+    escort.packId = packId;
+    escort.packRole = "hunt-fighter";
+    escort.escortOf = capital.id;
+    game.ships.push(escort);
   }
 }
 

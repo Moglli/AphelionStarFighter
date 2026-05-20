@@ -122,6 +122,100 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-19 — Fighters/bombers stop dodging; per-capital fighter escorts; bombers flank
+
+**What changed**
+
+Fighters and bombers were spending most of every match avoiding the
+fight: the `bigShipDanger` push from any non-fighter enemy outweighed
+the fighter's commit-on-target logic, and a forced break-off triggered
+the instant they drifted into any PD bubble. Three coordinated changes:
+
+1. **Target exempted from danger.** `bigShipDanger` now takes an
+   `excludeTarget` argument and skips it in the push aggregation, so a
+   fighter committing a run on a battleship is no longer pushed back
+   out by that same battleship's PD/missile/laser envelope. Other
+   capitals nearby still contribute normally. Both `flybyAI` (fighter)
+   and `bomberFlankAI` (bomber) pass their current target.
+2. **Lower avoidance weights + commit longer.** Fighter `danger` blend
+   weight 1.95 → 0.55, bomber 2.20 → 0.85. Fighter `MAX_APPROACH_TIME`
+   10 → 16 s and the "force break-off if inside any PD bubble" branch
+   is gone — shields can soak a strafing pass. Fighter approach also
+   no longer suppresses `c.firing` on any danger reading.
+3. **Per-capital fighter escorts.** Every escortable capital
+   (frigate, cruiser, battleship, carrier) now spawns with a
+   class-sized fighter escort: frigate 5, cruiser 10, battleship 15,
+   carrier 10. Escorts share a `packId` and use `packRole:
+   "hunt-fighter"`; the existing pack-target picker upgrades to a
+   bomber when one shows up so escorts will peel to intercept strike
+   bombers heading for their charge.
+
+Bombers also got a flank rewrite: instead of orbiting tangentially at
+the outer edge of pod range, each bomber picks a flank side (ID parity)
+and flies to a slot offset perpendicular-and-slightly-aft of the
+target's nose. Once in the slot, the bomber faces the target so its
+pod launch geometry and forward gun line up. STANDOFF dropped from
+~1500 → ~1350 since the flank approach takes them out of the worst of
+the gun arc anyway.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/ai.js` | `bigShipDanger(ship, ships, excludeTarget)` accepts an exclusion. `flybyAI` passes `target`, drops the inPdZone-forced break-off, drops the firing-suppress on danger, bumps approach timeout to 16 s, lowers REGROUP_DIST + MIN_BREAK_TIME, danger weight 1.95 → 0.55. `bomberStandoffAI` renamed to `bomberFlankAI`; rewritten to fly to a perpendicular-aft flank slot, then face target. Bomber danger weight 2.20 → 0.85, also excludes target. `updateAI` dispatch updated to call `bomberFlankAI`. |
+| `src/game.js` | `ESCORT_SIZE` map added. `spawnCapitalWithEscort(game, klass, side, race, zone, facing)` replaces `spawnCarrierWithEscort` and handles all escortable classes uniformly. Escort ring radius widened so 15 fighters around a battleship don't overlap at spawn. Escorts tagged with `escortOf: capital.id` for future HUD/debug. Old per-spec `escortSize` lookup is gone — `ESCORT_SIZE[klass]` is the single source of truth. |
+| `src/classes.js`, `src/races.js` | Removed dead `escortSize` fields (carrier base spec, Reavers carrier, Voidsworn carrier). |
+
+**Design decisions / gotchas**
+
+- **Target-exclude is targeted, not blanket.** Fighters/bombers still
+  flinch from OTHER capitals near the kill zone — they just don't
+  push themselves out of their own engagement. If you ever add a
+  third class of avoidance (mines, hazards, etc.), don't fold it
+  into the same exclusion without thinking about whether the
+  excluded ship counts.
+- **Pack-leashing intentionally NOT added.** Escorts can drift far
+  from their charge to chase a bomber. That's the right call —
+  the bomber IS the threat to the capital. If you add a leash
+  later (e.g., return to the escorted capital after the chase),
+  set it via `escortOf` lookup, not by hand-tagging each escort.
+- **Single source of truth for escort sizes.** The legacy
+  `spec.escortSize` field (carrier class + Reaver/Voidsworn carrier
+  overrides) has been removed; `ESCORT_SIZE` in `game.js` is the
+  only place to tune squadron sizes. Don't reintroduce a per-spec
+  field — keep the map central.
+- **Fleet sizes balloon.** Terran arena spawn is now ~103 ships per
+  side (vs. ~38 before), Hegemony ~128. If frame rate becomes a
+  problem on lower-end devices, the first lever is `ESCORT_SIZE`,
+  not the roster — the escort fighters are the bulk of the new
+  ship count.
+- **Bomber flank uses target heading where available.** Capitals
+  have a meaningful heading; fighters don't (they pivot constantly),
+  so for fighter targets the flank vector falls back to the
+  bomber-to-target bearing. Don't try to use target velocity —
+  capitals drift sideways during broadside fire and you'll get
+  bombers parking behind a sliding cruiser.
+
+**How to verify**
+
+```bash
+npm install
+npm run build        # production build — should succeed
+npm run dev          # opens Vite dev server
+```
+
+In-game:
+- Pick arena vs **Hegemony** (heaviest fleet). Each enemy battleship
+  should be surrounded by 15 fighters, each cruiser by 10. Watch the
+  minimap — both sides should clash in the middle within seconds
+  instead of orbiting their own spawn zones.
+- Park yourself in spectate near an enemy battleship. Allied fighters
+  should commit straight through PD range to make firing passes, not
+  arc wide every time. They'll still break off on a fly-through.
+- Watch an allied bomber engage an enemy battleship: it should curve
+  in from the broadside, not loiter directly ahead of the bow.
+  Missile pods auto-fire as before.
+
 ### 2026-05-19 — Cruiser refit: long-range artillery (cluster + siege missiles + laser)
 
 **What changed**

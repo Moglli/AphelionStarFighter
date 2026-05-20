@@ -91,7 +91,6 @@ export const RACES = {
     },
     carrier: {
       replenish: { fighter: 12.0, bomber: 24.0 },
-      escortSize: 8,
     },
     roster: { fighter: 36, bomber: 9, frigate: 6, cruiser: 1, battleship: 0, carrier: 1 },
     // Reavers: more, smaller nodes — a bristling spike-cluster instead of
@@ -214,7 +213,6 @@ export const RACES = {
     carrier: {
       hp: 1000,
       shield: { max: 850, regen: 28, regenDelay: 3.5 },
-      escortSize: 7,
       replenish: { fighter: 22, bomber: 40 },
     },
     roster: { fighter: 18, bomber: 5, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 },

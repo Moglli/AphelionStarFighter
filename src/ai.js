@@ -121,7 +121,7 @@ export function updateAI(ship, world, dt) {
   if (ship.klass === "fighter") {
     flybyAI(ship, target, dt, world);
   } else if (ship.klass === "bomber") {
-    bomberStandoffAI(ship, target, dt, world);
+    bomberFlankAI(ship, target, dt, world);
   } else if (ship.klass === "battleship") {
     battleshipAI(ship, target, dt, world);
   } else {
@@ -204,12 +204,16 @@ const FORWARD_ARC_COS_WIDE = Math.cos(Math.PI / 3); // 60° half-angle
 //     bear and the small craft has at most a second or two before
 //     being in the kill zone. Forward-firing ships push laterally
 //     when the craft is in the wider 60° nose arc.
-function bigShipDanger(ship, ships) {
+// `excludeTarget` is the ship the caller is *trying* to attack — it must
+// not contribute to its own avoidance push, otherwise the attacker arcs
+// wide instead of committing. Other capitals nearby still apply normally.
+function bigShipDanger(ship, ships, excludeTarget = null) {
   let ax = 0, ay = 0;
   for (const other of ships) {
     if (other.dead || other.side === ship.side) continue;
     if (other.klass === "fighter") continue;
     if (other === ship) continue;
+    if (other === excludeTarget) continue;
 
     const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
@@ -414,13 +418,14 @@ function flybyAI(ship, target, dt, world) {
 
   // Regroup distance pushed out so the break-off actually clears the
   // capital's PD bubble (max PD range ~480) and a chunk of broadside
-  // engagement. Pass-zone widened correspondingly.
-  const REGROUP_DIST = 950;
+  // engagement. Pass-zone widened correspondingly. MAX_APPROACH_TIME is
+  // intentionally long: fighters should commit to the attack run rather
+  // than peel off after a few seconds. The break-off still triggers
+  // naturally on a fly-through, this is just the safety timeout.
+  const REGROUP_DIST = 850;
   const PASS_ZONE_DIST = 600;
-  const MIN_BREAK_TIME = 1.2;
-  const MAX_APPROACH_TIME = 10;
-
-  const inPdZone = insideEnemyPDRange(ship, world ? world.ships : []);
+  const MIN_BREAK_TIME = 1.0;
+  const MAX_APPROACH_TIME = 16;
 
   if (ship.attackState === "approach") {
     ship.approachTimer += dt;
@@ -435,12 +440,12 @@ function flybyAI(ship, target, dt, world) {
     const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
     const inPassZone = dist < PASS_ZONE_DIST;
     const settled = ship.approachTimer > 0.5;
-    // Force break-off if we've drifted into PD range — we either fired
-    // and are now in lethal proximity, or we never had a shot lined up
-    // and there's no point staying.
+    // Break off only when we've actually flown past the target, or as a
+    // safety timeout. PD exposure used to force a break too, but that's
+    // what made fighters spend most of their lives circling instead of
+    // pressing the attack — shields can soak a pass through PD.
     if ((departing && inPassZone && settled)
-        || ship.approachTimer > MAX_APPROACH_TIME
-        || (inPdZone && settled)) {
+        || ship.approachTimer > MAX_APPROACH_TIME) {
       ship.attackState = "break";
       ship.breakTimer = MIN_BREAK_TIME;
       ship.approachTimer = 0;
@@ -459,8 +464,8 @@ function flybyAI(ship, target, dt, world) {
 
     ship.breakTimer -= dt;
     const minTimeMet = ship.breakTimer <= 0;
-    const farEnough = dist > REGROUP_DIST && !inPdZone;
-    const breakOverdue = ship.breakTimer <= -3.0;
+    const farEnough = dist > REGROUP_DIST;
+    const breakOverdue = ship.breakTimer <= -2.0;
     if ((minTimeMet && farEnough) || breakOverdue) {
       ship.attackState = "approach";
       ship.breakSide = -ship.breakSide;
@@ -470,17 +475,20 @@ function flybyAI(ship, target, dt, world) {
 
   const pack = world && world.packs ? world.packs.get(ship.packId) : null;
   const cohesion = packCohesion(ship, pack);
-  const danger = bigShipDanger(ship, world ? world.ships : []);
+  // Exclude the current target from danger: a fighter committing to a run
+  // on a battleship shouldn't be pushed back out by that same battleship's
+  // PD/laser envelope. Other capitals nearby still push normally.
+  const danger = bigShipDanger(ship, world ? world.ships : [], target);
   const tail = tailDanger(ship, world ? world.ships : []);
   const wall = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
   if (cohesion || danger || tail || wall) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.35; ay += cohesion.y * 0.35; }
-    // Avoidance weight is high because heading-locked fighters can't
-    // strafe — turning IS dodging, and slow turn-rate means we need
-    // sharp commit to actually get out of the kill zone in time.
-    if (danger)   { ax += danger.x   * 1.95; ay += danger.y   * 1.95; }
+    // Avoidance weight dialled way down: fighters were spending most of
+    // their lives swinging wide of every capital, never engaging. Other
+    // capitals (not the target) still push, just gently.
+    if (danger)   { ax += danger.x   * 0.55; ay += danger.y   * 0.55; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
     // Wall avoidance dominates when the ship is close to a boundary.
     // Strength is the worst-case proximity (0..1); we scale it up so
@@ -491,9 +499,11 @@ function flybyAI(ship, target, dt, world) {
       ay += wall.y * w;
     }
     c.aim = { x: ax, y: ay };
-    // Suppress firing when avoiding heavy fire. Bombers' missile pods
-    // auto-fire elsewhere — they keep delivering payload while running.
-    if (danger) c.firing = false;
+    // Used to clear c.firing whenever any danger was present, but that
+    // left fighters silently coasting through firing solutions on the
+    // very capital they were attacking. Approach-state already gates
+    // firing on alignment + range; break-state already cleared c.firing
+    // above. No extra suppression needed here.
   }
 
   // AI-fired missile: launch at fat targets when the cooldowns are ready,
@@ -513,51 +523,80 @@ function flybyAI(ship, target, dt, world) {
 }
 
 // ---------------------------------------------------------------------------
-// Bomber behaviour: standoff orbit at the outer edge of missile-pod
-// range. Pods auto-fire on any target inside acquireRange (see
-// updateMissilePodFire in ship.js), so the bomber can deliver its full
-// payload without committing to a fly-through that would put it inside
-// enemy PD bubbles and primary-weapon arcs. Heading-locked flight
-// model still applies: the bomber points along an orbit tangent
-// in the sweet spot, retreats if it drifts inside the standoff band,
-// closes if too far. Threat avoidance overrides the orbit when any
-// heavy ship's weapon envelope creeps onto the bomber.
+// Bomber behaviour: flank the target instead of holding standoff dead
+// ahead. The bomber picks a side relative to the target's current facing
+// (ID-parity for consistency) and aims for a slot offset perpendicular
+// to the target's nose — so the strike comes in from the broadside, not
+// down the target's gun arc. Pods auto-fire on any target inside
+// acquireRange (see updateMissilePodFire in ship.js), so the flank
+// approach still delivers full payload. Once in the flank slot, the
+// bomber faces the target so its forward gun + pod launch geometry can
+// engage.
 // ---------------------------------------------------------------------------
-function bomberStandoffAI(ship, target, dt, world) {
+function bomberFlankAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
 
   const rel = V.sub(target.pos, ship.pos);
   const dist = V.len(rel);
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
-  const perp = { x: -dir.y, y: dir.x };
 
-  // Pod range is the upper bound — sit just inside it so missiles
-  // can lock but the bomber stays clear of enemy guns.
   const pods = s.missilePods;
   const podRange = pods ? pods.range : 1700;
-  const STANDOFF = Math.min(podRange * 0.92, 1600);
-  const DEAD_BAND = 200;
+  // Stay just inside pod range so missiles can lock, but well inside the
+  // wider standoff of the old AI — bombers are supposed to PRESS in from
+  // the flank, not loiter at the back fence.
+  const STANDOFF = Math.min(podRange * 0.80, 1350);
+
+  // Per-bomber consistent side. Use target heading when it has one;
+  // small craft (fighters) can move erratically so fall back to the
+  // relative bearing for them.
+  const flankSign = (ship.id % 2 === 0) ? 1 : -1;
+  const useTargetHeading = target.klass !== "fighter";
+  let fwdTx, fwdTy;
+  if (useTargetHeading) {
+    fwdTx = Math.cos(target.heading);
+    fwdTy = Math.sin(target.heading);
+  } else {
+    // For a fighter target, "flank" = come in perpendicular to OUR
+    // approach bearing.
+    fwdTx = dir.x;
+    fwdTy = dir.y;
+  }
+  // Perpendicular to target's forward, sign-chosen.
+  const perpTx = -fwdTy * flankSign;
+  const perpTy =  fwdTx * flankSign;
+
+  // Flank slot: mostly to the side, biased slightly aft so we approach
+  // from the target's quarter rather than its nose. Aft bias also keeps
+  // bombers out of forward-firing primary arcs.
+  const slotX = target.pos.x + perpTx * STANDOFF - fwdTx * STANDOFF * 0.25;
+  const slotY = target.pos.y + perpTy * STANDOFF - fwdTy * STANDOFF * 0.25;
+  const toSlotX = slotX - ship.pos.x;
+  const toSlotY = slotY - ship.pos.y;
+  const distToSlot = Math.hypot(toSlotX, toSlotY);
 
   let aim;
-  if (dist > STANDOFF + DEAD_BAND) {
-    aim = dir; // close
-  } else if (dist < STANDOFF - DEAD_BAND) {
-    aim = { x: -dir.x, y: -dir.y }; // back off
+  if (distToSlot > 280) {
+    // Get to the flank slot first — heading-locked flight means aiming
+    // there IS flying there.
+    aim = { x: toSlotX, y: toSlotY };
+  } else if (dist < STANDOFF * 0.6) {
+    // We've blown through the slot and are now too close. Back off along
+    // the flank vector so we don't drift into the PD bubble.
+    aim = { x: -dir.x + perpTx * 0.6, y: -dir.y + perpTy * 0.6 };
   } else {
-    // Sweet spot — orbit tangentially. Use ship-id parity for a
-    // consistent direction so the bomber doesn't oscillate.
-    const orbitSign = (ship.id % 2 === 0) ? 1 : -1;
-    aim = { x: perp.x * orbitSign, y: perp.y * orbitSign };
+    // In the slot — face the target so forward gun + pod launch geometry
+    // line up on it.
+    aim = { x: rel.x, y: rel.y };
   }
 
   c.thrust = { x: 0, y: 0 };
   c.aim = aim;
 
   // Bombers' light gun has range ~600 — way inside enemy primary
-  // weapon envelopes. Fire it only when nose-on AND in range AND not
-  // sitting inside any PD bubble. In standoff this almost never
-  // triggers, which is fine: the auto-firing pods are the real damage.
+  // weapon envelopes. Fire it when nose-on, in range, and not stacked
+  // up inside any PD bubble.
   const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
   const aimNorm = V.norm(aim);
   const aligned = V.dot(fwd, aimNorm);
@@ -566,29 +605,26 @@ function bomberStandoffAI(ship, target, dt, world) {
           && V.dot(fwd, dir) > 0.7;
   c.firingMissile = false;
 
-  // Threat avoidance — same blend as fighter, but the avoidance weight
-  // is even higher because bombers are slower, sluggish to turn, and
-  // expensive to lose.
+  // Threat avoidance — but the *target* is excluded from danger. Bombers
+  // were dialling themselves out of engagement on every capital they
+  // tried to attack; now they only flinch from OTHER capitals nearby.
   const pack = world && world.packs ? world.packs.get(ship.packId) : null;
   const cohesion = packCohesion(ship, pack);
-  const danger = bigShipDanger(ship, world ? world.ships : []);
+  const danger = bigShipDanger(ship, world ? world.ships : [], target);
   const tail = tailDanger(ship, world ? world.ships : []);
   const wall = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
   if (cohesion || danger || tail || wall) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.30; ay += cohesion.y * 0.30; }
-    if (danger)   { ax += danger.x   * 2.20; ay += danger.y   * 2.20; }
+    if (danger)   { ax += danger.x   * 0.85; ay += danger.y   * 0.85; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
-    // Bombers turn slow + are precious, so push wall avoidance even
-    // harder than fighters.
     if (wall)     {
       const w = 2.6 * wall.strength;
       ax += wall.x * w;
       ay += wall.y * w;
     }
     c.aim = { x: ax, y: ay };
-    if (danger) c.firing = false;
   }
 }
 
