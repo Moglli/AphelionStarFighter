@@ -120,11 +120,26 @@ function splitHullIntoChunks(poly, n) {
   return chunks;
 }
 
-/** Small fragments that fly off a hull on impact. Persist forever. */
+// Per-class debris size scaling so a battleship sheds visibly chunky
+// shards while a fighter scatters smaller bits. Each chunk samples
+// uniformly within [min, max].
+const DEBRIS_SIZE_BY_KLASS = {
+  fighter:    { min: 1.8, max: 3.0 },
+  bomber:     { min: 2.2, max: 3.6 },
+  frigate:    { min: 3.0, max: 5.5 },
+  cruiser:    { min: 3.5, max: 7.0 },
+  battleship: { min: 4.5, max: 9.0 },
+  carrier:    { min: 4.5, max: 9.0 },
+  station:    { min: 4.0, max: 7.5 },
+};
+
+/** Hull fragments that fly off on impact / death. Persist forever. */
 export function createDebrisBurst(pos, hitPos, baseVel, klass, side, count) {
   const out = [];
   const cx = hitPos ? hitPos.x : pos.x;
   const cy = hitPos ? hitPos.y : pos.y;
+  const sz = DEBRIS_SIZE_BY_KLASS[klass] || DEBRIS_SIZE_BY_KLASS.frigate;
+  const sizeRange = sz.max - sz.min;
   for (let i = 0; i < count; i++) {
     const ang = Math.random() * Math.PI * 2;
     const sp = 40 + Math.random() * 80;
@@ -135,10 +150,10 @@ export function createDebrisBurst(pos, hitPos, baseVel, klass, side, count) {
       vel: { x: vx, y: vy },
       rot: Math.random() * Math.PI * 2,
       spin: (Math.random() - 0.5) * 4,
-      size: 1.5 + Math.random() * 2.2,
+      size: sz.min + Math.random() * sizeRange,
       side,
       klass,
-      // Spark phase: small chip glows red-hot for the first second, then
+      // Spark phase: chip glows red-hot for the first second, then
       // cools to a dull grey shard. Persists indefinitely from there.
       burn: 0.6 + Math.random() * 0.6,
       age: 0,

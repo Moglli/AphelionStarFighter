@@ -13,6 +13,11 @@ import {
 } from "./particles.js";
 import { damageCellsInRadius, killCellsForModule } from "./sprites.js";
 import { SIDES } from "./classes.js";
+import {
+  createWreck, createDebrisBurst,
+  updateWreck, updateDebris,
+  pushWreck, pushDebris,
+} from "./wreckage.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
@@ -57,6 +62,12 @@ export function createGame() {
     // Particle VFX (sparks, smoke, fire, debris, shockwaves) live in
     // world space and tick alongside projectiles.
     particles: [],
+    // Persistent battle litter — wrecks are the broken hulls of
+    // destroyed ships; debris is the chunky shrapnel chipped off live
+    // hulls under fire OR showered out on destruction. Both persist
+    // for the rest of the match (capped inside wreckage.js).
+    wrecks: [],
+    debris: [],
     arena: ARENA,
     starfield: createStarfield(),
     playerController: {
@@ -126,6 +137,8 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.projectiles = [];
   game.beams = [];
   game.particles = [];
+  game.wrecks = [];
+  game.debris = [];
   game.respawnTimer = 0;
   game.matchOver = false;
   game.winner = null;
@@ -514,7 +527,7 @@ export function update(game, dt) {
       const r = ship.spec.radius + p.radius;
       if (dx * dx + dy * dy <= r * r) {
         const targets = computeModuleTargets(ship, p);
-        applyDamage(ship, p, targets, game.particles);
+        applyDamage(ship, p, targets, game.particles, game);
         // Missiles always die on hit; cannons die on hit.
         p.dead = true;
         if (ship.hp <= 0) ship.dead = true;
@@ -551,6 +564,28 @@ export function update(game, dt) {
       }
     }
   }
+
+  // Convert newly-dead ships into wrecks + a chunky debris shower
+  // before the dead-ship filter strips them. The wreckSpawned flag
+  // guards against repeating on the second frame of the dead-but-
+  // not-yet-filtered window. Stations are skipped — they hold their
+  // form in place (the station-node visuals already handle their
+  // destruction read).
+  for (const s of game.ships) {
+    if (!s.dead || s.wreckSpawned || s.klass === "station") continue;
+    s.wreckSpawned = true;
+    pushWreck(game.wrecks, createWreck(s));
+    // Chunk shower scales with ship radius — a fighter pops 6 shards,
+    // a battleship spits ~35 across its width. Capped at 50 to stay
+    // inside the MAX_DEBRIS budget on a multi-kill frame.
+    const shower = Math.min(50, 6 + Math.floor(s.spec.radius * 0.2));
+    pushDebris(game.debris, createDebrisBurst(s.pos, s.pos, s.vel, s.klass, s.side, shower));
+  }
+
+  // Tick persistent battle litter.
+  const bounds = game.arena.bounds;
+  for (const w of game.wrecks) updateWreck(w, dt, bounds);
+  for (const d of game.debris) updateDebris(d, dt, bounds);
 
   game.ships = game.ships.filter((s) => (s.isPlayer && !game.spectating) || !s.dead);
 
@@ -673,7 +708,7 @@ function moduleStage(hp, hpMax) {
 // the headline damage source it had become.
 const PD_VS_SHIP_MUL = 0.22;
 
-function applyDamage(ship, p, moduleTargets = null, particles = null) {
+function applyDamage(ship, p, moduleTargets = null, particles = null, game = null) {
   let remaining = p.damage;
   if (p.fromKlass === "pd") remaining *= PD_VS_SHIP_MUL;
 
@@ -718,7 +753,7 @@ function applyDamage(ship, p, moduleTargets = null, particles = null) {
   // Step 3: Damage now hits the hull (either via modules or directly).
   // Record a persistent hull scar + spawn breakoff fragments at the
   // impact point regardless of whether modules absorb part of the hit.
-  recordHullImpact(ship, p, remaining, particles);
+  recordHullImpact(ship, p, remaining, particles, game);
 
   // Step 3a: Chew the destructible cell grid at the hit point. Radius
   // scales with damage so a glancing fighter round chips a single cell
@@ -809,15 +844,30 @@ function recordArmorImpact(ship, p, dmg, particles) {
 }
 
 // Record a hull impact: a dark gouge with hot rim that grows under
-// sustained nearby fire, plus tinted hull fragments breaking off.
-function recordHullImpact(ship, p, dmg, particles) {
+// sustained nearby fire, plus tinted hull fragments breaking off
+// (short-lived particle VFX) AND persistent chunk debris (long-lived
+// wreckage fragments) for hits weighty enough to plausibly knock a
+// piece loose. The persistent debris is what gives a fleet brawl its
+// shrapnel-strewn battlefield look — particle fragments disappear in
+// a couple seconds, debris stays for the rest of the match.
+function recordHullImpact(ship, p, dmg, particles, game) {
   if (!p || !p.pos) return;
   const local = worldToLocal(ship, p.pos.x, p.pos.y);
   addImpactScar(ship, "hull-hole", local.x, local.y, dmg);
-  if (!particles) return;
-  const ang = Math.atan2(p.pos.y - ship.pos.y, p.pos.x - ship.pos.x);
-  const tint = SIDES[ship.side].primary;
-  spawnHullBreakoff(particles, p.pos.x, p.pos.y, dmg, tint, ang);
+  if (particles) {
+    const ang = Math.atan2(p.pos.y - ship.pos.y, p.pos.x - ship.pos.x);
+    const tint = SIDES[ship.side].primary;
+    spawnHullBreakoff(particles, p.pos.x, p.pos.y, dmg, tint, ang);
+  }
+  if (game && game.debris && dmg >= 4) {
+    // Chunk count scales with raw damage but biased by class so a
+    // cannon round chipping a battleship sheds only a couple of
+    // shards while a missile gutting a fighter throws a big cloud
+    // (relative to that hull). Tunable per taste.
+    const klassScale = ship.klass === "fighter" || ship.klass === "bomber" ? 0.6 : 1.0;
+    const count = Math.max(1, Math.min(8, Math.floor((dmg / 12) * klassScale + 1)));
+    pushDebris(game.debris, createDebrisBurst(ship.pos, p.pos, ship.vel, ship.klass, ship.side, count));
+  }
 }
 
 // Merge nearby same-kind scars into one growing mark; otherwise append
@@ -907,6 +957,7 @@ function applyAndAgeBeams(game, dt) {
           { damage: tickDmg, kind: "laser", fromKlass: "battleship", pos: { x: t.pos.x, y: t.pos.y } },
           null,
           game.particles,
+          game,
         );
         if (t.hp <= 0) t.dead = true;
         beam.hit = { x: t.pos.x, y: t.pos.y };

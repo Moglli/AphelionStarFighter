@@ -6,6 +6,7 @@ import { drawArena, drawArenaBounds, ARENA } from "./arena.js";
 import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
 import { drawHUD, drawBeams } from "./hud.js";
+import { drawWreck, drawDebris } from "./wreckage.js";
 import { InputManager } from "./input.js";
 import { prerenderSprites } from "./sprites.js";
 import { drawParticle } from "./particles.js";
@@ -260,6 +261,9 @@ function draw() {
   ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
+  // Persistent wrecks sit UNDER everything live so a fresh kill drops
+  // into the background as the battle keeps going on top.
+  if (game.wrecks) for (const w of game.wrecks) drawWreck(ctx, w);
   // Smoke particles render behind the hull layer so plumes look like
   // they're trailing from the ship rather than painted on top of it.
   if (game.particles) {
@@ -268,6 +272,9 @@ function draw() {
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, ZOOM);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
+  // Persistent debris on top of live ships — fresh chunks visibly chip
+  // off the hull mid-engagement instead of fading with the particles.
+  if (game.debris) for (const d of game.debris) drawDebris(ctx, d);
   // Sparks / fire / debris / shockwaves render on top of ships and beams
   // so a freshly-killed module's explosion reads above the hull silhouette.
   if (game.particles) {
