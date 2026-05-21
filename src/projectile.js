@@ -180,73 +180,95 @@ function updateMissile(m, dt, world) {
 
 function spawnClusterChildren(parent, target, world) {
   const cfg = parent.cluster;
-  const count = cfg.childCount || 5;
-  const spread = cfg.childSpread != null ? cfg.childSpread : 0.45;
+  const count = cfg.childCount || 6;
   const childSpeed = cfg.childSpeed || parent.speed * 1.05;
   const childTurnRate = cfg.childTurnRate || parent.turnRate * 1.6;
   const childTtl = cfg.childTtl || 2.5;
   const childDamage = cfg.childDamage != null ? cfg.childDamage : Math.max(8, parent.damage * 0.25);
   const childRadius = cfg.childRadius || Math.max(3, parent.radius * 0.6);
   const childHp = cfg.childHp || 1;
-  // Heading toward the target at the moment of bloom, with each child
-  // offset around that heading by an angular spread so they cover area
-  // instead of stacking on top of each other. PD has to intercept
-  // multiple incoming tracks rather than one fat round.
-  const baseAng = Math.atan2(target.pos.y - parent.pos.y, target.pos.x - parent.pos.x);
+  // childSpacing replaces the old angular `childSpread` cone. We spawn
+  // each warhead at a lateral perpendicular offset from the parent's
+  // approach line so the cluster opens into a *line* of warheads with
+  // real horizontal separation — adjacent siblings sit `childSpacing`
+  // pixels apart at bloom, not on top of each other.
+  const childSpacing = cfg.childSpacing != null ? cfg.childSpacing : 90;
 
-  // "Umbrella" bloom VFX. We spawn one paired shockwave + a forward-
-  // facing cone of sparks before the children, so by the time the
-  // first warhead frame paints the player has already seen the bloom
-  // happen. The shockwave colour borrows the parent missile tint so
-  // each cluster reads as its own faction.
+  // Heading toward the target at the moment of bloom. Each child
+  // launches toward the target individually from its own start
+  // position, so the per-child heading is slightly different.
+  const baseAng = Math.atan2(target.pos.y - parent.pos.y, target.pos.x - parent.pos.x);
+  const perpX = -Math.sin(baseAng);
+  const perpY =  Math.cos(baseAng);
+  // Total lateral span across the line, so we can size the umbrella
+  // VFX (and the spark fan) to the actual children spread.
+  const totalSpan = (count - 1) * childSpacing;
+
+  // "Umbrella" bloom VFX. Outer + inner shockwave then a fan of
+  // sparks along the perpendicular line so the VFX matches the
+  // actual line-of-warheads spread.
   if (world && world.particles) {
     const tint = parent.color || "#fff";
     const rgba = hexToRgba(tint, "0.85");
     world.particles.push(createShockwave(parent.pos.x, parent.pos.y, {
       size: parent.radius + 6,
-      growth: 540,
+      growth: Math.max(540, totalSpan * 2.0),
       ttl: 0.55,
-      color: hexToRgba(tint, ""), // shockwave appends its own alpha
+      color: hexToRgba(tint, ""),
     }));
     world.particles.push(createShockwave(parent.pos.x, parent.pos.y, {
       size: parent.radius + 2,
-      growth: 360,
+      growth: Math.max(360, totalSpan * 1.4),
       ttl: 0.42,
       color: "rgba(255,255,255,",
     }));
-    // Forward-cone sparks fan along the children's heading band so the
-    // umbrella has "ribs" before the actual warheads start moving.
-    const sparkCount = Math.max(10, count * 3);
-    const coneSpread = Math.max(spread * 1.4, 0.9);
-    for (let i = 0; i < sparkCount; i++) {
-      const off = (Math.random() - 0.5) * coneSpread;
-      const sp = 320 + Math.random() * 220;
-      world.particles.push(createSpark(parent.pos.x, parent.pos.y, {
-        angle: baseAng + off,
-        speed: sp,
-        ttl: 0.32 + Math.random() * 0.25,
-        color: tint,
-      }));
+    // Spark fan along the perpendicular line — gives the bloom a
+    // visible "row of ignition points" before the warheads start
+    // moving. Each spark roughly sits at a child's start position.
+    const sparkPer = 3;
+    for (let i = 0; i < count; i++) {
+      const lateral = (i - (count - 1) / 2) * childSpacing;
+      const cx = parent.pos.x + perpX * lateral;
+      const cy = parent.pos.y + perpY * lateral;
+      for (let k = 0; k < sparkPer; k++) {
+        const off = (Math.random() - 0.5) * 0.6;
+        const sp = 240 + Math.random() * 220;
+        world.particles.push(createSpark(cx, cy, {
+          angle: baseAng + off,
+          speed: sp,
+          ttl: 0.30 + Math.random() * 0.25,
+          color: tint,
+        }));
+      }
     }
-    // Side-trim glints — a couple sparks shooting laterally to suggest
-    // the canister bursting open in cross-section.
-    for (let i = 0; i < 4; i++) {
-      const side = (i % 2 === 0) ? 1 : -1;
-      const a = baseAng + side * (Math.PI / 2 + (Math.random() - 0.5) * 0.4);
-      world.particles.push(createSpark(parent.pos.x, parent.pos.y, {
-        angle: a,
-        speed: 150 + Math.random() * 100,
-        ttl: 0.22 + Math.random() * 0.18,
-        color: rgba,
-      }));
+    // Side-trim sparks — punctuate the line ends so the cross-section
+    // burst reads even if the cluster is far from the camera.
+    for (let s = -1; s <= 1; s += 2) {
+      const tipX = parent.pos.x + perpX * (totalSpan / 2) * s;
+      const tipY = parent.pos.y + perpY * (totalSpan / 2) * s;
+      for (let k = 0; k < 3; k++) {
+        const a = baseAng + s * (Math.PI / 2 + (Math.random() - 0.5) * 0.4);
+        world.particles.push(createSpark(tipX, tipY, {
+          angle: a,
+          speed: 160 + Math.random() * 120,
+          ttl: 0.25 + Math.random() * 0.20,
+          color: rgba,
+        }));
+      }
     }
   }
 
   for (let i = 0; i < count; i++) {
-    const offset = (count === 1) ? 0 : ((i - (count - 1) / 2) * (spread / Math.max(1, count - 1)));
-    const heading = baseAng + offset;
+    const lateral = (count === 1) ? 0 : ((i - (count - 1) / 2) * childSpacing);
+    const startX = parent.pos.x + perpX * lateral;
+    const startY = parent.pos.y + perpY * lateral;
+    // Each child reads its own start->target vector, so the outer
+    // siblings naturally point slightly inward toward the target
+    // and the cluster converges as it travels (instead of staying
+    // a strict parallel line). Net effect: opens like an umbrella.
+    const heading = Math.atan2(target.pos.y - startY, target.pos.x - startX);
     world.projectiles.push(createMissile({
-      pos: parent.pos,
+      pos: { x: startX, y: startY },
       heading,
       damage: childDamage,
       ttl: childTtl,

@@ -128,9 +128,12 @@ export function updateAI(ship, world, dt) {
   // their assigned capital. Anything past that gets dropped and the
   // ship falls through to the return-to-station path below. Without
   // this, fighter escorts happily chased enemies across the entire
-  // arena and left their capital naked.
-  const ESCORT_ENGAGE_RANGE = 900;
-  const ESCORT_RECALL_RANGE = 1400;
+  // arena and left their capital naked. The leash was originally
+  // 900/1400 which left escorts too clingy to be useful screening —
+  // bumped to 1700/2400 so they actually peel out and intercept
+  // before the threat gets to the cap.
+  const ESCORT_ENGAGE_RANGE = 1700;
+  const ESCORT_RECALL_RANGE = 2400;
   let escortCap = null;
   if (ship.klass === "fighter" && ship.escortOf != null && world.ships) {
     escortCap = world.ships.find((o) => o.id === ship.escortOf && !o.dead) || null;
@@ -792,24 +795,56 @@ function cruiserAI(ship, target, dt, world) {
   const dist = V.len(rel);
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
 
-  const orbitR = s.aiOrbit || 1500;
-  const sign = (ship.id % 2 === 0) ? 1 : -1;
-  const perpX = -dir.y * sign, perpY = dir.x * sign;
-  // Slot = target + perpendicular * orbit radius. Aim at slot.
-  const slotX = target.pos.x + perpX * orbitR;
-  const slotY = target.pos.y + perpY * orbitR;
-  c.aim = { x: slotX - ship.pos.x, y: slotY - ship.pos.y };
-
-  // Forward salvos still fire if the cruiser happens to be nose-on; the
-  // updateShip forward-fire dispatch checks c.firing + aim alignment.
-  if (s.weapon) {
-    const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-    const aimN = V.norm(c.aim);
-    const aligned = V.dot(fwd, aimN);
-    c.firing = dist <= s.weapon.range && aligned > 0.85;
-  } else {
+  if (!s.weapon) {
+    // No primary weapon (carriers, missile-only cruisers): hold an
+    // orbit slot perpendicular so missiles + PD still bear.
+    const orbitR = s.aiOrbit || 1500;
+    const sign = (ship.id % 2 === 0) ? 1 : -1;
+    const perpX = -dir.y * sign, perpY = dir.x * sign;
+    c.aim = {
+      x: target.pos.x + perpX * orbitR - ship.pos.x,
+      y: target.pos.y + perpY * orbitR - ship.pos.y,
+    };
     c.firing = false;
+    c.firingMissile = false;
+    return;
   }
+
+  // Forward-fire cruiser: previously aimed at an orbit slot perpendicular
+  // to the target, so the bow ended up pointing tangentially and the
+  // forward salvo fired into empty space. Now:
+  //   - Lead-aim the target so the bow points at where the shells need
+  //     to arrive (target.vel × projectile-flight-time prediction).
+  //   - When in firing range, aim directly at the lead intercept so the
+  //     ship turns onto target.
+  //   - When inside the standoff radius (~70% of aiOrbit) bias the aim
+  //     past the target along the sign-based perpendicular, so the
+  //     cruiser swings around instead of ramming. The bow still sweeps
+  //     through the target line on each rotation, so salvos land.
+  //   - Fire when the *bow* is aligned with the lead direction
+  //     (NOT c.aim) — previously the alignment check used the slot-
+  //     direction, which was off-axis by design.
+  const lead = leadAim(ship, target, s.weapon.projectileSpeed);
+  const standoff = (s.aiOrbit || 880) * 0.7;
+  if (dist > standoff) {
+    c.aim = { x: lead.x, y: lead.y };
+  } else {
+    const sign = (ship.id % 2 === 0) ? 1 : -1;
+    const perpX = -dir.y * sign, perpY = dir.x * sign;
+    const offset = 800;
+    c.aim = {
+      x: target.pos.x + perpX * offset - ship.pos.x,
+      y: target.pos.y + perpY * offset - ship.pos.y,
+    };
+  }
+
+  const leadN = V.norm(lead);
+  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+  const aligned = V.dot(fwd, leadN);
+  // Slightly looser tolerance (cos ≈ 0.88 → ±28°) so the salvo fires
+  // every time the bow sweeps across target during the strafe pass,
+  // not only at perfect alignment.
+  c.firing = dist <= s.weapon.range && aligned > 0.88;
   c.firingMissile = false;
 }
 

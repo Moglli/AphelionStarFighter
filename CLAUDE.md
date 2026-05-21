@@ -122,6 +122,90 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Cruiser firing into empty space + cluster line-spread + escort range bump
+
+**What changed**
+
+Three follow-up tweaks from live-fire feedback:
+
+1. **Cruiser forward salvo now leads the target.** Previously
+   `cruiserAI` aimed at an *orbit slot* (`target + perp * orbitR`)
+   that sat perpendicular to the target — and then fired when the
+   bow aligned with **that** slot direction. The slot direction is
+   off-axis from the target by 30–90°, so the shells flew tangentially
+   into empty space. Rewritten so:
+   - `c.aim` is the lead intercept (target's predicted position at
+     projectile arrival) when out of range; or a target+perp×800 bias
+     when inside `standoff = aiOrbit * 0.7` so the cruiser swings around
+     without ramming.
+   - The fire decision compares the bow against the **lead direction**
+     (not `c.aim`), with tolerance loosened from 0.85 → 0.88 (~±28°)
+     so the salvo lands every time the bow sweeps across the target
+     during a strafe pass.
+
+2. **Cluster missiles now bloom into a horizontal line.** The old
+   bloom spawned every child at the parent's position with an angular
+   spread (cone). They started stacked and PD picked them off as a
+   single track. Replaced `cluster.childSpread` (angular) with
+   `cluster.childSpacing` (perpendicular pixels). The 6 children now
+   spawn at lateral offsets `[-2.5, -1.5, -0.5, +0.5, +1.5, +2.5] *
+   childSpacing` perpendicular to the parent's approach heading, each
+   computing its own start→target heading. Net effect:
+   - cruiser: 6 children at 90 px spacing → total span 450 px
+   - battleship: 6 children at 110 px spacing → total span 550 px
+   - Children converge as they fly, so the umbrella opens visibly
+     then closes onto the target.
+
+3. **Fighter escort leash widened.** The 900/1400 engage/recall
+   range was too tight — escorts were sticking next to their cap
+   even when an obvious target sat a screen away. Bumped to
+   1700/2400 so screening fighters actually peel off and intercept
+   before the threat reaches the cap.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/ai.js` | `cruiserAI` rewritten: lead-aim into `c.aim` when out of range, target+perp×800 bias when inside `aiOrbit×0.7`. Fire alignment uses lead-direction not `c.aim` and tolerance is 0.88. `ESCORT_ENGAGE_RANGE` 900→1700, `ESCORT_RECALL_RANGE` 1400→2400. |
+| `src/classes.js` | Cruiser cluster: `childCount` 4→6, `childSpread` removed, new `childSpacing: 90`, `childDamage` 30→24. Battleship cluster: `childCount` 5→6, `childSpread` removed, new `childSpacing: 110`, `childDamage` 28→24. |
+| `src/projectile.js` | `spawnClusterChildren` rewrites the per-child start position from `parent.pos` to `parent.pos + perp * lateral` where `lateral = (i - (count-1)/2) * childSpacing`. Each child computes its own heading from its start position toward the target, so outer siblings naturally point slightly inward — opens like an umbrella, then converges. Umbrella VFX (shockwave + sparks) now sized to `(count-1) * childSpacing` so the bloom flash matches the actual line spread. |
+
+**Design decisions / gotchas**
+
+- **Cluster total damage dropped 30→24/child × 6.** With the old
+  4-child cluster at 30/child the total bloom was 120 damage; the
+  new 6-child cluster at 24 is 144 — modest buff to account for the
+  extra PD friction the wider spread invites. If a faction ever
+  wants the bloom hot again, raise `childDamage` on that race's
+  cruiser override, not in the base spec.
+- **Standoff radius is `aiOrbit * 0.7`, not a fixed number.** Race-
+  level cruiser overrides that adjust `aiOrbit` (Reavers/Hegemony)
+  scale their standoff in proportion. Default cruiser `aiOrbit:
+  880` → standoff 616, comfortably inside `weapon.range: 1100`.
+- **Lead-aim uses `aimPointFor(target)` via `leadAim`.** That
+  already prefers the highest-priority live module on a capital
+  target (PD turret → broadside → missile bay → laser → hangar),
+  so a cruiser stripping a BB will sweep PD first then broadsides
+  then hull — same priority the existing fighter strafe aim uses.
+- **Fire tolerance 0.88 still gates spectacular misses.** The
+  cruiser's orbit pass sweeps the bow ~140° across the target
+  every ~3 s; a 0.88-cos window (~56° wide) covers a sliver of
+  that sweep. With the salvo cooldown at 1.8 s that's roughly one
+  full volley per orbit at firing range — what the user wanted
+  ("they shoot into empty space more often than not" → resolved).
+- **`childSpacing` is in PIXELS, not radians.** Race overrides that
+  bumped the old `childSpread` (radians) are now defunct — the
+  new field is in screen-space units to match the user's "horizontal
+  distance from the next" framing. None of the in-tree race overrides
+  set `childSpread` today, so no migration needed.
+- **Verified via Playwright** (Galaxy S9+ UA, admiral mode): cruiser
+  cluster spec confirms `childCount: 6, childSpacing: 90`. A fresh
+  bloom captured mid-combat had a 6-child lateral span of 287 px
+  (~64% of the 450 px max — children began converging on their
+  shared target by the time the snapshot fired). 62 live cluster
+  children in flight across the arena = blooms firing regularly.
+  No pageerrors.
+
 ### 2026-05-21 — Broadside salvo aborts when the battery module dies mid-volley
 
 **What changed**

@@ -237,12 +237,17 @@ export const CLASSES = {
       colors: { blue: "#3df", red: "#f4a" },
       cluster: {
         bloomDistance: 360,
-        childCount: 4,
-        childSpread: 0.55,
+        childCount: 6,
+        // childSpacing is the perpendicular pixel distance between
+        // adjacent children at bloom. Replaces the old `childSpread`
+        // angular cone — the canister now opens into a *line* of
+        // warheads with real horizontal separation, not a tight
+        // angular fan from a single point.
+        childSpacing: 90,
         childSpeed: 380,
         childTurnRate: 2.8,
         childTtl: 2.8,
-        childDamage: 30,
+        childDamage: 24,
         childRadius: 4,
         childHp: 1,
       },
@@ -319,12 +324,15 @@ export const CLASSES = {
       // of one fat round.
       cluster: {
         bloomDistance: 420,
-        childCount: 5,
-        childSpread: 0.55,
+        childCount: 6,
+        // Perpendicular pixel spacing between adjacent children at
+        // bloom — gives the BB cluster the same line-of-warheads
+        // signature as the cruiser version.
+        childSpacing: 110,
         childSpeed: 360,
         childTurnRate: 3.2,
         childTtl: 3.0,
-        childDamage: 28,
+        childDamage: 24,
         childRadius: 4,
         childHp: 1,
       },
