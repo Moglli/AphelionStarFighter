@@ -2545,12 +2545,14 @@ export class InputManager {
       return;
     }
 
-    // Admiral panel grabs clicks first so its controls don't fall
-    // through to the spectate-pan handler. Only active in admiral
-    // mode; main.js flips this flag on startGame.
-    if (this.admiralActive && this.admiralPanel.handleClick(x, y)) {
-      return;
-    }
+    // (The canvas `AdmiralPanel.handleClick` used to claim touches here
+    // for the canvas-drawn fleet command panel. The HUD overhaul moved
+    // that panel to DOM (.admiral-panel under #battle-root) which
+    // handles its own clicks via DOM listeners. The canvas panel is
+    // never drawn anymore but its hit-rect is still laid out at
+    // ~772×138 centered at the bottom — on a phone that covered the
+    // entire lower half and swallowed every touch, including the left
+    // virtual stick, so the admiral couldn't pan the camera.)
 
     // Action-button hit-tests first — works for both touch and mouse.
     // Order matters: each button owns the pointer once it claims it.

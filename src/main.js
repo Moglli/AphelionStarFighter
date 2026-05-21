@@ -102,11 +102,21 @@ events.on("shipDestroyed", ({ x, y, intensity }) => {
 // Admiral panel — reads and writes game.directives directly. The map
 // is allocated by modes/admiral.js at match start; null in other
 // modes so the AI fast-paths through the directive check.
-input.admiralPanel.setHooks(
-  () => game.directives,
-  (klass, posture) => { if (game.directives && game.directives[klass]) game.directives[klass].posture = posture; },
-  (klass, missiles) => { if (game.directives && game.directives[klass]) game.directives[klass].missiles = missiles; },
-);
+//
+// Both the (now-orphaned) canvas AdmiralPanel and the live DOM
+// .admiral-panel under #battle-root drive into the same setters.
+// hud.js' rebuilt grid calls game.setPosture / game.setMissiles, so
+// hang them on the game object too — without this the DOM buttons
+// render but their click handlers no-op.
+const setPosture = (klass, posture) => {
+  if (game.directives && game.directives[klass]) game.directives[klass].posture = posture;
+};
+const setMissiles = (klass, missiles) => {
+  if (game.directives && game.directives[klass]) game.directives[klass].missiles = missiles;
+};
+game.setPosture = setPosture;
+game.setMissiles = setMissiles;
+input.admiralPanel.setHooks(() => game.directives, setPosture, setMissiles);
 
 // Roguelite "Frontier" controller — owns the live run state. The
 // StartMenu reads the run via setRoguelite + the onChoice callback;

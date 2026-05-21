@@ -4673,13 +4673,19 @@ html, body {
     height: 42px;
   }
 
+  /* Move the minimap to the top-right on mobile so it stops fighting
+     the action-cluster + right stick for the bottom-right corner.
+     Sits flush against the right edge under the SPECTATE pill. */
   .minimap {
-    width: 140px;
+    width: 130px;
+    top: 56px;
+    right: 8px;
+    bottom: auto;
   }
 
   .minimap-viewport {
-    width: 140px;
-    height: 100px;
+    width: 130px;
+    height: 80px;
   }
 
   .damage-indicator {
@@ -4714,10 +4720,24 @@ html, body {
     padding: 3px 6px;
   }
 
+  /* Target panel moves to the top-left corner on mobile (was bottom-
+     left where it stacked under the left stick + admiral panel). The
+     panel stays narrow enough to clear the centred title pills and
+     the top-right SPECTATE button. */
   .target-panel {
-    width: 200px;
-    bottom: 100px;
-    padding: 8px 10px;
+    width: 140px;
+    top: 12px;
+    left: 8px;
+    bottom: auto;
+    padding: 6px 8px;
+    font-size: 9px;
+  }
+
+  /* Spectate pill on mobile drops below the top row so it stops sitting
+     on top of the target panel + battle-top-right pill. */
+  .spectate-pill {
+    top: 112px;
+    font-size: 9px;
   }
 
   .matchover-panel {

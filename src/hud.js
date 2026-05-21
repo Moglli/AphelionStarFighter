@@ -309,6 +309,15 @@ export class BattleHUD {
   sync(game, viewW, viewH) {
     this._isMobile = viewW < 768;
 
+    // Mode-based chrome visibility first. Piloting-only elements (the
+    // fire/missile/boost cluster, aim stick, damage arcs, compass, lock
+    // reticle, respawn timer) hide in spectate AND admiral because
+    // there's no piloted ship to drive them. Vitals stays on in
+    // spectate (shows the locked target) but hides in admiral where
+    // the fleet-command panel takes the bottom slot. Without this
+    // pass the HUD piles 8+ overlapping widgets in admiral mode.
+    this._syncModeChrome(game);
+
     // 1. Side strips
     this._syncSideStrips(game, viewW);
 
@@ -350,6 +359,29 @@ export class BattleHUD {
 
     // 13. Admiral panel
     this._syncAdmiralPanel(game);
+  }
+
+  _syncModeChrome(game) {
+    const piloting = !game.spectating && !game.admiralMode;
+    const admiral = !!game.admiralMode;
+    const setVis = (el, show) => { if (el) el.style.display = show ? "" : "none"; };
+    // Piloting-only chrome.
+    setVis(this._root.querySelector("#action-cluster"), piloting);
+    setVis(this._root.querySelector("#damage-indicator"), piloting);
+    setVis(this._root.querySelector("#compass"), piloting);
+    setVis(this._root.querySelector("#lock-reticle"), piloting);
+    setVis(this._root.querySelector("#respawn-panel"), piloting);
+    // Vitals: hide only in admiral (in spectate it tracks the locked
+    // target, which is useful chrome).
+    setVis(this._root.querySelector("#vitals-bar"), !admiral);
+    // Right virtual stick (aim) is meaningless without a piloted ship.
+    setVis(this._root.querySelector("#vstick-right"), piloting);
+    // Admiral mode is "you ARE the admiral" — the "OBSERVING <ship>"
+    // pill is confusing (you're not observing a specific ship, you're
+    // commanding the whole fleet), and it overlaps the centred target
+    // panel. Keep it for non-admiral spectate where it actually says
+    // which ship the camera is locked to.
+    setVis(this._root.querySelector("#spectate-pill"), !admiral);
   }
 
   _syncSideStrips(game, viewW) {

@@ -122,6 +122,94 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Admiral camera unmovable + battle HUD clutter
+
+**What changed**
+
+Three intertwined HUD bugs surfaced under the new Frontier → COMMAND
+FLEET flow:
+
+1. **Admiral camera couldn't pan.** The canvas-drawn `AdmiralPanel`
+   (input.js) lays out a ~772×138 rect centred at the bottom of the
+   viewport and `onDown` calls its `handleClick` *before* the virtual
+   sticks. `handleClick` returns `true` for *any* pointer inside the
+   panel rect, even if it missed every control, to "swallow it so the
+   spectate camera doesn't pan under it." Trouble is, the canvas
+   panel is **never drawn anymore** — the HUD overhaul moved it to a
+   DOM `.admiral-panel` under `#battle-root`. The orphaned hit-rect
+   still claimed the entire bottom half of a 320px-wide phone, so the
+   left virtual stick at `bottom:180px,left:10px` could never start a
+   pointer-capture. Dropped the dead interception.
+
+2. **DOM admiral panel buttons no-op'd.** `hud.js` calls
+   `game.setPosture(klass, p)` / `game.setMissiles(klass, m)` from
+   the rebuilt admiral grid, but those functions were never defined —
+   they only ever existed as the closure-captured `_setPosture` /
+   `_setMissiles` on `input.admiralPanel`. So the fleet-command grid
+   rendered, was clickable, and quietly did nothing. Wired the same
+   two closures onto `game` in main.js so both the (now dead) canvas
+   panel and the live DOM panel drive the same directive setters.
+
+3. **HUD layered 8+ widgets in the bottom half.** Even with the DOM
+   admiral panel showing, the piloting chrome (action cluster, aim
+   stick, damage arcs, compass, lock reticle, respawn timer, vitals
+   bar) kept rendering — none of them gated on `game.spectating` or
+   `game.admiralMode`. The bottom half of the screen was a stack of
+   overlapping widgets that did nothing for an admiral. Added
+   `_syncModeChrome` to BattleHUD that hides:
+
+   - In **piloting** mode: nothing extra (everything stays).
+   - In **spectate** (non-admiral): action cluster, aim stick, damage
+     arcs, compass, lock reticle, respawn timer. Vitals stays —
+     they're useful for the locked target.
+   - In **admiral**: everything in the spectate list **plus** vitals
+     and the `OBSERVING <ship>` pill. (Admiral is not "observing a
+     ship," they're commanding the fleet — the pill was confusing
+     and overlapped the target panel.)
+
+   Repositioned mobile chrome: target panel → top-left, minimap →
+   top-right, OBSERVING pill → top-centre under the SPECTATE pill.
+   Bottom is now just the vitals bar (piloting/spectate) or the
+   admiral panel (admiral), with the action cluster + right stick
+   stacked along the right edge in piloting.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | Removed the canvas `AdmiralPanel.handleClick` interception in `onDown`. (The `AdmiralPanel` class + its layout/hooks code are kept — Game still wires `setHooks`, and the class is still imported in main.js. Drop-it-entirely is a follow-up sweep.) |
+| `src/main.js` | Lifted the `setPosture`/`setMissiles` closures into local consts; assigned `game.setPosture` / `game.setMissiles` so the DOM panel sees them. `input.admiralPanel.setHooks` still gets the same pair. |
+| `src/hud.js` | New `_syncModeChrome(game)` runs first in `sync()`; gates `#action-cluster`, `#damage-indicator`, `#compass`, `#lock-reticle`, `#respawn-panel`, `#vitals-bar`, `#vstick-right`, `#spectate-pill` per piloting / spectate / admiral. |
+| `style.css` | Mobile `.target-panel` → top-left (`top:12px; left:8px; bottom:auto`). Mobile `.minimap` → top-right (`top:56px; right:8px; bottom:auto`). `.spectate-pill` drops to `top:112px` on mobile so it doesn't overlap the target panel + battle-top-right row. |
+
+**Design decisions / gotchas**
+
+- **The canvas `AdmiralPanel` class is dead code.** Its `layout()` is
+  still called by `layoutOverlays()` and `setHooks` still wires its
+  setters, so deleting it cleanly is a follow-up. Right now it's
+  cheap clutter — only the orphaned `handleClick` interception was
+  load-bearing for the bug.
+- **`game.setPosture` / `game.setMissiles` are functions, not data.**
+  They aren't persisted in the run save, aren't part of `modeConfig`,
+  and survive only as long as the game instance does — exactly the
+  semantics we want for transient command bindings.
+- **Mode-chrome gates use `display`, not `visibility`.** `visibility:
+  hidden` keeps the element in flow and still claims pointer events;
+  `display: none` actually removes it, which is what we want when
+  the goal is "the user can't accidentally tap a hidden button."
+- **Left vstick stays on in admiral mode.** It's the camera-pan input.
+  The existing pan logic in `main.js` keys off `game.spectating`
+  (which admiral also sets), so wiring is already there — the bug
+  was that the canvas panel was eating the touches before they reached
+  the stick.
+- **Verified via Playwright** (Galaxy S9+ UA, 320×658): admiral mode
+  hides action cluster / damage indicator / compass / reticle /
+  vitals / right stick / OBSERVING pill (`display: none` on all);
+  minimap relocates to (180, 56), target panel to (8, 12), admiral
+  panel sits at bottom; clicking the FIGHTER → PRESS button flips
+  `game.directives.fighter.posture` from `"free"` to `"press"` as
+  expected.
+
 ### 2026-05-21 — DOM menu persisted on top of every non-Frontier mode
 
 **What changed**
