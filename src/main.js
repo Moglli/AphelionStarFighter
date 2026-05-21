@@ -295,6 +295,11 @@ function frame(now) {
   // Let the input layer know whether the start menu is up so it can
   // intercept clicks before forwarding them to gameplay controls.
   input.menuActive = game.state === "menu";
+  // Spectate / admiral both have no piloted ship, so the right stick
+  // is hidden (see hud._syncModeChrome) and its real estate becomes a
+  // tap-to-select zone for inspecting ships. Mouse clicks anywhere on
+  // the canvas count as selects too.
+  input.selectActive = game.state === "playing" && (game.spectating || game.admiralMode);
 
   // Passive energy regen every frame. Idempotent; cheap.
   regenTick(energy);
@@ -387,6 +392,34 @@ function frame(now) {
         if (game.spectateCamera.x > b.maxX) game.spectateCamera.x = b.maxX;
         if (game.spectateCamera.y < b.minY) game.spectateCamera.y = b.minY;
         if (game.spectateCamera.y > b.maxY) game.spectateCamera.y = b.maxY;
+      }
+
+      // Tap-to-select: short, low-movement clicks/taps in spectate or
+      // admiral select the nearest live ship for the target panel +
+      // spectate-pill readout. The InputManager flagged this gesture
+      // in onUp; here we convert the canvas-space tap to world coords
+      // using the camera we just panned + the live zoom.
+      const tap = input.consumeTap();
+      if (tap) {
+        const wx = _lastCamera.x + (tap.x - viewW / 2) / zoom;
+        const wy = _lastCamera.y + (tap.y - viewH / 2) / zoom;
+        let best = null, bestD2 = Infinity;
+        for (const s of game.ships) {
+          if (s.dead) continue;
+          const dx = s.pos.x - wx;
+          const dy = s.pos.y - wy;
+          const r = (s.spec && s.spec.radius) || s.radius || 20;
+          // Generous pick radius: hit-zone is the ship visual + 28 px
+          // world slack so fighters are still tappable on a phone.
+          const slack = 28 / zoom;
+          const reach = (r + slack) * (r + slack);
+          const d2 = dx * dx + dy * dy;
+          if (d2 < reach && d2 < bestD2) { best = s; bestD2 = d2; }
+        }
+        if (best) {
+          game.spectateTargetId = best.id;
+          if (game.spectateCamera) game.spectateCamera.locked = true;
+        }
       }
     }
 

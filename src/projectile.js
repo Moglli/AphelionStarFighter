@@ -209,6 +209,36 @@ export function drawProjectile(ctx, p) {
     drawMissile(ctx, p);
     return;
   }
+  // Heavy cannon shells render as oriented streaks instead of perfect
+  // circles. At fighter scale the circles read fine because the round
+  // crosses several body-lengths per frame; for slow heavy rounds
+  // (BB barrage, anything with radius >= 6) the circle just sat there
+  // looking like a hovering orb. Stretching the round along velocity
+  // gives the "tracer" silhouette the player expects from a cannon.
+  if (p.radius >= 6) {
+    const vx = p.vel ? p.vel.x : 0;
+    const vy = p.vel ? p.vel.y : 0;
+    const heading = (vx || vy) ? Math.atan2(vy, vx) : 0;
+    ctx.save();
+    ctx.translate(p.pos.x, p.pos.y);
+    ctx.rotate(heading);
+    ctx.fillStyle = p.color;
+    // Length scaled with radius — gives big BB rounds a clearly long
+    // streak without making fighter rounds look like noodles.
+    const len = p.radius * 2.6;
+    const halfH = p.radius * 0.78;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, len, halfH, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright leading tip for the cannon "tracer" read.
+    ctx.fillStyle = "#fff";
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.ellipse(len * 0.55, 0, len * 0.25, halfH * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
   ctx.fillStyle = p.color;
   ctx.beginPath();
   ctx.arc(p.pos.x, p.pos.y, p.radius, 0, Math.PI * 2);

@@ -122,6 +122,102 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Battleship cannon shells + FIRE-button dead wiring + tap-to-inspect + escort leash
+
+**What changed**
+
+Five user-reported issues, all fixed in one pass:
+
+1. **BB main shells looked like slow-moving orbs.** Speed was 280 (vs
+   fighter 760 / cruiser 640) and the projectile renderer drew every
+   non-missile as a perfect filled circle, so big radius + low speed
+   read as "hovering plasma" rather than a heavy cannon round. Bumped
+   `projectileSpeed` 280 → 540 (still slower than fighter, so the
+   weight reads), shaved radius 10 → 8, and `drawProjectile` now
+   renders shells of `radius >= 6` as ellipses oriented along the
+   velocity vector with a bright leading tip — i.e. cannon tracers,
+   not orbs.
+
+2. **FIRE / SPC / CHARGE buttons did nothing.** Since the DOM/HUD
+   overhaul (a6f0f28) the action-cluster has been visual-only — the
+   `.action-cluster` div is `pointer-events: auto`, so the underlying
+   canvas pointerdown never sees the tap, but **no DOM listeners
+   were ever wired on the buttons**. The canvas-side `FireButton` /
+   `MissileButton` / `BoostButton` hit-tests were dead code. Added
+   pointerdown / up / cancel / leave handlers on each DOM button that
+   drive `input.fireBtn.start / end` etc. — verified via Playwright
+   that the FIRE button's `.pressed` class flips on hold and clears
+   on release.
+
+3. **Couldn't inspect ships in spectate / admiral.** Added a
+   tap-to-select gesture: short, low-movement touch (≤8 px move, ≤
+   400 ms) or mouse click commits a `_pendingTap`; main.js' frame
+   loop converts the canvas-coord tap to world coords using
+   `_lastCamera + (tap - viewW/2) / zoom` and finds the nearest live
+   ship within `radius + 28/zoom` px world slack. Sets
+   `game.spectateTargetId` so vitals + target panel re-key onto the
+   tapped ship. The target panel now shows SHIELD → ARMOR → HULL in
+   the same order damage resolves, and `pickFocusTarget` drops the
+   capital-only filter in spectate so fighters/bombers are
+   inspectable too.
+
+4. **Fighter squads weren't capped at 5.** Cruiser/BB/carrier escorts
+   were spawned in single packs of 10 / 10 / 15. Free fighter packs
+   were already 5 via `FIGHTER_PACK_SIZE`. Split escort spawn into
+   batches of 5 with separate `packId`s so a BB now flies 2 squads
+   of 5, a carrier 3 squads of 5, frigate 1 squad of 5.
+
+5. **Fighter escorts chased targets across the entire arena.** Added
+   an escort leash in `updateAI`: a fighter with `escortOf` set only
+   engages targets within `ESCORT_ENGAGE_RANGE` (900u) of its
+   assigned capital, and recalls to a station ring around the cap
+   when either the target wanders past 900u or the fighter itself
+   drifts past `ESCORT_RECALL_RANGE` (1400u). With no engageable
+   target, the escort flies a station ring (`cap.radius + 200`,
+   per-ship phase offset) instead of going idle.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | BB barrage `weapon`: `projectileSpeed` 280→540, `projectileRadius` 10→8 (still bigger than cruiser 7, fighter 2). |
+| `src/projectile.js` | `drawProjectile` branches on `radius >= 6`: oriented ellipse along `vel` plus a bright leading-tip overlay for cannon-tracer read. |
+| `src/hud.js` | Constructor wires pointerdown/up/cancel/leave on `#fire-btn`, `#boost-btn` (hold-pattern) and `#missile-btn` (edge-trigger). `pickFocusTarget` returns spectate target without the `.modules` capital filter. `_syncTargetPanel` reorders bars to SHIELD → ARMOR → HULL and adds shield row. |
+| `src/input.js` | Added `selectActive` / `_tapCandidate` / `_pendingTap` state; onDown opens tap-candidate when no button or stick claims the pointer; onMove cancels past 8 px; onUp commits within 400 ms. New `consumeTap()` clears + returns the pending tap. |
+| `src/main.js` | Sets `input.selectActive` per frame (`game.spectating || game.admiralMode`). After the spectate-pan block, calls `input.consumeTap()` → world conversion → nearest-ship pick within `radius + 28/zoom` → sets `game.spectateTargetId` and relocks `spectateCamera`. |
+| `src/game.js` | `spawnEscorts` splits the escort ring into packs of `FIGHTER_PACK_SIZE` (=5) with fresh `packId`s. |
+| `src/ai.js` | `updateAI`: after the normal target pick, escort fighters drop targets >900u from the cap or when the fighter itself is >1400u from the cap. With no target, fly a station ring around the cap rather than idle. |
+
+**Design decisions / gotchas**
+
+- **Tap-to-select shares the right-half real estate with the
+  (hidden) right vstick.** When `selectActive` is true, onDown skips
+  `right.start` on touches that land in the right half. The left
+  half still routes to the pan stick. Mouse clicks always count as
+  taps because the existing onDown already returned before reaching
+  the tap-candidate code if a HUD button claimed the click.
+- **Escort station ring uses per-ship phase (`ship.id * 0.137`)** so
+  five escorts don't pile onto the same point — they hold a coarse
+  ring formation around the cap.
+- **`escortOf` is cleared once the capital dies.** From that point
+  the fighter behaves as a free fighter: nearest-bomber priority,
+  then nearest enemy. Without this clear, escorts would station-keep
+  around a dead pointer forever.
+- **BB streak length is `radius * 2.6`.** At `projectileRadius: 8`
+  that's a ~21 px ellipse — clearly elongated, but small enough that
+  PD rounds at radius 3 still look like dots even if we ever bumped
+  the threshold below 6.
+- **The cruiser shell (`projectileRadius: 7`) is now also a streak.**
+  Intentional — they're cannon shells too and the previous orb look
+  hadn't aged well. Frigate (radius 3.5), fighter (2-4), PD (2-3),
+  and missile-pod children (4) all stay below the threshold.
+- **Verified via Playwright** (Galaxy S9+ UA): admiral mode spawns
+  241 ships with max pack size = 5 (cap escorts split correctly).
+  Center-screen tap relocked `spectateTargetId` from 1 → 65, target
+  panel populated with shield/hull bars for a "Terran Fighter".
+  FIRE button `.pressed` toggles on hold/release with no
+  pageerrors.
+
 ### 2026-05-21 — Admiral camera unmovable + battle HUD clutter
 
 **What changed**

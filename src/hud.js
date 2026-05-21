@@ -261,6 +261,50 @@ export class BattleHUD {
       }
     });
 
+    // ---- Wire action-cluster buttons (FIRE / MISSILE / BOOST) ----
+    // Each DOM .action-btn has `pointer-events: auto` (so the canvas
+    // pointerdown below never sees these taps) but no handlers were
+    // ever attached — the old canvas FireButton hit-tests run on the
+    // canvas which the DOM button shadowed. Result since the overhaul:
+    // tapping STRIKE / SPC / CHARGE did nothing.
+    //
+    // The InputManager already exposes the pressed-state pipeline on
+    // `fireBtn` / `missileBtn` / `boostBtn` — we just need the DOM
+    // events to drive into start()/end()/consumeJustPressed.
+    const wireHoldButton = (el, ibtn) => {
+      if (!el || !ibtn) return;
+      const onDown = (e) => {
+        if (e.cancelable) e.preventDefault();
+        if (typeof el.setPointerCapture === "function") {
+          try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+        ibtn.start(e.pointerId);
+      };
+      const onUp = (e) => {
+        if (ibtn.pointerId === e.pointerId || ibtn.pointerId == null) {
+          ibtn.end();
+        }
+      };
+      el.addEventListener("pointerdown", onDown);
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("pointercancel", onUp);
+      el.addEventListener("pointerleave", onUp);
+    };
+    wireHoldButton(this._fireBtn, this._input && this._input.fireBtn);
+    wireHoldButton(this._boostBtn, this._input && this._input.boostBtn);
+    // Missile is edge-triggered; main.js consumes the press once.
+    if (this._missileBtn && this._input && this._input.missileBtn) {
+      this._missileBtn.addEventListener("pointerdown", (e) => {
+        if (e.cancelable) e.preventDefault();
+        this._input.missileBtn.start(e.pointerId);
+      });
+      this._missileBtn.addEventListener("pointerup", (e) => {
+        if (this._input.missileBtn.pointerId === e.pointerId) {
+          this._input.missileBtn.end();
+        }
+      });
+    }
+
     // ---- Build side strip cells once ----
     this._buildSideStrip(this._sideLeft, "blue", "FRIENDLY");
     this._buildSideStrip(this._sideRight, "red", "ENEMY");
@@ -517,14 +561,18 @@ export class BattleHUD {
     const klassName = (CLASSES[ship.klass] && CLASSES[ship.klass].name) || ship.klass;
     this._targetName.textContent = `${raceName} ${klassName}`;
 
-    // Hull bar
+    // Bars: shield (if any) → armor (capitals only) → hull. Mirrors the
+    // damage-resolution order so the readout matches what the player
+    // sees in combat.
     let barsHtml = "";
-    const hullFrac = Math.max(0, Math.min(1, ship.hp / ship.hpMax));
-    barsHtml += `
-      <div class="target-bar-row">
-        <span style="font-size:9px;color:#9bd;width:36px;">HULL</span>
-        <div class="target-bar"><div class="target-bar-fill" style="width:${hullFrac * 100}%;background:#4f6;"></div></div>
-      </div>`;
+    if (ship.shieldMax > 0) {
+      const shieldFrac = Math.max(0, Math.min(1, ship.shield / ship.shieldMax));
+      barsHtml += `
+        <div class="target-bar-row">
+          <span style="font-size:9px;color:#9bd;width:36px;">SHIELD</span>
+          <div class="target-bar"><div class="target-bar-fill" style="width:${shieldFrac * 100}%;background:#5cf;"></div></div>
+        </div>`;
+    }
     if (ship.armorMax > 0) {
       const armorFrac = Math.max(0, Math.min(1, ship.armor / ship.armorMax));
       barsHtml += `
@@ -533,6 +581,12 @@ export class BattleHUD {
           <div class="target-bar"><div class="target-bar-fill" style="width:${armorFrac * 100}%;background:#c93;"></div></div>
         </div>`;
     }
+    const hullFrac = Math.max(0, Math.min(1, ship.hp / ship.hpMax));
+    barsHtml += `
+      <div class="target-bar-row">
+        <span style="font-size:9px;color:#9bd;width:36px;">HULL</span>
+        <div class="target-bar"><div class="target-bar-fill" style="width:${hullFrac * 100}%;background:#4f6;"></div></div>
+      </div>`;
     this._targetBars.innerHTML = barsHtml;
 
     // Module rows
@@ -896,8 +950,13 @@ export function drawBeams(ctx, game) {
 // ---------------------------------------------------------------------------
 function pickFocusTarget(game) {
   if (game.spectating) {
+    // In spectate / admiral the user explicitly picks who to inspect
+    // (via cycleSpectate or the new tap-to-select). Show whatever
+    // ship the camera is locked to — even fighters / bombers without
+    // a `.modules` array — so the panel reads as a "ship inspector"
+    // not just a capital-only readout.
     const t = getSpectateTarget(game);
-    if (t && !t.dead && t.modules) return t;
+    if (t && !t.dead) return t;
   }
   const player = game.ships.find((s) => s.isPlayer && !s.dead);
   if (!player) return null;

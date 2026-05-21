@@ -123,7 +123,46 @@ export function updateAI(ship, world, dt) {
   }
   if (!target) target = nearestEnemy(ship, world.ships);
 
+  // Escort leash: fighters stamped with `escortOf` (set at spawn time
+  // by spawnEscorts) only engage targets within ESCORT_ENGAGE_RANGE of
+  // their assigned capital. Anything past that gets dropped and the
+  // ship falls through to the return-to-station path below. Without
+  // this, fighter escorts happily chased enemies across the entire
+  // arena and left their capital naked.
+  const ESCORT_ENGAGE_RANGE = 900;
+  const ESCORT_RECALL_RANGE = 1400;
+  let escortCap = null;
+  if (ship.klass === "fighter" && ship.escortOf != null && world.ships) {
+    escortCap = world.ships.find((o) => o.id === ship.escortOf && !o.dead) || null;
+    if (!escortCap) {
+      ship.escortOf = null; // assigned capital is gone; free fighter
+    } else if (target) {
+      const dxT = target.pos.x - escortCap.pos.x;
+      const dyT = target.pos.y - escortCap.pos.y;
+      const dxS = ship.pos.x - escortCap.pos.x;
+      const dyS = ship.pos.y - escortCap.pos.y;
+      const targetFarFromCap = (dxT * dxT + dyT * dyT) > (ESCORT_ENGAGE_RANGE * ESCORT_ENGAGE_RANGE);
+      const escortFarFromCap = (dxS * dxS + dyS * dyS) > (ESCORT_RECALL_RANGE * ESCORT_RECALL_RANGE);
+      if (targetFarFromCap || escortFarFromCap) target = null;
+    }
+  }
+
   if (!target) {
+    // Escort with nothing to chase — fly back to a station ring around
+    // the capital instead of going idle in the void.
+    if (escortCap) {
+      const stationR = (escortCap.spec ? escortCap.spec.radius : 80) + 200;
+      const ang = ship.id * 0.137;
+      const sx = escortCap.pos.x + Math.cos(ang) * stationR;
+      const sy = escortCap.pos.y + Math.sin(ang) * stationR;
+      c.thrust = { x: 0, y: 0 };
+      c.aim = { x: sx - ship.pos.x, y: sy - ship.pos.y };
+      c.firing = false;
+      c.firingMissile = false;
+      ship.attackState = "approach";
+      ship.approachTimer = 0;
+      return;
+    }
     c.thrust = { x: 0, y: 0 };
     c.aim = null;
     c.firing = false;

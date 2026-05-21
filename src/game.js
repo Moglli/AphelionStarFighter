@@ -417,11 +417,20 @@ function spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded =
 
   const escortSize = ESCORT_SIZE[klass] || 0;
   if (escortSize <= 0) return;
-  const packId = nextPackId++;
-  // Spread ring slightly so 15 fighters around a battleship don't
+  // Spread ring slightly so larger groups around a battleship don't
   // overlap each other at spawn.
   const ringR = capital.spec.radius + Math.max(70, escortSize * 6);
+  // Split escorts into squads of FIGHTER_PACK_SIZE (=5). A battleship's
+  // 10 escorts become two squads of 5 with separate packIds, so each
+  // squad's cohesion / target pick is independent — matches the free
+  // fighter spawn logic in `spawnFighterPacks`.
+  let packId = nextPackId++;
+  let inThisSquad = 0;
   for (let i = 0; i < escortSize; i++) {
+    if (inThisSquad >= FIGHTER_PACK_SIZE) {
+      packId = nextPackId++;
+      inThisSquad = 0;
+    }
     const ang = (i / escortSize) * Math.PI * 2;
     const epos = {
       x: pos.x + Math.cos(ang) * ringR,
@@ -436,6 +445,7 @@ function spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded =
     escort.packRole = "hunt-fighter";
     escort.escortOf = capital.id;
     game.ships.push(escort);
+    inThisSquad++;
   }
 }
 

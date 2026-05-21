@@ -256,14 +256,18 @@ export const CLASSES = {
       // fire 3 shells each (0.15s apart) — 9 shells per side per cycle.
       // Per-shot damage is lower than the old single-shell so the
       // headline number is in the volley weight, not the individual hit.
+      //
+      // Visually these are upscaled cannon shells, not lobbed plasma —
+      // travelling slower than fighter rounds but still on a flat
+      // trajectory at ~70% of fighter projectile speed.
       damage: 50,
       cooldown: 4.0, // per side; sides fire independently
-      projectileSpeed: 280, // slow, heavy shells
+      projectileSpeed: 540,
       range: 1300,
       spread: 0.05,
       muzzles: 3, // gun ports per side
       muzzleSpread: 70, // spaced along the much longer hull
-      projectileRadius: 10,
+      projectileRadius: 8,
       projectileColors: { blue: "#a3f", red: "#f25" },
       salvo: { shotsPerVolley: 3, intraShotDelay: 0.15 },
     },

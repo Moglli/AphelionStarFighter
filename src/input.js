@@ -2428,6 +2428,14 @@ export class InputManager {
     this.spectateBtn = new SpectateButton();
     this.admiralPanel = new AdmiralPanel();
     this.admiralActive = false; // set from main.js when game.admiralMode
+    // Tap-to-select state. main.js flips `selectActive` when the camera
+    // is in spectate or admiral (no piloted ship → the right stick is
+    // hidden so its real estate becomes a select zone). _tapCandidate
+    // records a pointer that hasn't yet been claimed by a button/stick;
+    // onMove cancels it past an 8 px threshold, onUp commits it.
+    this.selectActive = false;
+    this._tapCandidate = null;   // { id, x, y, t }
+    this._pendingTap = null;     // canvas coords waiting for consumeTap()
     this._battleHUD = null;
     this.startMenu = new StartMenu();
     this.menuActive = false;
@@ -2582,8 +2590,12 @@ export class InputManager {
       const w = this.canvas.clientWidth;
       if (this.left.claims(x, w) && this.left.pointerId === null) {
         this.left.start(e.pointerId, x, y);
-      } else if (this.right.claims(x, w) && this.right.pointerId === null) {
+      } else if (!this.selectActive && this.right.claims(x, w) && this.right.pointerId === null) {
+        // Right stick only activates while piloting. In spectate /
+        // admiral the right half is a tap-to-select zone instead.
         this.right.start(e.pointerId, x, y);
+      } else if (this.selectActive) {
+        this._tapCandidate = { id: e.pointerId, x, y, t: performance.now() };
       }
     } else {
       if (e.button === 2) {
@@ -2591,6 +2603,10 @@ export class InputManager {
         this._rightClickEdge = true; // edge for missile fire
       } else {
         this.mouseDown = true;
+        // Mouse left-click on the canvas is a tap candidate. The
+        // existing onDown returned at every HUD/stick hit above, so
+        // by the time we get here the click missed everything.
+        this._tapCandidate = { id: e.pointerId, x, y, t: performance.now() };
       }
     }
   }
@@ -2621,6 +2637,13 @@ export class InputManager {
     }
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
+    // Cancel tap candidate once the pointer wanders past a small
+    // threshold — anything past that is a drag, not a select.
+    if (this._tapCandidate && this._tapCandidate.id === e.pointerId) {
+      const dx = x - this._tapCandidate.x;
+      const dy = y - this._tapCandidate.y;
+      if (dx * dx + dy * dy > 64) this._tapCandidate = null;
+    }
   }
   onUp(e) {
     if (e.pointerType === "touch" && this._touches.has(e.pointerId)) {
@@ -2643,6 +2666,22 @@ export class InputManager {
       if (e.button === 2) this.mouseRightDown = false;
       else this.mouseDown = false;
     }
+    // Commit the tap candidate if it survived to pointer-up within
+    // ~400 ms and never went past the move threshold. The position is
+    // canvas-relative; main.js converts to world coords with the
+    // current camera + zoom.
+    if (this._tapCandidate && this._tapCandidate.id === e.pointerId) {
+      if (performance.now() - this._tapCandidate.t < 400) {
+        this._pendingTap = { x: this._tapCandidate.x, y: this._tapCandidate.y };
+      }
+      this._tapCandidate = null;
+    }
+  }
+
+  consumeTap() {
+    const t = this._pendingTap;
+    this._pendingTap = null;
+    return t;
   }
 
   consumeEnterPress() {
