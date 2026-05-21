@@ -122,6 +122,60 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — DOM menu persisted on top of every non-Frontier mode
+
+**What changed**
+
+After tapping DEPLOY on Open Battle / Defend Station / Admiral / Custom,
+the `menu-root` DOM (z-index 15) kept sitting on top of `#game` (z-5)
+and `#battle-root` for the entire match — chips, START button, etc.
+stayed clickable over the live battle.
+
+Cause: `main.js#draw` only calls `input.startMenu.draw()` while
+`game.state === "menu"`. The first time the user clicks DEPLOY,
+`startGame` synchronously flips `game.state` to `"playing"`, the draw
+loop drops out of the menu branch, and **`MenuSystem.showScreen` is
+never called again** — so the previous frame's `menu-root` visibility
+(`"visible"`) and the active screen class linger forever. Frontier
+was unaffected because `_launchBattle` already calls
+`_menuSystem.hideAll()` synchronously before dispatching `enter-node`;
+the other modes had no equivalent.
+
+Fix: added an idempotent `StartMenu.hide()` (delegates to
+`_menuSystem.hideAll()` only when a screen is currently active, so
+it's a no-op after the first call each match), and an `else` branch
+in `main.js#draw` so every non-menu frame either no-ops or tears the
+chrome down on the transition frame.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | New `StartMenu.hide()` method right after `draw()`. Idempotent — checks `_menuSystem._currentScreen !== null` before calling `hideAll()`. |
+| `src/main.js` | `if (game.state === "menu") input.startMenu.draw(...)` gets an `else input.startMenu.hide()` so the transition frame after `startGame` clears `menu-root`. |
+
+**Design decisions / gotchas**
+
+- **`hide()` is idempotent.** `hideAll()` itself iterates every screen
+  to strip `.active`, which is cheap but unnecessary 60× per second.
+  Gating on `_currentScreen !== null` makes only the transition frame
+  do work; every subsequent in-battle frame returns immediately.
+- **Hide is wired in the draw loop, not in `startGame`.** `startGame`
+  is shared by canvas-click, DOM-DEPLOY, post-battle restart, and the
+  Frontier `enter-node` path — putting hide there would race with the
+  Frontier `_launchBattle` cleanup (which also destroys the starmap).
+  Driving it from the draw loop's `game.state` check covers every
+  mode with one rule.
+- **Post-battle return works for free.** When the player taps after
+  `matchOver`, `restart` flips `game.state` back to `"menu"`, the
+  draw loop re-enters the menu branch, `startMenu.draw` runs, and
+  `showScreen(_baseScreen)` re-mounts the PLAY screen. No special
+  `wake-up` call needed.
+- **Verified via Playwright** (Galaxy S9+ UA): all four non-Frontier
+  modes now report `getComputedStyle(menu-root).visibility === "hidden"`
+  after the deploy. Frontier flow still passes through HOME → PLAY →
+  NEW CAMPAIGN → Terran → starmap → JUMP → FLY without regressions.
+
 ### 2026-05-21 — Main-menu restructure: HOME → PLAY → mode-relevant options
 
 **What changed**

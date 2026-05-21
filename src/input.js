@@ -932,6 +932,17 @@ export class StartMenu {
     ctx.restore();
   }
 
+  // Called from the main draw loop when game.state !== "menu" so the DOM
+  // menu chrome from the last "menu" frame doesn't keep sitting on top of
+  // the canvas + battle-root during gameplay. Idempotent: subsequent
+  // calls during the same battle are no-ops because the menu is already
+  // hidden.
+  hide() {
+    if (this._menuSystem && this._menuSystem._currentScreen !== null) {
+      this._menuSystem.hideAll();
+    }
+  }
+
   _buildMenuState(viewW, viewH) {
     const run = this.runState && this.runState.run;
     const meta = this.runState && this.runState.meta;

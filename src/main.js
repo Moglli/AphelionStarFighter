@@ -492,9 +492,15 @@ function draw() {
 
   // Pre-match menu: lazy-mounts the DOM MenuSystem on first call and
   // keeps it synced. Without this the page shows a black canvas on
-  // first load — the menu DOM never mounts.
+  // first load — the menu DOM never mounts. The else branch tears the
+  // menu chrome down once a battle starts; without it the DOM menu
+  // (z-15) keeps sitting on top of the canvas/HUD for the rest of the
+  // match — the user saw it as "menu persists on Open / Defend /
+  // Admiral / Custom."
   if (game.state === "menu") {
     input.startMenu.draw(ctx, viewW, viewH);
+  } else {
+    input.startMenu.hide();
   }
 
   // Virtual stick DOM updates
