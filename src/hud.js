@@ -46,7 +46,14 @@ function endPoint(beam) {
     const dx = beam.target.pos.x - beam.origin.x;
     const dy = beam.target.pos.y - beam.origin.y;
     const d = Math.hypot(dx, dy) || 1;
-    const r = Math.min(d, beam.range);
+    // Bury the beam into the hull instead of running it to the
+    // target's centre. Stop `radius * 0.5` short of centre — i.e.
+    // halfway between the leading hull edge and the centre — so the
+    // beam visibly carves into the silhouette without drilling all
+    // the way through to a tidy centre dot.
+    const targetR = (beam.target.spec && beam.target.spec.radius) || 0;
+    const buryStop = Math.max(d - targetR * 0.5, 0);
+    const r = Math.min(buryStop, beam.range);
     return { x: beam.origin.x + (dx / d) * r, y: beam.origin.y + (dy / d) * r };
   }
   return { x: beam.origin.x + beam.range, y: beam.origin.y };

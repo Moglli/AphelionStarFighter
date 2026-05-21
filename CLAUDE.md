@@ -122,6 +122,71 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Tracking gun turrets + lasers bury into the hull
+
+**What changed**
+
+Two visual requests:
+
+1. **PD turrets now visibly track their target.** Previously every PD
+   turret was rendered as a static white dot at its hull-ring offset,
+   and the module-level cluster art spun on a per-ship phase that had
+   nothing to do with what the turret was actually shooting. Each PD
+   turret now stores its current world-space aim angle
+   (`ship.pdAimAngles[i]`), updated every tick from the lead-aim
+   calculation that already runs in `updatePDFire`. The draw layer
+   renders a small base disc + a barrel rotated onto that aim
+   (`localAim = pdAimAngles[i] - ship.heading`), with a tiny muzzle
+   tip for the firing-end read.
+
+2. **Heavy laser barrel tracks too.** `updateHeavyLaser` now picks a
+   target every tick — not just when ready to fire — and stashes the
+   world-space angle on `ship.laserAimAngle`. `drawLaserArt` rotates
+   the barrel onto that angle (clamped to the spec's `heavyLaser.arc`
+   so the gun can't whip past the firing cone). Cleared back to
+   `null` when the laser module is destroyed.
+
+3. **Laser beam buries into the hull instead of hitting centre.**
+   `endPoint(beam)` in `hud.js` used to extend the beam to
+   `target.pos` (the geometric centre of the ship). Now it stops
+   `targetR * 0.5` short of centre — i.e. halfway between the
+   leading hull edge and centre — so the beam visibly carves into
+   the silhouette and doesn't drill clean through to a centre dot.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/ship.js` | `updatePDFire`: lazily allocates `ship.pdAimAngles[]`, updates every tick (even when on cooldown), and uses the same angle to fire. PD-turret draw block (drawShip body) replaces white dots with base disc + rotated barrel + muzzle tip; default aim points outward from the hull when no target has been picked. `updateHeavyLaser` runs `pickLaserTarget` every tick to refresh `ship.laserAimAngle` regardless of cooldown; clears the angle when the laser module is disabled. `drawLaserArt(ctx, mr, frac, ship)` rotates the barrel onto `laserAimAngle - ship.heading`, clamped to the spec arc. `drawModuleArt` now forwards `ship` into the laser case. |
+| `src/hud.js` | `endPoint(beam)` returns `d - targetR * 0.5` along the beam vector instead of full `d` so the visual stops halfway into the hull. |
+
+**Design decisions / gotchas**
+
+- **PD turrets keep updating their aim even on cooldown.** Without
+  this the barrels would freeze mid-track between shots; with it
+  they slew smoothly. The render cost is one cached angle per turret
+  per tick — negligible against the existing per-turret target pick.
+- **Broadside cannons stay fixed perpendicular by design.** The
+  `firingMode: "broadside"` ships don't aim individual barrels — the
+  hull rotates until a target enters the broadside arc, then all
+  guns on that side fire together. Animating the barrels to track
+  individuals would lie about how the weapon actually works.
+- **Laser barrel angle is clamped to `heavyLaser.arc`.** Without the
+  clamp the barrel could swing 180° to point at a target behind the
+  ship; with it the gun visibly "tries" to track but stops at the
+  arc edge — the same constraint that gates the actual beam.
+- **Bury constant is `radius * 0.5` not `radius * 0.85`.** Initial
+  pass used 0.85 which only put the endpoint ~8 px past the edge of
+  a 54 px frigate — barely visible. 0.5 puts the endpoint halfway
+  to centre (27 px in), which reads clearly as the beam carving in
+  on capitals (BB radius 156 → 78 px bury depth).
+- **Verified via Playwright** (Galaxy S9+ UA, admiral mode): BBs
+  spawn with `pdAimAngles.length = 10` matching `pdCannons.count`;
+  the per-turret angle is no longer the initial 0 fill. First laser
+  beam fired ~30 s in, targeting a frigate (radius 54) at distance
+  2227 — beam endpoint computes to `d - 27 = 2200`, halfway into
+  the hull as designed.
+
 ### 2026-05-21 — +2 missile launchers, cluster cruiser, umbrella bloom, bomber shield buff
 
 **What changed**

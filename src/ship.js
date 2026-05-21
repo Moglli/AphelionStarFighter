@@ -803,8 +803,15 @@ function updateRingFire(ship, world) {
 function updatePDFire(ship, world) {
   const pd = ship.spec.pdCannons;
   const range2 = pd.range * pd.range;
+  // Per-turret aim angle (world-space radians). Allocated lazily so
+  // old saves / mid-air ship spawns still work. The visual layer
+  // (drawShip's PD turret pass) reads this each frame to slew the
+  // barrels onto the turret's current target — even when the turret
+  // is on cooldown, so the gun reads as actively tracking.
+  if (!ship.pdAimAngles || ship.pdAimAngles.length !== ship.pdCooldowns.length) {
+    ship.pdAimAngles = new Array(ship.pdCooldowns.length).fill(ship.heading);
+  }
   for (let i = 0; i < ship.pdCooldowns.length; i++) {
-    if (ship.pdCooldowns[i] > 0) continue;
     // Skip turrets whose owning module has been knocked out.
     if (ship.pdTurretModules) {
       const modName = ship.pdTurretModules[i];
@@ -823,6 +830,8 @@ function updatePDFire(ship, world) {
     const tT = tDist / pd.projectileSpeed;
     const px = tx + tvx * tT, py = ty + tvy * tT;
     const ang = Math.atan2(py - origin.y, px - origin.x);
+    ship.pdAimAngles[i] = ang;
+    if (ship.pdCooldowns[i] > 0) continue;
     const dir = V.fromAngle(ang);
     world.projectiles.push(createProjectile({
       pos: origin,
@@ -1022,9 +1031,24 @@ function pickLaserTarget(ship, world) {
 }
 
 function updateHeavyLaser(ship, world) {
+  // Always track the best-priority target if one is in arc so the
+  // laser barrel art (drawLaserArt) reads as actively tracking even
+  // while the cooldown ticks down. Storing on the ship rather than
+  // recomputing in the render path keeps render cheap.
+  const liveLaserMod = !(ship.moduleByName && ship.moduleByName.laser && ship.moduleByName.laser.disabled);
+  if (liveLaserMod) {
+    const lookTarget = pickLaserTarget(ship, world);
+    if (lookTarget) {
+      ship.laserAimAngle = Math.atan2(
+        lookTarget.pos.y - ship.pos.y,
+        lookTarget.pos.x - ship.pos.x,
+      );
+    }
+  } else {
+    ship.laserAimAngle = null;
+  }
   if (ship.laserCd > 0) return;
-  // A destroyed laser mount silences the beam for the rest of the match.
-  if (ship.moduleByName && ship.moduleByName.laser && ship.moduleByName.laser.disabled) return;
+  if (!liveLaserMod) return;
   const l = ship.spec.heavyLaser;
   const target = pickLaserTarget(ship, world);
   if (!target) return;
@@ -1205,15 +1229,33 @@ function moduleAccentColor(frac) {
   return "rgba(120,50,30,0.95)";
 }
 
-function drawLaserArt(ctx, mr, frac) {
+function drawLaserArt(ctx, mr, frac, ship) {
   // Round base + long forward barrel + glowing red lens at the muzzle.
+  // The barrel rotates onto the laser's current aim (ship.laserAimAngle,
+  // world-space, set by updateHeavyLaser whenever any priority target is
+  // in arc) so a battleship's heavy laser visibly tracks its prey even
+  // between beam pulses. Clamped to the firing arc so it doesn't whip
+  // around to point off the hull.
   const body = moduleBodyColor(frac);
   const accent = moduleAccentColor(frac);
   ctx.fillStyle = body;
   ctx.beginPath(); ctx.arc(0, 0, mr * 0.95, 0, Math.PI * 2); ctx.fill();
-  // Barrel: rectangle pointing in +x.
   const barrelLen = mr * 1.6;
   const barrelW = mr * 0.45;
+
+  let localAim = 0;
+  if (ship && ship.laserAimAngle != null) {
+    const arc = (ship.spec && ship.spec.heavyLaser && ship.spec.heavyLaser.arc) || Math.PI / 2;
+    let delta = ship.laserAimAngle - ship.heading;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    if (delta > arc) delta = arc;
+    else if (delta < -arc) delta = -arc;
+    localAim = delta;
+  }
+
+  ctx.save();
+  ctx.rotate(localAim);
   ctx.fillStyle = accent;
   ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
   // Muzzle lens — small inset glowing red disc at the barrel tip.
@@ -1221,6 +1263,7 @@ function drawLaserArt(ctx, mr, frac) {
   ctx.beginPath(); ctx.arc(barrelLen - mr * 0.18, 0, mr * 0.22, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = "rgba(255,200,160,0.9)";
   ctx.beginPath(); ctx.arc(barrelLen - mr * 0.18, 0, mr * 0.09, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 function drawMissileArt(ctx, mr, facing, frac) {
@@ -1363,7 +1406,7 @@ function drawModuleArt(ctx, m, mx, my, mr, frac, ship) {
   ctx.save();
   ctx.translate(mx, my);
   switch (moduleKind(m.name)) {
-    case "laser":     drawLaserArt(ctx, mr, frac); break;
+    case "laser":     drawLaserArt(ctx, mr, frac, ship); break;
     case "missile":   drawMissileArt(ctx, mr, m.name === "missile-aft" ? Math.PI : 0, frac); break;
     case "broadside": drawBroadsideArt(ctx, mr, m.offset.y >= 0 ? 1 : -1, frac); break;
     case "pd":        drawPdArt(ctx, mr, ship, frac); break;
@@ -1491,21 +1534,54 @@ export function drawShip(ctx, ship, zoom = 1) {
     }
   }
 
-  // PD turret stubs — dim when their owning cluster module is destroyed.
+  // PD turret stubs — a small base disc + a thin barrel that rotates
+  // onto whatever the turret last tracked (ship.pdAimAngles[i] is in
+  // world-space radians; subtract ship.heading because we're inside
+  // the rotated ship frame). Dim when the owning cluster module is
+  // destroyed.
   if (ship.spec.pdCannons) {
     const n = ship.spec.pdCannons.count;
     const r = s.radius * 0.75;
+    const baseR = Math.max(2.5, s.radius * 0.04);
+    const barrelLen = Math.max(6, s.radius * 0.10);
+    const barrelW = Math.max(1.2, s.radius * 0.018);
     for (let i = 0; i < n; i++) {
       let alive = true;
       if (ship.pdTurretModules && ship.moduleByName) {
         const mod = ship.moduleByName[ship.pdTurretModules[i]];
         if (mod && mod.disabled) alive = false;
       }
-      ctx.fillStyle = alive ? "#fff" : "rgba(60,40,30,0.75)";
       const a = (i / n) * Math.PI * 2;
+      const bx = Math.cos(a) * r;
+      const by = Math.sin(a) * r;
+      // Base disc
+      ctx.fillStyle = alive ? "#cdd" : "rgba(60,40,30,0.75)";
       ctx.beginPath();
-      ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 3, 0, Math.PI * 2);
+      ctx.arc(bx, by, baseR, 0, Math.PI * 2);
       ctx.fill();
+      // Barrel — rotated to the current aim. Default to facing
+      // outward from the hull when no target has been picked yet.
+      const aimWorld = (alive && ship.pdAimAngles && ship.pdAimAngles[i] != null)
+        ? ship.pdAimAngles[i]
+        : (ship.heading + a);
+      const aimLocal = aimWorld - ship.heading;
+      const bcos = Math.cos(aimLocal), bsin = Math.sin(aimLocal);
+      ctx.fillStyle = alive ? "#fff" : "rgba(60,40,30,0.6)";
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(aimLocal);
+      ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
+      // Tiny muzzle tip dot
+      if (alive) {
+        ctx.fillStyle = "rgba(255,235,180,0.9)";
+        ctx.beginPath();
+        ctx.arc(barrelLen, 0, barrelW * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      // unused: bcos/bsin — kept calculation in case future code wants the
+      // muzzle world-space without re-trig.
+      void bcos; void bsin;
     }
   }
 
