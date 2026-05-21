@@ -883,8 +883,13 @@ export class StartMenu {
     else if (this.showEvent) screenName = 'event';
     else if (this.showBattleChoice) screenName = 'battleChoice';
 
-    // Show the menu root for all screens except runMap
-    if (!this.showRunMap) {
+    // Show the menu root unless we're on the run-map *and* no overlay is
+    // up. When an overlay is up during a run, the menu-root (z-index 15)
+    // sits above the starmap (z-index 10) and the DOM screen handles the
+    // visuals — keeping menu-root hidden here was the JUMP-does-nothing
+    // bug, the overlay state flipped but no DOM ever rendered.
+    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice;
+    if (!this.showRunMap || hasSubOverlay) {
       this._menuSystem.showScreen(screenName);
       // Only dim canvas when main menu is showing (not for DOM overlays that have their own scrim)
       if (screenName === 'main') {
@@ -895,7 +900,7 @@ export class StartMenu {
       const menuState = this._buildMenuState(viewW, viewH);
       this._menuSystem.sync(menuState);
     } else {
-      // Hide menu when run map is showing
+      // Hide menu when run map is showing and no overlay is up
       this._menuSystem.hideAll();
     }
 
@@ -907,11 +912,10 @@ export class StartMenu {
     if (this.showRunMap) this._drawRunMap(ctx, viewW, viewH);
     if (this.showRunSetup) this._drawRunSetup(ctx, viewW, viewH);
 
-    // Canvas sub-overlays drawn on top
-    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice;
-    if (this._starmapControl) {
-      this._starmapControl.root.classList.toggle("behind-canvas", hasSubOverlay);
-    }
+    // Legacy canvas sub-overlay stubs (DOM-rendered now). The
+    // behind-canvas dim is also dead since the menu-root sits above the
+    // starmap naturally — leaving the calls in place so the next code-
+    // sweep can drop them in one pass.
     if (this.showResupply) this._drawResupply(ctx, viewW, viewH);
     if (this.showEvent) this._drawEvent(ctx, viewW, viewH);
     if (this.showBattleChoice) this._drawBattleChoice(ctx, viewW, viewH);
@@ -1133,12 +1137,10 @@ export class StartMenu {
         else this.customRedCounts[klass] = count;
       },
       onBattleFly: () => {
-        if (this.onRunChoice) this.onRunChoice("enter-node", { nodeId: this._pendingBattleNode.id, battleMode: "fly" });
-        this.showBattleChoice = false;
+        this._launchBattle("fly");
       },
       onBattleCommand: () => {
-        if (this.onRunChoice) this.onRunChoice("enter-node", { nodeId: this._pendingBattleNode.id, battleMode: "command" });
-        this.showBattleChoice = false;
+        this._launchBattle("command");
       },
       onBattleBack: () => { this.showBattleChoice = false; },
       onResupplyRepair: (instanceId) => {
@@ -1158,7 +1160,16 @@ export class StartMenu {
       },
       onResupplyClose: () => { this.showResupply = false; },
       onEventChoice: (choiceKey) => {
-        if (this.onRunChoice) this.onRunChoice("apply-event", { eventId: this._pendingEventNode.eventId, choiceIndex: parseInt(choiceKey) });
+        const node = this._pendingEventNode;
+        if (!node) { this.showEvent = false; return; }
+        if (this.onRunChoice) {
+          this.onRunChoice("apply-event", { eventId: node.eventId, choiceIndex: parseInt(choiceKey) });
+          // Mirror the canvas handler: a choice applied = node visited.
+          // Without this the run-map stays put and the player can re-tap
+          // the same event endlessly.
+          this.onRunChoice("complete-node-noncombat", { nodeId: node.id });
+        }
+        this._pendingEventNode = null;
         this.showEvent = false;
       },
       onEventClose: () => { this.showEvent = false; },
@@ -1797,8 +1808,12 @@ export class StartMenu {
       this._starmapControl = createStarmap(document.body, run);
       setStarmapCallbacks(this._starmapControl, {
         onNodeClick: ({ nodeId, nodeType }) => {
-          // Find the full graph node from the run.
-          const graph = run.graphs[run.act - 1];
+          // Read the freshest run from runState — the closure-captured
+          // `run` would otherwise stale out after a resume / new act,
+          // routing a clicked event/resupply node through the wrong
+          // graph (the same id might be a battle in the captured graph).
+          const currentRun = (this.runState && this.runState.run) || run;
+          const graph = currentRun.graphs[currentRun.act - 1];
           const node = graph && graph.nodes.find((m) => m.id === nodeId);
           if (node) this._routeNodeClick(node);
         },
@@ -2097,6 +2112,26 @@ export class StartMenu {
 
   _endRunMapDrag() {
     this._runMapDrag = null;
+  }
+
+  // Tear down the run-map DOM and fire enter-node. main.js#handleRunChoice
+  // calls startGame() synchronously, after which game.state flips to
+  // "playing" and the draw loop stops calling startMenu.draw(). If we
+  // don't clean up here the starmap-root (z-index 10) sits above #game
+  // (z-index 5) for the entire battle.
+  _launchBattle(battleMode) {
+    const node = this._pendingBattleNode;
+    if (!node) return;
+    this.showBattleChoice = false;
+    this.showRunMap = false;
+    if (this._starmapControl) {
+      destroyStarmap(this._starmapControl);
+      this._starmapControl = null;
+    }
+    if (this._menuSystem) this._menuSystem.hideAll();
+    if (this.onRunChoice) {
+      this.onRunChoice("enter-node", { nodeId: node.id, battleMode });
+    }
   }
 
   _pickBoonOffers() {

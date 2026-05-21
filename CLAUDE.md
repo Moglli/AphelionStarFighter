@@ -122,6 +122,87 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Frontier flow: JUMP-does-nothing, stale closure, FLY teardown, event auto-advance
+
+**What changed**
+
+Smoke-tested the full Frontier loop (NEW CAMPAIGN → faction → starmap →
+jump → battle/event/resupply) and found four related bugs from the
+DOM/CSS overhaul (a6f0f28). All fixed in this commit.
+
+1. **JUMP did nothing.** Tapping a reachable node opened the jump
+   confirmation, but tapping JUMP itself was a silent no-op. Cause:
+   `StartMenu.draw` hid `menu-root` whenever `showRunMap` was true,
+   so when `_routeNodeClick` flipped `showBattleChoice` (etc.) to
+   true on JUMP, the DOM overlay screen never became visible. Fixed
+   by lifting `hasSubOverlay = showResupply||showEvent||showBattleChoice`
+   above the visibility gate and keeping `menu-root` shown when an
+   overlay is up. The `behind-canvas` toggle that used to drop the
+   starmap below the canvas for canvas-drawn overlays is now dead
+   (`menu-root` z-15 already sits above starmap z-10) and was
+   dropped from the draw path.
+2. **Stale closure routed the wrong node.** `setStarmapCallbacks`
+   captured the `run` local from `_layoutRunMap`'s first call. If a
+   new run started (or — what bit us during testing — the act-graph
+   changed underneath), `graph.nodes.find(id === nodeId)` returned a
+   stale node, so a clicked event node could route through the
+   battle-choice path with the previous run's roster. Fixed by
+   re-reading `this.runState.run` inside the callback at click time,
+   with the closure-captured `run` as a fallback.
+3. **FLY INTO BATTLE didn't tear down the starmap.** The DOM
+   `onBattleFly` / `onBattleCommand` callbacks dispatched
+   `enter-node` (which synchronously calls `startGame`), then only
+   cleared `showBattleChoice`. `showRunMap` stayed true and
+   `_starmapControl` stayed alive — but once `game.state` flipped
+   to `"playing"`, `startMenu.draw()` stopped firing (see
+   `main.js#draw` at the `game.state === "menu"` gate), so the
+   normal "destroy starmap when `showRunMap` is false" path in
+   `draw` never ran. Net effect: `starmap-root` (z-10) sat above
+   `#game` (z-5) for the entire battle. Added a `_launchBattle`
+   helper that synchronously hides `showRunMap`, destroys the
+   starmap, hides `menu-root`, then dispatches `enter-node` — both
+   callbacks now route through it.
+4. **Event-choice taps didn't advance the player.** The DOM
+   `onEventChoice` only dispatched `apply-event` (effect on
+   resources/fleet) but not `complete-node-noncombat` (mark visited
+   and advance `nodePos`). The legacy canvas `_clickEvent` handler
+   fires both — DOM dropped the second on the floor. Mirrored the
+   canvas dispatch so the player advances to the event node after
+   choosing.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | (1) lifted `hasSubOverlay` above the `menu-root` show/hide branch and updated the gate; dropped the `.behind-canvas` toggle. (2) `setStarmapCallbacks`' `onNodeClick` now reads `this.runState.run` first, fallback to captured `run`. (3) added `_launchBattle(mode)` near `_endRunMapDrag`; `onBattleFly` / `onBattleCommand` both call it. (4) `onEventChoice` dispatches `complete-node-noncombat` after `apply-event`. |
+
+**Design decisions / gotchas**
+
+- **Canvas overlay stubs left in place.** `_drawResupply` / `_drawEvent`
+  / `_drawBattleChoice` are still no-op stubs called from the draw
+  loop. The legacy `_clickResupply` / `_clickEvent` / `_clickBattleChoice`
+  methods are also still alive in source. None of them fire under
+  the DOM path because the menu-scrim absorbs canvas pointers, but
+  ripping them out is a separate sweep — out of scope for the
+  launch fix.
+- **`_launchBattle` runs the cleanup BEFORE the dispatch.** Order
+  matters: `enter-node` synchronously calls `startGame`, which
+  flips `game.state` to `"playing"` and stops the draw loop from
+  calling `startMenu.draw`. If we cleared `showRunMap` *after*
+  dispatch, the destroy-starmap branch in `draw` would never run.
+- **Closure fallback on `currentRun ?? run` is deliberate.** If
+  `this.runState.run` is null (e.g., abandon-run flushed it mid-
+  click) we want SOMETHING to look up — the closure's `run` is
+  better than a TypeError. The fallback hit only matters in races,
+  not the normal play path.
+- **Verified via Playwright** (Galaxy S9+ UA, multiple seeds): all
+  four flows — event (apply + advance), resupply (continue +
+  advance), battle (choice + back), battle (choice + FLY) — pass
+  with no pageerrors. FLY confirmed by checking
+  `getComputedStyle(menu-root).visibility === "hidden"`,
+  `!document.getElementById("starmap-root")`, and HUD strings
+  ("HULL", "SHIELD", "BATTLEFIELD") in body text.
+
 ### 2026-05-21 — Frontier mode launch: drop dead `makeGalaxy`, fix SVG className write
 
 **What changed**
