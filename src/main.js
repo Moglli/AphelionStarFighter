@@ -490,6 +490,13 @@ function draw() {
     input._battleHUD.hide();
   }
 
+  // Pre-match menu: lazy-mounts the DOM MenuSystem on first call and
+  // keeps it synced. Without this the page shows a black canvas on
+  // first load — the menu DOM never mounts.
+  if (game.state === "menu") {
+    input.startMenu.draw(ctx, viewW, viewH);
+  }
+
   // Virtual stick DOM updates
   input.drawSticks(ctx);
 }
