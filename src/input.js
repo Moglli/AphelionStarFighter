@@ -1750,12 +1750,6 @@ export class StartMenu {
     };
     // Default selection is the menu's currently-picked race.
     this._runSetupFaction = this.selectedRace;
-
-    // Lazily build a galaxy backdrop just for the setup screen — keyed
-    // on a constant seed so it stays stable across opens.
-    if (!this._runSetupGalaxy) {
-      this._runSetupGalaxy = makeGalaxy(0xfd00bea1, viewW, viewH);
-    }
   }
 
   _drawRunSetup(ctx, viewW, viewH) {
@@ -2440,6 +2434,19 @@ export class InputManager {
     });
     window.addEventListener("keyup", (e) => { this.keys.delete(e.code); });
     window.addEventListener("blur", () => { this.keys.clear(); });
+  }
+
+  // Called from main.js#resize() on first paint and on every window
+  // resize. The DOM/HUD overhaul moved most chrome into the DOM, but the
+  // canvas hit-test rects on missile/fire/spectate + the admiral panel +
+  // the start-menu layout still need pixel positions tied to viewport
+  // size. Without this method main.js crashes on startup -> black screen.
+  layoutOverlays(viewW, viewH) {
+    this.missileBtn.layout(viewW, viewH);
+    this.fireBtn.layout(viewW, viewH);
+    this.spectateBtn.layout(viewW, viewH);
+    this.startMenu.layout(viewW, viewH);
+    this.admiralPanel.layout(viewW, viewH);
   }
 
   pos(e) {

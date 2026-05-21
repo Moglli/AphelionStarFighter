@@ -122,6 +122,120 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Frontier mode launch: drop dead `makeGalaxy`, fix SVG className write
+
+**What changed**
+
+Tapping NEW CAMPAIGN never opened the run-setup screen. Two latent
+bugs from the DOM/CSS overhaul (a6f0f28):
+
+1. `StartMenu._layoutRunSetup` still called `makeGalaxy(...)` to build
+   a canvas backdrop. `makeGalaxy` was deleted from `starmap.js` when
+   the canvas starmap was rewritten as DOM/SVG — the symbol isn't
+   imported and isn't exported anywhere. The click handler threw
+   `ReferenceError`, `showRunSetup` never flipped to true, and the
+   tap silently did nothing.
+2. After picking a faction, `updateStarmap` threw twice:
+   - `edgesSvg = control.edgesSvg;` (line 439) was a bare-name
+     assignment with no `let`/`const`. In ES-module strict mode that
+     reads as a global lookup, so the implicit global never existed
+     and the line ReferenceError'd on the first edge build.
+   - `edgeEl.path.setAttribute("d", ...)` was followed by
+     `edgeEl.path.className = ...` on an SVG `<path>`. `SVGElement`'s
+     `className` is a read-only `SVGAnimatedString` getter — setting
+     it raises `TypeError`. SVG class writes have to go through
+     `setAttribute("class", ...)` or `classList`.
+
+After both: run setup opens, faction pick works, starmap mounts (16
+nodes / 22 edges in the smoke test) and the Frontier campaign is
+playable again.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | Dropped the `_runSetupGalaxy = makeGalaxy(...)` block from `_layoutRunSetup`. The run setup is fully DOM-rendered; `_drawRunSetup` is already a stub and `_runSetupGalaxy` had no readers. |
+| `src/starmap.js` | Replaced bare `edgesSvg = control.edgesSvg; edgesSvg.appendChild(path)` with `control.edgesSvg.appendChild(path)`. Replaced `edgeEl.path.className = ...` with `edgeEl.path.setAttribute("class", ...)`. |
+
+**Design decisions / gotchas**
+
+- **The other `.className = ...` sites in starmap.js are safe.** They
+  all assign to HTML elements (`div`, `button`), where `className` is
+  a writable string. Only the `<path>` (and any other SVG namespace
+  element) needs `setAttribute("class", ...)`. If a future change
+  adds an SVG `<g>`/`<circle>`/etc., the same gotcha applies.
+- **Dead canvas paths left in `_layoutRunSetup` and `_clickRunSetup`
+  on purpose.** The DOM scrim absorbs the canvas clicks, so the
+  legacy rect-based fallback is unreachable from the primary flow.
+  Removing it would be a separate "kill dead canvas menu code"
+  sweep — out of scope for the launch fix.
+- **Verified end-to-end via Playwright** (Galaxy S9+ UA): tap
+  Frontier → tap NEW CAMPAIGN → faction-grid opens with 4 cards →
+  tap Terran → `starmap-root` appears in the body, `.starmap-node`
+  count = 16, `path.starmap-edge` count = 22, no pageerrors.
+
+### 2026-05-21 — Real fix for the startup black screen: restore InputManager.layoutOverlays
+
+**What changed**
+
+The previous "Fix black screen on initial load" commit (3f9e997) added
+an `input.startMenu.draw(...)` call to the draw loop, assuming the
+menu DOM wasn't mounting because nothing was calling its draw method.
+It treated the wrong symptom — the draw loop never ran at all.
+
+The DOM/CSS menu overhaul (a6f0f28) deleted
+`InputManager.layoutOverlays(viewW, viewH)` because the overlays moved
+to DOM, but it left the call site in `main.js#resize()`. `resize()`
+fires synchronously during module init (line 262, `resize()` after
+the listener is attached), BEFORE the RAF loop starts. The missing
+method raises a TypeError, the module top-level execution dies, and
+no frame ever paints.
+
+This was undetectable from grepping the live deployment because the
+fix commit was authored *after* the breaking commit was already in
+the wild — every user loading the page since the menu overhaul has
+been hitting a black screen, regardless of cache state.
+
+Restored `layoutOverlays` as a five-line method on `InputManager`
+that delegates to the still-existing per-overlay `layout()` methods
+(missileBtn, fireBtn, spectateBtn, startMenu, admiralPanel — same
+list the original method had).
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | Re-added `layoutOverlays(viewW, viewH)` on `InputManager`. |
+
+**Design decisions / gotchas**
+
+- **The per-overlay `layout()` methods still matter even with the
+  DOM HUD.** `onDown` still hit-tests canvas rects on
+  `missileBtn`/`fireBtn`/`spectateBtn`/`boostBtn`. Without `layout()`
+  calls those rects stay at `{x:0,y:0,w:90,h:60}` — i.e. they'd
+  steal taps in the top-left corner of the canvas. Don't be tempted
+  to delete the call thinking "everything is DOM now."
+- **`boostBtn` is intentionally NOT in the layout list.** It has no
+  `layout()` method (its rect is set elsewhere or unused). Adding
+  it would throw the same TypeError.
+- **Verification was done in a real browser (headless chromium via
+  Playwright with a Samsung S24 UA + viewport)** — `bodyChildren`
+  now includes `#menu-root` and `#battle-root`, `activeScreen`
+  reads `main`, the DEPLOY button text is present. The earlier
+  static-analysis pass missed this because the bug is a runtime
+  TypeError at module top-level, not a logic bug in any of the
+  branches that get drawn.
+- **The 3f9e997 fix is still correct** in the narrow sense that
+  `startMenu.draw` needed re-mounting after the DOM overhaul
+  dropped `drawHUD` from the loop — once `resize()` stops throwing
+  the menu draw call WILL fire. Don't revert it. The two fixes
+  together are what makes the page actually work.
+- **Cache impact**: served `src/main.js` has `Cache-Control:
+  public, max-age=60`. Users hard-refresh or wait 60s, then a
+  conditional request returns the fresh module. No deploy step
+  needed beyond saving the file — `/play/starfighter/` serves
+  directly from this working tree.
+
 ### 2026-05-20 — AI targets PD + weapon modules before hull
 
 **What changed**

@@ -436,8 +436,7 @@ export function updateStarmap(control, run) {
       const fuelChip = document.createElement("div");
       fuelChip.className = "fuel-cost-chip";
 
-      edgesSvg = control.edgesSvg;
-      edgesSvg.appendChild(path);
+      control.edgesSvg.appendChild(path);
       control.root.appendChild(fuelChip);
 
       edgeEl = { path, fuelChip, fromId: e.fromId, toId: e.toId };
@@ -447,7 +446,7 @@ export function updateStarmap(control, run) {
     // Update path data and classes
     const { d, mx, my } = edgePathD(a.x, a.y, b.x, b.y, parseInt(edgeKey));
     edgeEl.path.setAttribute("d", d);
-    edgeEl.path.className = `starmap-edge edge-${edgeState}`;
+    edgeEl.path.setAttribute("class", `starmap-edge edge-${edgeState}`);
 
     // Fuel cost chip at midpoint for reachable edges
     if (isCurrentOut && e.fuelCost != null) {
