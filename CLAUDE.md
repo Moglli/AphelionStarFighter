@@ -122,6 +122,68 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Broadside salvo aborts when the battery module dies mid-volley
+
+**What changed**
+
+Module-destruction audit covering every per-module subsystem. The
+existing gates are correct for *new* firing decisions (PD turrets,
+missile pods, heavy laser, hangar replenishment, engine speed, new
+broadside volleys), but `updateBroadsideFire`'s **salvo continuation
+block** ran ahead of the per-side liveness check:
+
+```js
+// Already correct — new volleys check portLive / stbdLive:
+if (portLive && cooldownPort <= 0 && salvoPortShotsLeft <= 0 ...) {
+  emitBroadside(...);
+  salvoPortShotsLeft = w.salvo.shotsPerVolley - 1;
+}
+
+// Was wrong — committed shots kept firing even with module dead:
+if (salvoPortShotsLeft > 0) {
+  salvoPortShotTimer -= dt;
+  if (salvoPortShotTimer <= 0) {
+    emitBroadside(...);   // <- no module check here
+    salvoPortShotsLeft -= 1;
+  }
+}
+```
+
+So a battleship that lost `broadside-port` mid-volley still finished
+its 3-shot burst from a destroyed battery. Fixed by re-checking the
+module on every shot of the continuation; if it's gone, the
+remaining `salvoPortShotsLeft` clears to 0 instead of firing.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/ship.js` | `updateBroadsideFire` salvo-continuation block now re-checks `portLive`/`stbdLive` before each shot in the burst; failed check cancels the remaining volley. |
+
+**Design decisions / gotchas**
+
+- **Only the broadside continuation was broken.** Audit of the other
+  per-module subsystems came up clean:
+  - PD turrets: gated per-turret in `updatePDFire`.
+  - Missile pods: gated per-pod via `podModules[i]` in `updateMissilePodFire`.
+  - Heavy laser: new beams gated in `updateHeavyLaser`; active beams die
+    immediately in `game.js#updateBeams` when the owner's laser module
+    flips `disabled`.
+  - Engine: speed scales with `aliveEngines / totalEngines` (line 280);
+    fully dead = exponential velocity decay.
+  - Hangar (carrier replenishment): gated in `updateReplenishment`.
+  - Forward fire (cruiser/bomber/fighter) and ring cannons (frigate):
+    not bound to any destructible module by design — there's no "gun"
+    in their `MODULES` entries — so nothing to gate.
+- **Cooldown timers keep ticking on disabled modules.** That's
+  harmless because the firing logic re-checks `.disabled` before
+  emitting; reusing the same cooldown bookkeeping means a *partial*
+  repair (if one ever ships) wouldn't have to re-seed timers.
+- **Verified via Playwright.** Forced `salvoPortShotsLeft = 3` on a
+  live BB, set its `broadside-port` module's `disabled = true`, waited
+  one tick — `salvoPortShotsLeft` cleared to 0 instead of firing. No
+  pageerrors.
+
 ### 2026-05-21 — Custom Match supports multi-faction teams (all 4 factions, per-faction fleet sizes)
 
 **What changed**

@@ -579,26 +579,38 @@ function updateBroadsideFire(ship, world, dt) {
   // Salvo continuation: each side has its own volley timer/counter, so
   // a fast-rotating battleship can chain bursts down both flanks. The
   // side recomputes its sideVec each shot because the ship may have
-  // turned mid-volley.
+  // turned mid-volley. Per-side module liveness re-checks the
+  // broadside battery on EVERY shot, not just at volley start — if
+  // the battery is destroyed mid-volley the remaining shells get
+  // cancelled (a destroyed module must stop functioning, not finish
+  // its committed burst).
   if (w.salvo) {
     if (ship.salvoPortShotsLeft > 0) {
       ship.salvoPortShotTimer -= dt;
       if (ship.salvoPortShotTimer <= 0) {
-        const fwdNow = V.fromAngle(ship.heading);
-        const sidePortNow = { x: -fwdNow.y, y: fwdNow.x };
-        emitBroadside(ship, world, sidePortNow, fwdNow);
-        ship.salvoPortShotsLeft -= 1;
-        ship.salvoPortShotTimer = w.salvo.intraShotDelay;
+        if (!portLive) {
+          ship.salvoPortShotsLeft = 0;
+        } else {
+          const fwdNow = V.fromAngle(ship.heading);
+          const sidePortNow = { x: -fwdNow.y, y: fwdNow.x };
+          emitBroadside(ship, world, sidePortNow, fwdNow);
+          ship.salvoPortShotsLeft -= 1;
+          ship.salvoPortShotTimer = w.salvo.intraShotDelay;
+        }
       }
     }
     if (ship.salvoStbdShotsLeft > 0) {
       ship.salvoStbdShotTimer -= dt;
       if (ship.salvoStbdShotTimer <= 0) {
-        const fwdNow = V.fromAngle(ship.heading);
-        const sideStbdNow = { x: fwdNow.y, y: -fwdNow.x };
-        emitBroadside(ship, world, sideStbdNow, fwdNow);
-        ship.salvoStbdShotsLeft -= 1;
-        ship.salvoStbdShotTimer = w.salvo.intraShotDelay;
+        if (!stbdLive) {
+          ship.salvoStbdShotsLeft = 0;
+        } else {
+          const fwdNow = V.fromAngle(ship.heading);
+          const sideStbdNow = { x: fwdNow.y, y: -fwdNow.x };
+          emitBroadside(ship, world, sideStbdNow, fwdNow);
+          ship.salvoStbdShotsLeft -= 1;
+          ship.salvoStbdShotTimer = w.salvo.intraShotDelay;
+        }
       }
     }
   }
