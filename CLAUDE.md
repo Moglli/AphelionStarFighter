@@ -122,6 +122,72 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Main-menu restructure: HOME → PLAY → mode-relevant options
+
+**What changed**
+
+Old main menu was a single screen with four chip rows (MAP SIZE, GAME
+MODE, FACTION, FLEET SIZE) plus a START button — same chrome regardless
+of which mode was picked. Frontier showed irrelevant map/fleet options;
+Custom showed irrelevant race/fleet (the custom overlay owns rosters).
+
+New structure has clear levels:
+
+1. **HOME** — top-level hub. Three buttons: **PLAY** (primary),
+   **SETTINGS**, **ABOUT**. Energy bar + floating settings pill hide
+   here (both are scoped to launching a match).
+2. **PLAY** — the old main menu, now reached from HOME via a BACK
+   arrow. GAME MODE chips always show. Other sections render
+   conditionally:
+   - Open Battle / Defend Station / Admiral → map size + faction + fleet
+   - Frontier → none (faction + map come from the run)
+   - Custom → map size only (rosters/races live in CONFIGURE overlay)
+3. **ABOUT** — short description of the project + BACK.
+
+`input.js` gained a `_baseScreen` state ("home" / "main" / "about");
+overlays still take precedence in `draw`'s screen-name pick. Energy
+bar + settings-pill visibility now key off `name === 'main'` instead
+of "menu is active at all."
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/menus.js` | New `_buildHome()` and `_buildAbout()`. `_buildMainMenu` gets a BACK button + title "PLAY" + `this._sectionEls` map. `_syncMainMenuChips` hides irrelevant sections per `selectedMode` (full hide for Frontier, race+fleet hide for Custom). `showScreen` gates pill visibility on `name === 'main'`. |
+| `src/input.js` | `_baseScreen = 'home'` in constructor; `draw()` reads it as the default screen name. New callbacks `onHomePlay` / `onHomeAbout` / `onMainBack` / `onAboutBack` flip `_baseScreen`. Canvas-dim now fires for any base screen (`home` / `main` / `about`), not only `main`. |
+| `style.css` | `.menu-home-nav` (vertical button stack), `.menu-home-play` (300px wide for the primary), `.menu-home-secondary` (220×44 for SETTINGS/ABOUT). `.menu-about-body` for the body copy. `.menu-back-btn` (absolute top-left chevron). |
+
+**Design decisions / gotchas**
+
+- **Sections show/hide via inline `display`, not class swap.** Keeps the
+  flex-column ordering of `.menu-screen` stable and avoids reflow
+  flicker when the user toggles between modes. Style toggle lives in
+  `_syncMainMenuChips` so it runs every frame and self-heals after a
+  programmatic mode change.
+- **Custom keeps MAP SIZE.** `_emitStart` reads `selectedSize` for the
+  custom path, so hiding the section would orphan an input. Custom
+  hides race + fleet because the overlay overrides them.
+- **`_baseScreen` is the only knob.** Resisted adding `showHome` /
+  `showAbout` boolean pairs — the old `show*` flags are for overlays
+  whose lifetime spans multiple frames and must be cleared. The home /
+  main / about *base* is a tri-state pick; one variable, one source of
+  truth.
+- **No saved-run guard on PLAY label.** The DEPLOY / CONFIGURE /
+  RESUME / NEW CAMPAIGN button already keys off `selectedMode` and the
+  run-state, so the user lands on PLAY with the correct label regardless
+  of which mode they last picked.
+- **After a battle ends, `_baseScreen` is already 'main'.** Restart
+  flips `game.state` back to "menu" and the next frame paints PLAY
+  (where the user came from), not HOME. If you ever want a post-battle
+  re-open to land on HOME instead, set `_baseScreen = 'home'` in
+  `restart` or in the `matchEnded` handler.
+- **Verified via Playwright** (Galaxy S9+ UA): home shows by default;
+  PLAY/SETTINGS/ABOUT route correctly; section visibility matches the
+  mode (Frontier hides all extras, Custom hides race+fleet, Open shows
+  everything); BACK returns to home; full Frontier flow (HOME → PLAY →
+  Frontier → NEW CAMPAIGN → Terran → starmap → JUMP → battleChoice →
+  FLY) still completes with no pageerrors.
+
 ### 2026-05-21 — Frontier flow: JUMP-does-nothing, stale closure, FLY teardown, event auto-advance
 
 **What changed**

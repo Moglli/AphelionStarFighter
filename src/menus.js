@@ -152,16 +152,18 @@ export class MenuSystem {
       this._screens[name].classList.add("active");
     }
 
-    // Scrim: visible for overlays, hidden for main menu
+    // Scrim: visible for overlays, hidden for base screens (home / main / about)
     const overlays = ["settings", "refill", "custom", "runSetup", "battleChoice", "resupply", "event"];
     if (this._scrim) {
       this._scrim.style.display = (name && overlays.includes(name)) ? "block" : "none";
     }
 
-    // Energy bar and settings button: visible whenever menu is active
-    const menuActive = name !== null && name !== undefined;
-    if (this._energyBar) this._energyBar.style.display = menuActive ? "block" : "none";
-    if (this._settingsBtn) this._settingsBtn.style.display = menuActive ? "block" : "none";
+    // Energy bar + floating settings pill: only meaningful on PLAY (main)
+    // because that's where stamina is spent. Hidden on home/about and on
+    // all sub-overlays (those have their own chrome).
+    const showPills = (name === "main");
+    if (this._energyBar) this._energyBar.style.display = showPills ? "block" : "none";
+    if (this._settingsBtn) this._settingsBtn.style.display = showPills ? "block" : "none";
 
     this._currentScreen = name;
   }
@@ -200,10 +202,16 @@ export class MenuSystem {
     this._scrim.style.display = "none";
     root.appendChild(this._scrim);
 
-    // 1. Main Menu
+    // 1. Home screen — top-level nav (PLAY / SETTINGS / ABOUT)
+    this._buildHome(root);
+
+    // 2. Main / Play screen — mode chips + mode-relevant options
     this._buildMainMenu(root);
 
-    // 2. Energy Bar
+    // 3. About screen
+    this._buildAbout(root);
+
+    // 4. Energy Bar
     this._buildEnergyBar(root);
 
     // 3. Settings Button
@@ -233,14 +241,16 @@ export class MenuSystem {
     this._mountEl.appendChild(root);
   }
 
-  // ---- Main Menu ----------------------------------------------------------
+  // ---- Home screen --------------------------------------------------------
+  // Top-level entry: PLAY / SETTINGS / ABOUT. Energy bar and the floating
+  // settings pill stay hidden on this screen — both are scoped to PLAY
+  // where launching a match (and spending stamina) is the actual action.
 
-  _buildMainMenu(root) {
+  _buildHome(root) {
     const screen = document.createElement("div");
-    screen.className = "menu-screen menu-main";
-    screen.dataset.screen = "main";
+    screen.className = "menu-screen menu-home";
+    screen.dataset.screen = "home";
 
-    // Title
     const header = document.createElement("header");
     header.className = "menu-title";
     header.innerHTML = `
@@ -250,14 +260,121 @@ export class MenuSystem {
     `;
     screen.appendChild(header);
 
-    // Chip sections: size, mode, race, fleet
+    const nav = document.createElement("div");
+    nav.className = "menu-home-nav";
+
+    const playBtn = document.createElement("button");
+    playBtn.className = "menu-start-btn menu-home-play";
+    playBtn.id = "home-play-btn";
+    playBtn.textContent = "PLAY";
+    this._addListener(playBtn, "click", () => {
+      if (this._callbacks.onHomePlay) this._callbacks.onHomePlay();
+    });
+    nav.appendChild(playBtn);
+
+    const settingsBtn = document.createElement("button");
+    settingsBtn.className = "menu-btn menu-home-secondary";
+    settingsBtn.id = "home-settings-btn";
+    settingsBtn.textContent = "SETTINGS";
+    this._addListener(settingsBtn, "click", () => {
+      if (this._callbacks.onSettingsOpen) this._callbacks.onSettingsOpen();
+    });
+    nav.appendChild(settingsBtn);
+
+    const aboutBtn = document.createElement("button");
+    aboutBtn.className = "menu-btn menu-home-secondary";
+    aboutBtn.id = "home-about-btn";
+    aboutBtn.textContent = "ABOUT";
+    this._addListener(aboutBtn, "click", () => {
+      if (this._callbacks.onHomeAbout) this._callbacks.onHomeAbout();
+    });
+    nav.appendChild(aboutBtn);
+
+    screen.appendChild(nav);
+
+    root.appendChild(screen);
+    this._screens.home = screen;
+  }
+
+  // ---- About screen -------------------------------------------------------
+
+  _buildAbout(root) {
+    const screen = document.createElement("div");
+    screen.className = "menu-screen menu-about";
+    screen.dataset.screen = "about";
+
+    const back = document.createElement("button");
+    back.className = "menu-back-btn";
+    back.id = "about-back-btn";
+    back.textContent = "← BACK";
+    this._addListener(back, "click", () => {
+      if (this._callbacks.onAboutBack) this._callbacks.onAboutBack();
+    });
+    screen.appendChild(back);
+
+    const header = document.createElement("header");
+    header.className = "menu-title";
+    header.innerHTML = `
+      <h1>ABOUT</h1>
+      <div class="menu-title-accent"></div>
+    `;
+    screen.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "menu-about-body";
+    body.innerHTML = `
+      <p><strong>APHELION STAR FIGHTER</strong> is a 2D fleet-combat game —
+      pilot a single fighter, command a fleet from the bridge, or run a
+      branching roguelite campaign in Frontier mode.</p>
+      <p>Touch and mouse + keyboard supported. Five game modes; six ship
+      classes per side; deep, destructible capital ships.</p>
+      <p class="menu-about-credits">Built with vanilla JS + Canvas2D, packaged
+      for mobile via Capacitor.</p>
+    `;
+    screen.appendChild(body);
+
+    root.appendChild(screen);
+    this._screens.about = screen;
+  }
+
+  // ---- Main Menu (PLAY screen) --------------------------------------------
+  // Mode chips drive what extra sections (map size / faction / fleet size)
+  // appear below — Frontier and Custom hide everything because their
+  // options live in the respective overlays.
+
+  _buildMainMenu(root) {
+    const screen = document.createElement("div");
+    screen.className = "menu-screen menu-main";
+    screen.dataset.screen = "main";
+
+    // BACK button — returns to home screen.
+    const back = document.createElement("button");
+    back.className = "menu-back-btn";
+    back.id = "main-back-btn";
+    back.textContent = "← BACK";
+    this._addListener(back, "click", () => {
+      if (this._callbacks.onMainBack) this._callbacks.onMainBack();
+    });
+    screen.appendChild(back);
+
+    // Title
+    const header = document.createElement("header");
+    header.className = "menu-title menu-title-play";
+    header.innerHTML = `
+      <h1>PLAY</h1>
+      <div class="menu-title-accent"></div>
+    `;
+    screen.appendChild(header);
+
+    // Chip sections: mode (always), then size/race/fleet (conditional)
     const sections = [
-      { key: "size", label: "MAP SIZE", chipId: "size-chips" },
       { key: "mode", label: "GAME MODE", chipId: "mode-chips" },
+      { key: "size", label: "MAP SIZE", chipId: "size-chips" },
       { key: "race", label: "FACTION", chipId: "race-chips" },
       { key: "fleet", label: "FLEET SIZE", chipId: "fleet-chips" },
     ];
 
+    this._sectionEls = {};
     for (const sec of sections) {
       const section = document.createElement("div");
       section.className = "menu-section";
@@ -269,6 +386,7 @@ export class MenuSystem {
       screen.appendChild(section);
       this._chipContainers[sec.key] = section.querySelector(".chip-row");
       this._chips[sec.key] = [];
+      this._sectionEls[sec.key] = section;
     }
 
     // Frontier status line
@@ -742,6 +860,20 @@ export class MenuSystem {
     if (this._chips.mode.length) this._updateChipSelection(this._chips.mode, s.selectedMode);
     if (this._chips.race.length) this._updateChipSelection(this._chips.race, s.selectedRace);
     if (this._chips.fleet.length) this._updateChipSelection(this._chips.fleet, s.selectedFleet);
+
+    // Hide size/race/fleet for modes that own their own setup. Frontier
+    // gets faction + map size from the run itself; Custom owns rosters
+    // and races inside its CONFIGURE overlay.
+    if (this._sectionEls) {
+      const mode = s.selectedMode;
+      const isRoguelite = mode === "roguelite";
+      const isCustom = mode === "custom";
+      const hideAll = isRoguelite;
+      const hideExtras = isRoguelite || isCustom;
+      if (this._sectionEls.size) this._sectionEls.size.style.display = hideAll ? "none" : "";
+      if (this._sectionEls.race) this._sectionEls.race.style.display = hideExtras ? "none" : "";
+      if (this._sectionEls.fleet) this._sectionEls.fleet.style.display = hideExtras ? "none" : "";
+    }
   }
 
   // ---- sync: START Button -------------------------------------------------

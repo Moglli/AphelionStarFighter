@@ -564,6 +564,10 @@ export class StartMenu {
     this._starmapControl = null;
     this._menuSystem = null;        // initialized lazily in draw()
     this._needsRelayout = false;    // set by DOM mode select callback
+    // Base screen for the menu DOM. The Home → Play → Mode-options flow
+    // toggles this between 'home', 'main' (Play), and 'about'. Overlays
+    // (settings/refill/runMap/etc.) still take precedence in draw().
+    this._baseScreen = 'home';
     // Energy state ref + IAP callback wired by main.js.
     this.energy = null;
     this.onEnergyPurchase = null;
@@ -873,8 +877,12 @@ export class StartMenu {
       this._wireMenuCallbacks();
     }
 
-    // Determine which screen to show
-    let screenName = 'main';
+    // Determine which screen to show. The base screen (`_baseScreen`)
+    // defaults to 'home' — the new top-level hub — and the user navigates
+    // to 'main' (the PLAY mode-picker) or 'about' from there. Overlays
+    // (settings/refill/custom/etc.) and the run-map overlays (battle
+    // choice / resupply / event) take precedence over the base.
+    let screenName = this._baseScreen || 'home';
     if (this.showSettings) screenName = 'settings';
     else if (this.showRefill) screenName = 'refill';
     else if (this.showCustom) screenName = 'custom';
@@ -891,8 +899,9 @@ export class StartMenu {
     const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice;
     if (!this.showRunMap || hasSubOverlay) {
       this._menuSystem.showScreen(screenName);
-      // Only dim canvas when main menu is showing (not for DOM overlays that have their own scrim)
-      if (screenName === 'main') {
+      // Dim the canvas behind any base screen (home / main / about) so
+      // the menu chrome reads clearly against the starfield.
+      if (screenName === 'home' || screenName === 'main' || screenName === 'about') {
         ctx.fillStyle = "rgba(2,8,18,0.78)";
         ctx.fillRect(0, 0, viewW, viewH);
       }
@@ -1181,6 +1190,11 @@ export class StartMenu {
         this.showRunMap = true;
       },
       onRunSetupCancel: () => { this.showRunSetup = false; },
+      // Top-level nav: home → play → about
+      onHomePlay:  () => { this._baseScreen = 'main'; },
+      onHomeAbout: () => { this._baseScreen = 'about'; },
+      onMainBack:  () => { this._baseScreen = 'home'; },
+      onAboutBack: () => { this._baseScreen = 'home'; },
     });
   }
 
