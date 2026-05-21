@@ -1,9 +1,14 @@
 import { CLASSES, SIDES } from "./classes.js";
-import { ARENA, MAP_SIZES } from "./arena.js";
+import { ARENA } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
 import { RACES } from "./races.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
+
+const CLASS_GLYPH = {
+  fighter: "Sw", bomber: "Ar", frigate: "Ca",
+  cruiser: "Kn", battleship: "Se", carrier: "Su", station: "Fo",
+};
 
 // Friendly labels for module names that appear in the target panel.
 const MODULE_LABELS = {
@@ -30,406 +35,13 @@ function countBySide(ships) {
   return out;
 }
 
-export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
-  if (game.state === "menu") {
-    if (startMenu) startMenu.draw(ctx, viewW, viewH);
-    return;
-  }
-
-  const counts = countBySide(game.ships);
-
-  drawSideStrip(ctx, counts.blue, "blue", game.alliedRace, 16, 16, "left");
-  drawSideStrip(ctx, counts.red,  "red",  game.hostileRace, viewW - 16, 16, "right");
-
-  const player = game.ships.find((s) => s.isPlayer && !s.dead);
-  // Spectate identifier pill sits at the top whenever spectating, so
-  // the player always knows whose camera they're on. The bottom
-  // vitals panel is a separate concern below.
-  if (!player && game.spectating) {
-    drawSpectateOverlay(ctx, game, viewW, viewH);
-  }
-  // Bottom vitals strip: alive player gets their own; otherwise the
-  // spectated ship gets one so you can read its shield/hull/gun the
-  // same way you would when piloting. Suppressed in admiral mode —
-  // the admiral panel owns the bottom strip there.
-  if (player) {
-    drawVitalsPanel(ctx, player, viewW, viewH, missileBtn);
-  } else if (game.spectating && !game.admiralMode) {
-    const t = getSpectateTarget(game);
-    if (t && !t.dead) drawVitalsPanel(ctx, t, viewW, viewH, null);
-  } else if (game.respawnTimer > 0) {
-    drawRespawnPanel(ctx, game.respawnTimer, viewW, viewH);
-  }
-
-  if (game.matchOver) drawMatchOverPanel(ctx, game, viewW, viewH);
-
-  const focusTarget = pickFocusTarget(game);
-  if (focusTarget) drawTargetPanel(ctx, focusTarget, viewW, viewH);
-
-  drawMinimap(ctx, game, viewW, viewH);
-}
-
-// Single-letter class glyphs for the compact roster strip. Chosen so
-// each class is unambiguous without needing a full name.
-const CLASS_GLYPH = {
-  fighter: "F", bomber: "B", frigate: "Fr",
-  cruiser: "C", battleship: "BB", carrier: "CV", station: "St",
-};
-
-function drawSideStrip(ctx, counts, side, race, anchorX, anchorY, align) {
-  const palette = SIDES[side];
-  const raceInfo = RACES[race] || RACES.terran;
-  // Panel chrome: a tinted strip the width of the roster row so the
-  // text isn't floating against the starfield.
-  const cellW = 44, cellH = 38, gap = 4;
-  const cells = CLASS_ORDER.length;
-  const stripW = cellW * cells + gap * (cells - 1) + 14;
-  const panelH = 70;
-  const stripY = anchorY;
-  // Anchor the panel relative to the alignment side so left/right
-  // strips mirror cleanly without each caller computing its origin.
-  const panelX = align === "right" ? anchorX - stripW : anchorX;
-
-  ctx.fillStyle = "rgba(8,16,28,0.78)";
-  ctx.fillRect(panelX, stripY, stripW, panelH);
-  // Side-tinted accent rule along the panel's outward edge.
-  ctx.fillStyle = palette.primary;
-  if (align === "right") {
-    ctx.fillRect(panelX + stripW - 3, stripY, 3, panelH);
-  } else {
-    ctx.fillRect(panelX, stripY, 3, panelH);
-  }
-
-  ctx.textAlign = "left";
-  ctx.fillStyle = palette.primary;
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.fillText(palette.name, panelX + 9, stripY + 15);
-  ctx.fillStyle = "#9bd";
-  ctx.font = "10px system-ui, sans-serif";
-  ctx.fillText(raceInfo.name.toUpperCase(), panelX + 9, stripY + 28);
-
-  // Roster cells: 7 mini boxes with class glyph + count. Empty classes
-  // drop to faded so the alive composition reads at a glance.
-  const cellsY = stripY + 36;
-  const cellsX = panelX + 7;
-  for (let i = 0; i < cells; i++) {
-    const klass = CLASS_ORDER[i];
-    const c = counts[klass] || 0;
-    const cx = cellsX + i * (cellW + gap);
-    ctx.globalAlpha = c === 0 ? 0.30 : 1;
-    ctx.fillStyle = "rgba(20,32,48,0.85)";
-    ctx.fillRect(cx, cellsY, cellW, cellH - 4);
-    ctx.strokeStyle = c === 0 ? "rgba(120,180,220,0.25)" : palette.primary;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(cx, cellsY, cellW, cellH - 4);
-    ctx.fillStyle = "#9bd";
-    ctx.font = "bold 10px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(CLASS_GLYPH[klass] || "?", cx + cellW / 2, cellsY + 12);
-    ctx.fillStyle = c === 0 ? "#566" : "#fff";
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.fillText(String(c), cx + cellW / 2, cellsY + 27);
-  }
-  ctx.globalAlpha = 1;
-  ctx.textAlign = "left";
-}
-
-// Vitals panel: shield + hull (+ gun ammo when applicable) clustered
-// in a single side-tinted backdrop. Renders for the live player ship
-// when piloting, and for the spectated ship in spectate mode — same
-// chrome, same layout — so spectating reads like "what would I see if
-// I were flying this thing". `missileBtn` is null when spectating;
-// the on-screen missile button only makes sense for an alive player.
-function drawVitalsPanel(ctx, ship, viewW, viewH, missileBtn) {
-  const w = 300, barH = 10;
-  const hasShield = ship.shieldMax > 0;
-  const hasAmmo = ship.spec.weapon && ship.spec.weapon.capacity != null;
-  const rows = (hasShield ? 1 : 0) + 1 + (hasAmmo ? 1 : 0);
-  const rowSpacing = 18;
-  const padX = 14, padY = 12;
-  const panelW = w + padX * 2;
-  const panelH = padY * 2 + rows * rowSpacing - 4;
-  const px = (viewW - panelW) / 2;
-  const py = viewH - panelH - 14;
-  ctx.fillStyle = "rgba(8,16,28,0.85)";
-  ctx.fillRect(px, py, panelW, panelH);
-  // Spectated ships get a side-tinted border so the colour reinforces
-  // whose camera you're on; the alive player keeps the neutral blue
-  // accent that ties the bottom strip to the other HUD chrome.
-  ctx.strokeStyle = ship.isPlayer ? "#5af" : SIDES[ship.side].primary;
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(px, py, panelW, panelH);
-
-  const x = px + padX;
-  let rowY = py + padY;
-
-  // Inline label-bar row helper. Label on the left, value on the right,
-  // bar fills the remaining width below. Keeps everything aligned and
-  // avoids the bouncing text-centered look the old version had.
-  const drawLabeledBar = (label, value, frac, fill, bg) => {
-    ctx.fillStyle = "#9bd";
-    ctx.font = "bold 10px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(label, x, rowY + 8);
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "right";
-    ctx.fillText(value, x + w, rowY + 8);
-    const by = rowY + 11;
-    ctx.fillStyle = bg;
-    ctx.fillRect(x, by, w, barH);
-    ctx.fillStyle = fill;
-    ctx.fillRect(x, by, w * Math.max(0, Math.min(1, frac)), barH);
-    rowY += rowSpacing;
-  };
-
-  if (hasShield) {
-    drawLabeledBar(
-      "SHIELD",
-      `${Math.max(0, Math.round(ship.shield))} / ${ship.shieldMax}`,
-      ship.shield / ship.shieldMax, "#7df", "#0a1a2a",
-    );
-  }
-  drawLabeledBar(
-    "HULL",
-    `${Math.max(0, Math.round(ship.hp))} / ${ship.hpMax}`,
-    ship.hp / ship.hpMax,
-    ship.hp / ship.hpMax > 0.33 ? "#4f6" : "#f64",
-    "#2a1818",
-  );
-  if (hasAmmo) {
-    const cap = ship.spec.weapon.capacity;
-    if (ship.weaponReloading) {
-      const frac = 1 - (ship.weaponReloadTimer / ship.spec.weapon.reloadTime);
-      drawLabeledBar(
-        "GUN",
-        `RELOAD ${Math.max(0, ship.weaponReloadTimer).toFixed(1)}s`,
-        frac, "#fa3", "#2a1c10",
-      );
-    } else {
-      drawLabeledBar(
-        "GUN",
-        `${ship.weaponAmmo} / ${cap}`,
-        ship.weaponAmmo / cap, "#fd6", "#2a1c10",
-      );
-    }
-  }
-  ctx.textAlign = "left";
-
-  // Missile cooldown indicator: also drawn through the on-screen
-  // button. Only ever wired for the alive player — spectated ships
-  // pass null because their missile state isn't player-controllable.
-  if (missileBtn && ship.spec.missile) {
-    const cd = ship.spec.missile.cooldown;
-    const remain = ship.missileCd;
-    const ready = remain <= 0;
-    const frac = ready ? 0 : (remain / cd);
-    missileBtn.draw(ctx, ready, frac);
-  }
-}
-
-// Centered pill prompting the player while their respawn timer ticks
-// down. Sits at the top of the screen, well clear of the bottom HUD,
-// so the moment-to-moment battle below isn't visually blocked.
-function drawRespawnPanel(ctx, secondsLeft, viewW, _viewH) {
-  const panelW = 280, panelH = 56;
-  const px = (viewW - panelW) / 2;
-  const py = 110;
-  ctx.fillStyle = "rgba(8,16,28,0.85)";
-  ctx.fillRect(px, py, panelW, panelH);
-  ctx.strokeStyle = "#5af";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(px, py, panelW, panelH);
-  ctx.fillStyle = "#9bd";
-  ctx.font = "bold 10px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("RESPAWN IN", px + panelW / 2, py + 18);
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 22px system-ui, sans-serif";
-  ctx.fillText(`${secondsLeft.toFixed(1)}s`, px + panelW / 2, py + 44);
-  ctx.textAlign = "left";
-}
-
-// Match-end summary panel. Centered card with side-tinted border that
-// matches the winner so the result reads at a glance. Roguelite mode
-// shows a "tap to return to fleet" line so the player knows the run
-// continues on the map; other modes show a plain restart prompt.
-function drawMatchOverPanel(ctx, game, viewW, viewH) {
-  const isRoguelite = game.mode === "roguelite";
-  const winnerSide = game.winner === "blue" ? "blue" : "red";
-  const accent = SIDES[winnerSide].primary;
-  const won = game.winner === "blue";
-
-  ctx.fillStyle = "rgba(2,8,18,0.55)";
-  ctx.fillRect(0, 0, viewW, viewH);
-
-  const panelW = 540;
-  const panelH = 190;
-  const px = (viewW - panelW) / 2;
-  const py = (viewH - panelH) / 2;
-  ctx.fillStyle = "rgba(8,16,28,0.92)";
-  ctx.fillRect(px, py, panelW, panelH);
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(px, py, panelW, panelH);
-  ctx.fillStyle = accent;
-  ctx.fillRect(px, py, panelW, 3);
-
-  let msg;
-  if (isRoguelite) msg = won ? "NODE CLEARED" : "FLEET LOSSES";
-  else msg = won ? "ALLIED VICTORY" : "HOSTILE VICTORY";
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 34px system-ui, sans-serif";
-  ctx.fillText(msg, px + panelW / 2, py + 56);
-
-  if (isRoguelite) {
-    ctx.font = "14px system-ui, sans-serif";
-    ctx.fillStyle = won ? "#bfd" : "#fdb";
-    const sub = won
-      ? "Returning to the front…"
-      : "Fleet captured losses — check the map.";
-    ctx.fillText(sub, px + panelW / 2, py + 96);
-  }
-
-  ctx.fillStyle = "#9bd";
-  ctx.font = "13px system-ui, sans-serif";
-  const prompt = isRoguelite ? "Tap to return to fleet" : "Tap to restart";
-  ctx.fillText(prompt, px + panelW / 2, py + panelH - 22);
-  ctx.textAlign = "left";
-}
-
-function drawSpectateOverlay(ctx, game, viewW, viewH) {
-  const t = getSpectateTarget(game);
-  // Compact pill at the top of the screen instead of a full-width
-  // bottom bar — keeps the bottom HUD area clear for the vitals
-  // panel + admiral controls.
-  // Sits just under the SPECTATE button (which is at y=12, h=36) so
-  // the two stack cleanly without overlapping.
-  const panelW = 360, panelH = 36;
-  const px = (viewW - panelW) / 2;
-  const py = 58;
-  ctx.fillStyle = "rgba(8,16,28,0.85)";
-  ctx.fillRect(px, py, panelW, panelH);
-  ctx.strokeStyle = "#5af";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(px, py, panelW, panelH);
-  ctx.fillStyle = "#7bd";
-  ctx.font = "bold 10px system-ui, sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("SPECTATE", px + 10, py + 14);
-  ctx.fillStyle = "#9bd";
-  ctx.font = "10px system-ui, sans-serif";
-  ctx.textAlign = "right";
-  ctx.fillText("V exit  ·  N/B cycle", px + panelW - 10, py + 14);
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  if (t) {
-    const palette = SIDES[t.side];
-    const raceInfo = RACES[t.race] || RACES.terran;
-    ctx.fillStyle = palette.primary;
-    ctx.fillText(
-      `${palette.name} ${raceInfo.name} ${t.spec.name}`,
-      px + panelW / 2, py + 28,
-    );
-  } else {
-    ctx.fillStyle = "#cdf";
-    ctx.fillText("No targets available", px + panelW / 2, py + 28);
-  }
-  ctx.textAlign = "left";
-}
-
-function drawMinimap(ctx, game, viewW, viewH) {
-  const mapW = 180, mapH = 135;
-  const headerH = 18;
-  const padTotalH = mapH + headerH;
-  const x = viewW - mapW - 16;
-  const y = viewH - padTotalH - 16;
-  // Outer panel with header strip + map area; the header gives the
-  // minimap visual weight and tags it as a deliberate UI element
-  // instead of a floating rectangle.
-  ctx.fillStyle = "rgba(8,16,28,0.85)";
-  ctx.fillRect(x - 4, y - 4, mapW + 8, padTotalH + 8);
-  ctx.strokeStyle = "#5af";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(x - 4, y - 4, mapW + 8, padTotalH + 8);
-  ctx.fillStyle = "rgba(20,40,60,0.95)";
-  ctx.fillRect(x, y, mapW, headerH);
-  ctx.fillStyle = "#9bd";
-  ctx.font = "bold 10px system-ui, sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("FLEET MAP", x + 8, y + 12);
-  // Compact total readout on the right of the header.
-  const totalShips = game.ships.filter(s => !s.dead).length;
-  ctx.textAlign = "right";
-  ctx.fillStyle = "#7bd";
-  ctx.fillText(`${totalShips} units`, x + mapW - 8, y + 12);
-
-  const mapY = y + headerH;
-  ctx.fillStyle = "#03070d";
-  ctx.fillRect(x, mapY, mapW, mapH);
-
-  const sx = mapW / ARENA.width;
-  const sy = mapH / ARENA.height;
-  for (const s of game.ships) {
-    if (s.dead) continue;
-    const px = x + s.pos.x * sx;
-    const py = mapY + s.pos.y * sy;
-    const isSpec = game.spectating && s.id === game.spectateTargetId;
-    ctx.fillStyle = (s.isPlayer || isSpec) ? "#fff" : SIDES[s.side].primary;
-    const r = (s.isPlayer || isSpec) ? 2.5
-      : (s.klass === "station" ? 2.8
-      : s.klass === "carrier" ? 2.6
-      : s.klass === "battleship" ? 2.2
-      : s.klass === "cruiser" ? 1.8
-      : s.klass === "bomber" ? 1.6
-      : 1.2);
-    ctx.beginPath();
-    ctx.arc(px, py, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.textAlign = "left";
-}
-
-// Beams are rendered in the world transform (called from main.js).
-export function drawBeams(ctx, game) {
-  if (!game.beams || game.beams.length === 0) return;
-  for (const beam of game.beams) {
-    // Alpha curve over the beam's lifetime — full brightness in the
-    // middle, soft falloff at start and end. Uses the recorded
-    // `duration` instead of a magic constant so the curve scales with
-    // whichever class fired the beam.
-    const dur = beam.duration || 1;
-    const frac = Math.max(0, Math.min(1, beam.ttl / dur));
-    const fadeOut = Math.min(1, frac * 5);     // last 20% fades
-    const fadeIn  = Math.min(1, (1 - frac) * 6); // first ~16% ramps
-    const alpha = Math.max(0.35, fadeOut * fadeIn);
-    // Tiny per-frame width jitter so a 3s sustained beam reads "live".
-    const wobble = 1 + Math.sin(performance.now() / 60 + beam.ownerId * 1.3) * 0.12;
-    const hit = beam.hit || endPoint(beam);
-    // Outer glow.
-    ctx.globalAlpha = 0.4 * alpha;
-    ctx.strokeStyle = beam.color;
-    ctx.lineWidth = 12 * wobble;
-    ctx.beginPath();
-    ctx.moveTo(beam.origin.x, beam.origin.y);
-    ctx.lineTo(hit.x, hit.y);
-    ctx.stroke();
-    // Core.
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 3 * wobble;
-    ctx.beginPath();
-    ctx.moveTo(beam.origin.x, beam.origin.y);
-    ctx.lineTo(hit.x, hit.y);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
+function moduleBarColor(frac) {
+  if (frac > 0.66) return "#4f8";
+  if (frac > 0.33) return "#fc6";
+  return "#f64";
 }
 
 function endPoint(beam) {
-  // Extend by full range in the original aim direction if no hit recorded.
-  // Approximation: aim from origin toward `target.pos` when we still have it.
   if (beam.target && beam.target.pos) {
     const dx = beam.target.pos.x - beam.origin.x;
     const dy = beam.target.pos.y - beam.origin.y;
@@ -441,10 +53,814 @@ function endPoint(beam) {
 }
 
 // ---------------------------------------------------------------------------
-// Locked-target panel: picks the most relevant enemy capital to surface
-// and renders its hull / armor / per-module status. When the player is
-// alive the focus is the nearest enemy capital (with modules); when
-// spectating, the spectated ship if it carries any modules.
+// BattleHUD: DOM-based HUD overlay for mobile + desktop
+// ---------------------------------------------------------------------------
+export class BattleHUD {
+  constructor(mountEl, inputManager) {
+    this._input = inputManager;
+    this._root = document.createElement("div");
+    this._root.id = "battle-root";
+    this._root.className = "battle-root";
+    this._root.style.cssText = "visibility:hidden;position:absolute;inset:0;z-index:20;pointer-events:none;overflow:hidden;";
+
+    // ---- Side strips ----
+    this._sideLeft = this._createEl("div", "side-strip side-left", "side-strip-left");
+    this._sideRight = this._createEl("div", "side-strip side-right", "side-strip-right");
+    this._root.appendChild(this._sideLeft);
+    this._root.appendChild(this._sideRight);
+
+    // ---- Top-right pills ----
+    const topRight = this._createEl("div", "battle-top-right");
+    const spectateBtn = this._createEl("button", "battle-pill", "spectate-btn");
+    spectateBtn.textContent = "SPECTATE";
+    spectateBtn.style.pointerEvents = "auto";
+    topRight.appendChild(spectateBtn);
+    this._root.appendChild(topRight);
+
+    // ---- Damage indicator ----
+    const dmgInd = this._createEl("div", "damage-indicator", "damage-indicator");
+    dmgInd.setAttribute("aria-hidden", "true");
+    for (const dir of ["north", "east", "south", "west"]) {
+      const arc = this._createEl("div", `damage-arc damage-${dir}`);
+      arc.dataset.dir = dir;
+      dmgInd.appendChild(arc);
+    }
+    this._root.appendChild(dmgInd);
+    this._damageArcs = Array.from(dmgInd.children);
+
+    // ---- Lock reticle ----
+    const reticle = this._createEl("div", "lock-reticle", "lock-reticle");
+    reticle.setAttribute("aria-hidden", "true");
+    reticle.innerHTML = `
+      <div class="reticle-ring"></div>
+      <div class="reticle-dot"></div>
+      <div class="reticle-bracket-left"></div>
+      <div class="reticle-bracket-right"></div>
+    `;
+    this._root.appendChild(reticle);
+
+    // ---- Compass ----
+    const compass = this._createEl("div", "compass", "compass");
+    compass.setAttribute("aria-hidden", "true");
+    compass.innerHTML = `<div class="compass-arrow"></div><div class="compass-label">TGT</div>`;
+    this._root.appendChild(compass);
+    this._compassArrow = compass.querySelector(".compass-arrow");
+
+    // ---- Target panel ----
+    const targetPanel = this._createEl("div", "target-panel", "target-panel");
+    targetPanel.setAttribute("aria-hidden", "true");
+    targetPanel.innerHTML = `
+      <div class="target-header">
+        <span class="target-label">MARKED</span>
+        <span class="target-name" id="target-name"></span>
+      </div>
+      <div class="target-bars" id="target-bars"></div>
+      <div class="target-modules" id="target-modules"></div>
+    `;
+    this._root.appendChild(targetPanel);
+
+    // ---- Minimap ----
+    const minimap = this._createEl("div", "minimap", "minimap");
+    minimap.innerHTML = `
+      <div class="minimap-header">
+        <span>BATTLEFIELD MAP</span>
+        <span class="minimap-count" id="minimap-count"></span>
+      </div>
+      <div class="minimap-viewport" id="minimap-viewport"></div>
+    `;
+    this._root.appendChild(minimap);
+    this._minimapViewport = minimap.querySelector("#minimap-viewport");
+
+    // ---- Vitals bar ----
+    const vitals = this._createEl("div", "vitals-bar", "vitals-bar");
+    vitals.innerHTML = `
+      <div class="vitals-row" id="vitals-shield-row" style="display:none;">
+        <span class="vital-label">SHIELD</span>
+        <div class="vital-bar"><div class="vital-fill shield-fill" id="shield-fill"></div></div>
+        <span class="vital-value" id="shield-value"></span>
+      </div>
+      <div class="vitals-row">
+        <span class="vital-label">HULL</span>
+        <div class="vital-bar"><div class="vital-fill hull-fill" id="hull-fill"></div></div>
+        <span class="vital-value" id="hull-value"></span>
+      </div>
+      <div class="vitals-row" id="vitals-gun-row" style="display:none;">
+        <span class="vital-label" id="gun-label">GUN</span>
+        <div class="vital-bar"><div class="vital-fill gun-fill" id="gun-fill"></div></div>
+        <span class="vital-value" id="gun-value"></span>
+      </div>
+    `;
+    this._root.appendChild(vitals);
+
+    // ---- Respawn panel ----
+    const respawn = this._createEl("div", "respawn-panel", "respawn-panel");
+    respawn.setAttribute("aria-hidden", "true");
+    respawn.innerHTML = `<div class="respawn-label">REINFORCEMENTS</div><div class="respawn-timer" id="respawn-timer"></div>`;
+    this._root.appendChild(respawn);
+
+    // ---- Match over panel ----
+    const matchover = this._createEl("div", "matchover-panel", "matchover-panel");
+    matchover.setAttribute("aria-hidden", "true");
+    matchover.innerHTML = `
+      <div class="matchover-title" id="matchover-title"></div>
+      <div class="matchover-subtitle" id="matchover-subtitle"></div>
+      <div class="matchover-prompt" id="matchover-prompt"></div>
+    `;
+    this._root.appendChild(matchover);
+
+    // ---- Spectate pill ----
+    const spectatePill = this._createEl("div", "spectate-pill", "spectate-pill");
+    spectatePill.setAttribute("aria-hidden", "true");
+    spectatePill.innerHTML = `<span class="spectate-tag">OBSERVING</span><span class="spectate-ship" id="spectate-ship"></span>`;
+    this._root.appendChild(spectatePill);
+
+    // ---- Virtual sticks ----
+    this._vstickLeft = this._buildVstick("left", "vstick-left");
+    this._vstickRight = this._buildVstick("right", "vstick-right");
+    this._root.appendChild(this._vstickLeft);
+    this._root.appendChild(this._vstickRight);
+
+    // ---- Action cluster ----
+    const actionCluster = this._createEl("div", "action-cluster", "action-cluster");
+    actionCluster.innerHTML = `
+      <button class="action-btn fire-btn" id="fire-btn" aria-label="Fire primary weapon">
+        <div class="btn-glow"></div>
+        <span class="btn-icon">&#x26A1;</span>
+        <span class="btn-label">STRIKE</span>
+      </button>
+      <button class="action-btn missile-btn" id="missile-btn" aria-label="Fire missile">
+        <div class="btn-glow"></div>
+        <span class="btn-icon">&#x1F680;</span>
+        <span class="btn-label">SPC</span>
+        <div class="btn-cooldown" id="missile-cooldown"></div>
+      </button>
+      <button class="action-btn boost-btn" id="boost-btn" aria-label="Speed boost">
+        <div class="btn-glow"></div>
+        <span class="btn-icon">&#x25B2;</span>
+        <span class="btn-label">CHARGE</span>
+      </button>
+    `;
+    this._root.appendChild(actionCluster);
+
+    // ---- Admiral panel ----
+    const admiralPanel = this._createEl("div", "admiral-panel", "admiral-panel");
+    admiralPanel.setAttribute("aria-hidden", "true");
+    admiralPanel.innerHTML = `<div class="admiral-title">FLEET COMMAND</div><div class="admiral-grid" id="admiral-grid"></div>`;
+    this._root.appendChild(admiralPanel);
+
+    mountEl.appendChild(this._root);
+
+    // ---- Cache DOM refs for fast sync() ----
+    this._shieldRow = this._root.querySelector("#vitals-shield-row");
+    this._shieldFill = this._root.querySelector("#shield-fill");
+    this._shieldValue = this._root.querySelector("#shield-value");
+    this._hullFill = this._root.querySelector("#hull-fill");
+    this._hullValue = this._root.querySelector("#hull-value");
+    this._gunRow = this._root.querySelector("#vitals-gun-row");
+    this._gunFill = this._root.querySelector("#gun-fill");
+    this._gunValue = this._root.querySelector("#gun-value");
+    this._gunLabel = this._root.querySelector("#gun-label");
+    this._respawnPanel = this._root.querySelector("#respawn-panel");
+    this._respawnTimer = this._root.querySelector("#respawn-timer");
+    this._matchoverPanel = this._root.querySelector("#matchover-panel");
+    this._matchoverTitle = this._root.querySelector("#matchover-title");
+    this._matchoverSubtitle = this._root.querySelector("#matchover-subtitle");
+    this._matchoverPrompt = this._root.querySelector("#matchover-prompt");
+    this._spectatePill = this._root.querySelector("#spectate-pill");
+    this._spectateShip = this._root.querySelector("#spectate-ship");
+    this._targetPanelEl = this._root.querySelector("#target-panel");
+    this._targetName = this._root.querySelector("#target-name");
+    this._targetBars = this._root.querySelector("#target-bars");
+    this._targetModules = this._root.querySelector("#target-modules");
+    this._minimapCount = this._root.querySelector("#minimap-count");
+    this._fireBtn = this._root.querySelector("#fire-btn");
+    this._missileBtn = this._root.querySelector("#missile-btn");
+    this._missileCooldown = this._root.querySelector("#missile-cooldown");
+    this._boostBtn = this._root.querySelector("#boost-btn");
+    this._admiralPanelEl = this._root.querySelector("#admiral-panel");
+    this._admiralGrid = this._root.querySelector("#admiral-grid");
+    this._compassEl = this._root.querySelector("#compass");
+    this._lockReticle = this._root.querySelector("#lock-reticle");
+    this._spectateBtnEl = this._root.querySelector("#spectate-btn");
+
+    // ---- State for sync ----
+    this._dotPool = [];         // { el, shipId }
+    this._lastHp = 0;
+    this._lastHpMax = 1;
+    this._damageFlashTimer = 0;
+    this._damageDir = null;
+    this._sideCells = { blue: [], red: [] };
+    this._prevCountsKey = "";
+    this._isMobile = false;
+    this._admiralClickHandlers = [];
+
+    // ---- Wire spectate button click ----
+    this._spectateBtnEl.addEventListener("click", () => {
+      if (this._input && this._input.spectateBtn) {
+        this._input.spectateBtn.justPressed = true;
+      }
+    });
+
+    // ---- Build side strip cells once ----
+    this._buildSideStrip(this._sideLeft, "blue", "FRIENDLY");
+    this._buildSideStrip(this._sideRight, "red", "ENEMY");
+  }
+
+  _createEl(tag, className, id) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (id) el.id = id;
+    return el;
+  }
+
+  _buildVstick(side, id) {
+    const el = this._createEl("div", `vstick vstick-${side}`, id);
+    el.setAttribute("aria-hidden", "true");
+    el.innerHTML = `
+      <div class="vstick-base" id="${id}-base"></div>
+      <div class="vstick-knob" id="${id}-knob"></div>
+      <div class="vstick-deadzone"></div>
+    `;
+    return el;
+  }
+
+  _buildSideStrip(container, sideKey, title) {
+    const palette = SIDES[sideKey];
+    const titleEl = this._createEl("div", "side-title");
+    titleEl.textContent = title;
+    titleEl.style.color = palette.primary;
+    container.appendChild(titleEl);
+
+    const raceEl = this._createEl("div", "side-race");
+    raceEl.id = `side-race-${sideKey}`;
+    container.appendChild(raceEl);
+
+    const grid = this._createEl("div", "roster-grid");
+    for (const klass of CLASS_ORDER) {
+      const cell = this._createEl("div", "roster-cell");
+      cell.dataset.klass = klass;
+      cell.innerHTML = `<div class="cell-glyph">${CLASS_GLYPH[klass] || "?"}</div><div class="cell-count">0</div>`;
+      grid.appendChild(cell);
+      this._sideCells[sideKey].push(cell);
+    }
+    container.appendChild(grid);
+  }
+
+  sync(game, viewW, viewH) {
+    this._isMobile = viewW < 768;
+
+    // 1. Side strips
+    this._syncSideStrips(game, viewW);
+
+    // 2. Vitals bar
+    this._syncVitals(game);
+
+    // 3. Minimap
+    this._syncMinimap(game);
+
+    // 4. Target panel
+    this._syncTargetPanel(game);
+
+    // 5. Damage indicator
+    this._syncDamageIndicator(game);
+
+    // 6. Lock reticle
+    this._syncLockReticle(game);
+
+    // 7. Compass
+    this._syncCompass(game);
+
+    // 8. Respawn panel
+    this._syncRespawn(game);
+
+    // 9. Match over panel
+    this._syncMatchOver(game);
+
+    // 10. Spectate pill
+    this._syncSpectate(game);
+
+    // 11. Virtual sticks
+    if (this._input) {
+      if (this._input.left) this._input.left._updateDOM();
+      if (this._input.right) this._input.right._updateDOM();
+    }
+
+    // 12. Action buttons
+    this._syncActionButtons(game);
+
+    // 13. Admiral panel
+    this._syncAdmiralPanel(game);
+  }
+
+  _syncSideStrips(game, viewW) {
+    const hide = viewW < 768;
+    this._sideLeft.style.display = hide ? "none" : "";
+    this._sideRight.style.display = hide ? "none" : "";
+    if (hide) return;
+
+    const counts = countBySide(game.ships);
+    const countKey = JSON.stringify(counts);
+    if (countKey === this._prevCountsKey) return; // skip if unchanged
+    this._prevCountsKey = countKey;
+
+    const races = { blue: game.alliedRace, red: game.hostileRace };
+    for (const side of ["blue", "red"]) {
+      const raceInfo = RACES[races[side]] || RACES.terran;
+      const raceEl = this._root.querySelector(`#side-race-${side}`);
+      if (raceEl) raceEl.textContent = raceInfo.name ? raceInfo.name.toUpperCase() : "";
+      for (let i = 0; i < CLASS_ORDER.length; i++) {
+        const klass = CLASS_ORDER[i];
+        const cell = this._sideCells[side][i];
+        const c = counts[side][klass] || 0;
+        const countEl = cell.querySelector(".cell-count");
+        if (countEl) countEl.textContent = String(c);
+        cell.classList.toggle("empty", c === 0);
+      }
+    }
+  }
+
+  _syncVitals(game) {
+    const player = game.ships.find((s) => s.isPlayer && !s.dead);
+    let ship = player;
+    if (!ship && game.spectating) {
+      ship = getSpectateTarget(game);
+    }
+
+    if (ship && !ship.dead) {
+      const hasShield = ship.shieldMax > 0;
+      const hasAmmo = ship.spec && ship.spec.weapon && ship.spec.weapon.capacity != null;
+
+      this._shieldRow.style.display = hasShield ? "" : "none";
+      if (hasShield) {
+        const shieldFrac = Math.max(0, Math.min(1, ship.shield / ship.shieldMax));
+        this._shieldFill.style.width = `${shieldFrac * 100}%`;
+        this._shieldValue.textContent = `${Math.max(0, Math.round(ship.shield))} / ${ship.shieldMax}`;
+      }
+
+      const hullFrac = Math.max(0, Math.min(1, ship.hp / ship.hpMax));
+      this._hullFill.style.width = `${hullFrac * 100}%`;
+      this._hullFill.classList.toggle("critical", hullFrac < 0.33);
+      this._hullValue.textContent = `${Math.max(0, Math.round(ship.hp))} / ${ship.hpMax}`;
+
+      this._gunRow.style.display = hasAmmo ? "" : "none";
+      if (hasAmmo) {
+        const cap = ship.spec.weapon.capacity;
+        if (ship.weaponReloading) {
+          const reloadFrac = 1 - (ship.weaponReloadTimer / ship.spec.weapon.reloadTime);
+          this._gunFill.style.width = `${Math.max(0, reloadFrac) * 100}%`;
+          this._gunFill.style.background = "linear-gradient(90deg, #8a6a1a, #fd6)";
+          this._gunValue.textContent = `RELOAD ${Math.max(0, ship.weaponReloadTimer).toFixed(1)}s`;
+        } else {
+          const ammoFrac = ship.weaponAmmo / cap;
+          this._gunFill.style.width = `${ammoFrac * 100}%`;
+          this._gunFill.style.background = "linear-gradient(90deg, #8a6a1a, #fd6)";
+          this._gunValue.textContent = `${ship.weaponAmmo} / ${cap}`;
+        }
+      }
+    } else if (game.respawnTimer > 0) {
+      // Hide vitals during respawn
+      this._shieldRow.style.display = "none";
+      this._gunRow.style.display = "none";
+      this._hullFill.style.width = "0%";
+      this._hullValue.textContent = "";
+    }
+  }
+
+  _syncMinimap(game) {
+    const mapW = this._isMobile ? 140 : 200;
+    const mapH = this._isMobile ? 100 : 140;
+    const sx = mapW / ARENA.width;
+    const sy = mapH / ARENA.height;
+
+    const liveShips = game.ships.filter((s) => !s.dead);
+    this._minimapCount.textContent = `${liveShips.length} units`;
+
+    // Reuse dot elements from pool
+    const needed = liveShips.length;
+    while (this._dotPool.length < needed) {
+      const dot = document.createElement("div");
+      dot.className = "minimap-dot";
+      this._minimapViewport.appendChild(dot);
+      this._dotPool.push({ el: dot, shipId: null });
+    }
+
+    // Hide excess dots
+    for (let i = needed; i < this._dotPool.length; i++) {
+      this._dotPool[i].el.style.display = "none";
+      this._dotPool[i].shipId = null;
+    }
+
+    for (let i = 0; i < liveShips.length; i++) {
+      const s = liveShips[i];
+      const pool = this._dotPool[i];
+      const dot = pool.el;
+      const isSpec = game.spectating && s.id === game.spectateTargetId;
+      const isPlayer = s.isPlayer || isSpec;
+
+      dot.style.display = "";
+      dot.className = "minimap-dot" +
+        (isPlayer ? " dot-player" : (s.side === "blue" ? " dot-blue" : " dot-red")) +
+        ` dot-size-${s.klass || "fighter"}`;
+
+      const px = s.pos.x * sx;
+      const py = s.pos.y * sy;
+      dot.style.transform = `translate(${px}px, ${py}px)`;
+      pool.shipId = s.id;
+    }
+  }
+
+  _syncTargetPanel(game) {
+    const focusTarget = pickFocusTarget(game);
+    if (!focusTarget) {
+      this._targetPanelEl.classList.remove("active");
+      this._targetPanelEl.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    const ship = focusTarget;
+    this._targetPanelEl.classList.add("active");
+    this._targetPanelEl.setAttribute("aria-hidden", "false");
+
+    const raceName = (RACES[ship.race] && RACES[ship.race].name) || "Unknown";
+    const klassName = (CLASSES[ship.klass] && CLASSES[ship.klass].name) || ship.klass;
+    this._targetName.textContent = `${raceName} ${klassName}`;
+
+    // Hull bar
+    let barsHtml = "";
+    const hullFrac = Math.max(0, Math.min(1, ship.hp / ship.hpMax));
+    barsHtml += `
+      <div class="target-bar-row">
+        <span style="font-size:9px;color:#9bd;width:36px;">HULL</span>
+        <div class="target-bar"><div class="target-bar-fill" style="width:${hullFrac * 100}%;background:#4f6;"></div></div>
+      </div>`;
+    if (ship.armorMax > 0) {
+      const armorFrac = Math.max(0, Math.min(1, ship.armor / ship.armorMax));
+      barsHtml += `
+        <div class="target-bar-row">
+          <span style="font-size:9px;color:#9bd;width:36px;">ARMOR</span>
+          <div class="target-bar"><div class="target-bar-fill" style="width:${armorFrac * 100}%;background:#c93;"></div></div>
+        </div>`;
+    }
+    this._targetBars.innerHTML = barsHtml;
+
+    // Module rows
+    let modulesHtml = "";
+    if (ship.modules) {
+      for (const m of ship.modules) {
+        const label = MODULE_LABELS[m.name] || m.name;
+        if (m.disabled) {
+          modulesHtml += `<div class="target-module-row destroyed"><span class="target-module-name">${label}</span><span class="target-module-hp">DESTROYED</span></div>`;
+        } else {
+          const frac = Math.max(0, Math.min(1, m.hp / m.hpMax));
+          const color = moduleBarColor(frac);
+          modulesHtml += `
+            <div class="target-module-row">
+              <span class="target-module-name">${label}</span>
+              <span class="target-module-hp" style="color:${color};">${Math.round(frac * 100)}%</span>
+            </div>`;
+        }
+      }
+    }
+    this._targetModules.innerHTML = modulesHtml;
+  }
+
+  _syncDamageIndicator(game) {
+    const player = game.ships.find((s) => s.isPlayer && !s.dead);
+    if (!player) {
+      this._clearDamageFlash();
+      return;
+    }
+
+    const curHp = player.hp;
+    if (this._lastHpMax > 0 && curHp < this._lastHp && this._lastHp > 0) {
+      // Damage taken - determine direction
+      const dmg = this._lastHp - curHp;
+      this._triggerDamageDirection(game, player, dmg);
+    }
+    this._lastHp = curHp;
+    this._lastHpMax = player.hpMax;
+
+    // Decrement flash timer
+    if (this._damageFlashTimer > 0) {
+      this._damageFlashTimer--;
+      if (this._damageFlashTimer <= 0) {
+        this._clearDamageFlash();
+      }
+    }
+  }
+
+  _triggerDamageDirection(game, player, _dmg) {
+    // Find nearest enemy as damage source
+    let bestAngle = 0;
+    let bestDist = Infinity;
+    for (const s of game.ships) {
+      if (s.dead || s.side === player.side) continue;
+      const dx = s.pos.x - player.pos.x;
+      const dy = s.pos.y - player.pos.y;
+      const d = Math.hypot(dx, dy);
+      if (d < bestDist) {
+        bestDist = d;
+        bestAngle = Math.atan2(dy, dx);
+      }
+    }
+
+    // Map angle to N/E/S/W quadrant
+    // angle 0 = east, PI/2 = south, PI = west, -PI/2 = north
+    let dir;
+    const a = bestAngle;
+    if (a >= -Math.PI * 0.75 && a < -Math.PI * 0.25) dir = "north";
+    else if (a >= -Math.PI * 0.25 && a < Math.PI * 0.25) dir = "east";
+    else if (a >= Math.PI * 0.25 && a < Math.PI * 0.75) dir = "south";
+    else dir = "west";
+
+    this._clearDamageFlash();
+    const arc = this._damageArcs.find((el) => el.dataset.dir === dir);
+    if (arc) {
+      arc.classList.add("hit");
+      // Force reflow to restart animation
+      void arc.offsetWidth;
+    }
+    this._damageFlashTimer = 30; // ~0.5s at 60fps
+    this._damageDir = dir;
+  }
+
+  _clearDamageFlash() {
+    for (const arc of this._damageArcs) {
+      arc.classList.remove("hit");
+    }
+    this._damageDir = null;
+  }
+
+  _syncLockReticle(game) {
+    const player = game.ships.find((s) => s.isPlayer && !s.dead);
+    if (!player || !player.targetId) {
+      this._lockReticle.classList.remove("active");
+      return;
+    }
+    const target = game.ships.find((s) => s.id === player.targetId && !s.dead);
+    if (!target) {
+      this._lockReticle.classList.remove("active");
+      return;
+    }
+    // Show reticle when target is within weapon range
+    const range = player.spec && player.spec.weapon ? player.spec.weapon.range : 900;
+    const dist = Math.hypot(target.pos.x - player.pos.x, target.pos.y - player.pos.y);
+    this._lockReticle.classList.toggle("active", dist <= range);
+  }
+
+  _syncCompass(game) {
+    const player = game.ships.find((s) => s.isPlayer && !s.dead);
+    if (!player) {
+      this._compassEl.classList.remove("active");
+      return;
+    }
+
+    // Find nearest enemy
+    let nearest = null;
+    let bestD2 = Infinity;
+    for (const s of game.ships) {
+      if (s.dead || s.side === player.side) continue;
+      const dx = s.pos.x - player.pos.x;
+      const dy = s.pos.y - player.pos.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { nearest = s; bestD2 = d2; }
+    }
+
+    if (!nearest) {
+      this._compassEl.classList.remove("active");
+      return;
+    }
+
+    this._compassEl.classList.add("active");
+    const dx = nearest.pos.x - player.pos.x;
+    const dy = nearest.pos.y - player.pos.y;
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+    this._compassArrow.style.transform = `rotate(${angle}deg)`;
+  }
+
+  _syncRespawn(game) {
+    if (game.respawnTimer > 0) {
+      this._respawnPanel.classList.add("active");
+      this._respawnPanel.setAttribute("aria-hidden", "false");
+      this._respawnTimer.textContent = game.respawnTimer.toFixed(1) + "s";
+    } else {
+      this._respawnPanel.classList.remove("active");
+      this._respawnPanel.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  _syncMatchOver(game) {
+    if (game.matchOver) {
+      this._matchoverPanel.classList.add("active");
+      this._matchoverPanel.setAttribute("aria-hidden", "false");
+
+      const isRoguelite = game.mode === "roguelite";
+      const won = game.winner === "blue";
+      let msg;
+      if (isRoguelite) msg = won ? "NODE CLEARED" : "FLEET LOSSES";
+      else msg = won ? "VICTORY" : "DEFEAT";
+      this._matchoverTitle.textContent = msg;
+
+      if (isRoguelite) {
+        const sub = won ? "Returning to starmap..." : "Fleet took losses -- check the starmap.";
+        this._matchoverSubtitle.textContent = sub;
+        this._matchoverSubtitle.style.color = won ? "#bfd" : "#fdb";
+      } else {
+        this._matchoverSubtitle.textContent = "";
+      }
+
+      const prompt = isRoguelite ? "Tap to return to starmap" : "Tap to continue";
+      this._matchoverPrompt.textContent = prompt;
+    } else {
+      this._matchoverPanel.classList.remove("active");
+      this._matchoverPanel.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  _syncSpectate(game) {
+    if (game.spectating) {
+      this._spectatePill.classList.add("active");
+      this._spectatePill.setAttribute("aria-hidden", "false");
+      const t = getSpectateTarget(game);
+      if (t) {
+        const palette = SIDES[t.side];
+        const raceInfo = RACES[t.race] || RACES.terran;
+        this._spectateShip.textContent = `${palette.name} ${raceInfo.name} ${t.spec.name}`;
+      } else {
+        this._spectateShip.textContent = "No targets in sight";
+      }
+    } else {
+      this._spectatePill.classList.remove("active");
+      this._spectatePill.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  _syncActionButtons(game) {
+    // Fire button
+    if (this._input && this._input.fireBtn) {
+      this._input.fireBtn._updateDOM(this._fireBtn);
+    }
+
+    // Missile button
+    if (this._input && this._input.missileBtn) {
+      const player = game.ships.find((s) => s.isPlayer && !s.dead);
+      if (player && player.spec && player.spec.missile) {
+        this._missileBtn.style.display = "";
+        const cd = player.spec.missile.cooldown;
+        const remain = player.missileCd || 0;
+        const ready = remain <= 0;
+        const frac = ready ? 0 : (remain / cd);
+        this._input.missileBtn._updateDOM(this._missileBtn, ready, frac);
+      } else {
+        this._missileBtn.style.display = "none";
+      }
+    }
+
+    // Boost button
+    if (this._input && this._input.boostBtn) {
+      this._input.boostBtn._updateDOM(this._boostBtn);
+    }
+
+    // Spectate button
+    if (game.spectating) {
+      this._spectateBtnEl.textContent = "RETURN TO FIELD";
+    } else {
+      this._spectateBtnEl.textContent = "SPECTATE";
+    }
+  }
+
+  _syncAdmiralPanel(game) {
+    if (game.admiralMode && game.directives) {
+      this._admiralPanelEl.classList.add("active");
+      this._admiralPanelEl.setAttribute("aria-hidden", "false");
+      this._rebuildAdmiralGrid(game);
+    } else {
+      this._admiralPanelEl.classList.remove("active");
+      this._admiralPanelEl.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  _rebuildAdmiralGrid(game) {
+    // Only rebuild if directives changed
+    const dirKey = JSON.stringify(game.directives);
+    if (this._lastAdmiralKey === dirKey) return;
+    this._lastAdmiralKey = dirKey;
+
+    // Clean old listeners
+    for (const h of this._admiralClickHandlers) {
+      h.el.removeEventListener("click", h.fn);
+    }
+    this._admiralClickHandlers = [];
+
+    const classes = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+    const postures = ["hold", "free", "press"];
+    const missileClasses = new Set(["bomber", "frigate", "cruiser", "battleship"]);
+
+    this._admiralGrid.innerHTML = "";
+    for (const klass of classes) {
+      const d = game.directives[klass] || { posture: "free", missiles: "on" };
+      const row = document.createElement("div");
+      row.className = "admiral-row";
+
+      const label = document.createElement("span");
+      label.textContent = klass.toUpperCase();
+      label.style.fontWeight = "bold";
+      label.style.color = "#9bd";
+      row.appendChild(label);
+
+      const toggleGroup = document.createElement("div");
+      toggleGroup.style.display = "flex";
+      toggleGroup.style.gap = "4px";
+
+      for (const p of postures) {
+        const btn = document.createElement("button");
+        btn.className = "admiral-toggle" + (d.posture === p ? " active" : "");
+        btn.textContent = p.toUpperCase();
+        const handler = () => {
+          if (game.setPosture) game.setPosture(klass, p);
+        };
+        btn.addEventListener("click", handler);
+        this._admiralClickHandlers.push({ el: btn, fn: handler });
+        toggleGroup.appendChild(btn);
+      }
+
+      if (missileClasses.has(klass)) {
+        const mBtn = document.createElement("button");
+        const held = d.missiles === "hold";
+        mBtn.className = "admiral-toggle" + (held ? " active" : "");
+        mBtn.textContent = "M";
+        mBtn.title = held ? "Missiles HOLD" : "Missiles ON";
+        const handler = () => {
+          if (game.setMissiles) game.setMissiles(klass, held ? "on" : "hold");
+        };
+        mBtn.addEventListener("click", handler);
+        this._admiralClickHandlers.push({ el: mBtn, fn: handler });
+        toggleGroup.appendChild(mBtn);
+      }
+
+      row.appendChild(toggleGroup);
+      this._admiralGrid.appendChild(row);
+    }
+  }
+
+  show() { this._root.style.visibility = "visible"; }
+  hide() { this._root.style.visibility = "hidden"; }
+
+  destroy() {
+    // Clean up listeners
+    for (const h of this._admiralClickHandlers) {
+      h.el.removeEventListener("click", h.fn);
+    }
+    this._admiralClickHandlers = [];
+    if (this._root.parentElement) {
+      this._root.parentElement.removeChild(this._root);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compat: main.js calls this; route to BattleHUD if available
+// ---------------------------------------------------------------------------
+export function drawHUD(ctx, game, viewW, viewH, missileBtn, startMenu) {
+  // When BattleHUD is active (managed in main.js), this function becomes a
+  // no-op because the DOM HUD handles everything. We keep the signature so
+  // main.js's import doesn't break during transition.
+  // The actual sync() + show()/hide() calls are in main.js's draw loop.
+}
+
+// ---------------------------------------------------------------------------
+// Beams still rendered on canvas — unchanged
+// ---------------------------------------------------------------------------
+export function drawBeams(ctx, game) {
+  if (!game.beams || game.beams.length === 0) return;
+  for (const beam of game.beams) {
+    const dur = beam.duration || 1;
+    const frac = Math.max(0, Math.min(1, beam.ttl / dur));
+    const fadeOut = Math.min(1, frac * 5);
+    const fadeIn  = Math.min(1, (1 - frac) * 6);
+    const alpha = Math.max(0.35, fadeOut * fadeIn);
+    const wobble = 1 + Math.sin(performance.now() / 60 + beam.ownerId * 1.3) * 0.12;
+    const hit = beam.hit || endPoint(beam);
+    ctx.globalAlpha = 0.4 * alpha;
+    ctx.strokeStyle = beam.color;
+    ctx.lineWidth = 12 * wobble;
+    ctx.beginPath();
+    ctx.moveTo(beam.origin.x, beam.origin.y);
+    ctx.lineTo(hit.x, hit.y);
+    ctx.stroke();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 3 * wobble;
+    ctx.beginPath();
+    ctx.moveTo(beam.origin.x, beam.origin.y);
+    ctx.lineTo(hit.x, hit.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: pick the most relevant enemy capital for the target panel
 // ---------------------------------------------------------------------------
 function pickFocusTarget(game) {
   if (game.spectating) {
@@ -463,93 +879,4 @@ function pickFocusTarget(game) {
     if (d2 < bestD2) { best = s; bestD2 = d2; }
   }
   return best;
-}
-
-function drawTargetPanel(ctx, ship, viewW, viewH) {
-  const rowH = 16;
-  const headerH = 64;
-  const padX = 12, padY = 10;
-  const moduleRows = ship.modules.length;
-  const panelW = 280;
-  const panelH = headerH + moduleRows * rowH + padY * 2;
-  const x = 16;
-  const y = viewH - panelH - 16;
-
-  // Same chrome as the rest of the HUD (rgba(8,16,28,0.85) bg) but
-  // keep the side-tinted border + accent rule — the target panel's
-  // job is to identify an enemy, so the colour is a feature.
-  ctx.fillStyle = "rgba(8,16,28,0.85)";
-  ctx.fillRect(x, y, panelW, panelH);
-  ctx.strokeStyle = SIDES[ship.side].primary;
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(x, y, panelW, panelH);
-  ctx.fillStyle = SIDES[ship.side].primary;
-  ctx.fillRect(x, y, panelW, 2);
-
-  ctx.textAlign = "left";
-  ctx.fillStyle = SIDES[ship.side].primary;
-  ctx.font = "bold 10px system-ui, sans-serif";
-  ctx.fillText("TARGET", x + padX, y + padY + 12);
-
-  // Header: race + class name.
-  const raceName = (RACES[ship.race] && RACES[ship.race].name) || "Unknown";
-  const klassName = (CLASSES[ship.klass] && CLASSES[ship.klass].name) || ship.klass;
-  ctx.fillStyle = "#e6f4ff";
-  ctx.font = "bold 14px system-ui, sans-serif";
-  ctx.fillText(`${raceName} ${klassName}`, x + padX, y + padY + 30);
-
-  // Hull bar.
-  drawStatBar(ctx, x + padX, y + padY + 38, panelW - padX * 2, 6,
-    ship.hp / ship.hpMax, "#400", "#4f6");
-  // Armor bar (if any).
-  if (ship.armorMax > 0) {
-    drawStatBar(ctx, x + padX, y + padY + 47, panelW - padX * 2, 5,
-      ship.armor / ship.armorMax, "#321", "#c93");
-  }
-
-  // Per-module rows.
-  ctx.font = "12px system-ui, sans-serif";
-  const rowsY = y + padY + headerH - 6;
-  for (let i = 0; i < ship.modules.length; i++) {
-    const m = ship.modules[i];
-    const ry = rowsY + i * rowH;
-    const label = MODULE_LABELS[m.name] || m.name;
-
-    if (m.disabled) {
-      ctx.fillStyle = "#a55";
-      ctx.fillText(label, x + padX, ry + 11);
-      ctx.textAlign = "right";
-      ctx.fillText("DESTROYED", x + panelW - padX, ry + 11);
-      ctx.textAlign = "left";
-    } else {
-      const frac = m.hp / m.hpMax;
-      ctx.fillStyle = "#cef";
-      ctx.fillText(label, x + padX, ry + 11);
-      // Bar on the right half of the row.
-      const barW = 110;
-      const barX = x + panelW - padX - barW;
-      const barY = ry + 3;
-      drawStatBar(ctx, barX, barY, barW, 7, frac, "#222", moduleBarColor(frac));
-      // Flash highlight.
-      if (m.flash > 0) {
-        ctx.strokeStyle = `rgba(255,255,255,${(m.flash * 0.8).toFixed(2)})`;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(barX - 1, barY - 1, barW + 2, 9);
-      }
-    }
-  }
-}
-
-function moduleBarColor(frac) {
-  if (frac > 0.66) return "#4f8";
-  if (frac > 0.33) return "#fc6";
-  return "#f64";
-}
-
-function drawStatBar(ctx, x, y, w, h, frac, bgColor, fgColor) {
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(x, y, w, h);
-  const clamped = Math.max(0, Math.min(1, frac));
-  ctx.fillStyle = fgColor;
-  ctx.fillRect(x, y, w * clamped, h);
 }

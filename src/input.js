@@ -1,6 +1,6 @@
 // Input sources: virtual joysticks for touch, plus WASD + mouse + Enter
 // for desktop play. The aim direction is computed relative to canvas
-// center because the camera follows the player ship, so center == player.
+// center because the camera follows the player unit, so center == player.
 
 import { MAP_SIZES } from "./arena.js";
 import { RACES, RACE_KEYS } from "./races.js";
@@ -11,10 +11,10 @@ import {
   repairCostFor, eventCardById, PERKS, BOON_TABLE,
 } from "./roguelite.js";
 import {
-  makeGalaxy, drawGalaxy, nodePositionsFor,
-  drawCurvedEdge, drawNodeArt, drawFleetMarker,
-  drawFactionEmblem, clampPan,
+  createStarmap, updateStarmap, destroyStarmap,
+  setStarmapCallbacks, centerOnNode, getPan, setPan,
 } from "./starmap.js";
+import { MenuSystem } from "./menus.js";
 import {
   MAX_ENERGY, COST_PER_GAME, PACKAGES,
   canSpend, timeUntilNext, formatDuration,
@@ -23,7 +23,7 @@ import {
 const DEADZONE = 0.15;
 
 export class VirtualStick {
-  constructor({ side, color }) {
+  constructor({ side, color, baseEl, knobEl }) {
     this.side = side; // "left" or "right"
     this.color = color;
     this.pointerId = null;
@@ -32,6 +32,8 @@ export class VirtualStick {
     this.radius = 70;
     this.active = false;
     this.value = { x: 0, y: 0 };
+    this._baseEl = baseEl || null;
+    this._knobEl = knobEl || null;
   }
 
   claims(x, w) {
@@ -62,9 +64,21 @@ export class VirtualStick {
     this.pointerId = null;
     this.active = false;
     this.value = { x: 0, y: 0 };
+    if (this._baseEl) this._baseEl.parentElement.style.opacity = "0";
+  }
+
+  _updateDOM() {
+    if (!this._knobEl || !this._baseEl) return;
+    if (!this.active) {
+      this._baseEl.parentElement.style.opacity = "0";
+      return;
+    }
+    this._knobEl.style.transform = `translate3d(${this.knob.x - 28}px, ${this.knob.y - 28}px, 0)`;
+    this._baseEl.parentElement.style.opacity = "1";
   }
 
   draw(ctx) {
+    if (this._baseEl) return; // DOM handles rendering
     if (!this.active) return;
     ctx.save();
     ctx.globalAlpha = 0.4;
@@ -120,6 +134,10 @@ export class FireButton extends ActionButton {
     this.rect.x = viewW - this.rect.w - 18 - 90 - 12;
     this.rect.y = viewH - this.rect.h - 135 - 16 - 12;
   }
+  _updateDOM(domEl) {
+    if (!domEl) return;
+    domEl.classList.toggle("pressed", this.pressed);
+  }
   draw(ctx) {
     const r = this.rect;
     ctx.save();
@@ -133,10 +151,10 @@ export class FireButton extends ActionButton {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText("FIRE", r.x + r.w / 2, r.y + r.h / 2 - 2);
+    ctx.fillText("STRIKE", r.x + r.w / 2, r.y + r.h / 2 - 2);
     ctx.font = "11px system-ui, sans-serif";
     ctx.fillStyle = "#fcb";
-    ctx.fillText("GUN", r.x + r.w / 2, r.y + r.h / 2 + 14);
+    ctx.fillText("MISSILE", r.x + r.w / 2, r.y + r.h / 2 + 14);
     ctx.restore();
   }
 }
@@ -200,6 +218,13 @@ export class MissileButton {
     this.justPressed = false;
     return j;
   }
+  _updateDOM(domEl, ready, frac) {
+    if (!domEl) return;
+    domEl.classList.toggle("ready", ready);
+    domEl.classList.toggle("pressed", this.pressed);
+    const angle = ready ? 0 : frac * 360;
+    domEl.style.setProperty("--cooldown-angle", `${angle}deg`);
+  }
   draw(ctx, ready, cooldownFrac) {
     const r = this.rect;
     ctx.save();
@@ -217,11 +242,32 @@ export class MissileButton {
     ctx.fillStyle = ready ? "#cef" : "#fcc";
     ctx.font = "bold 14px system-ui, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("MISSILE", r.x + r.w / 2, r.y + r.h / 2 - 4);
+    ctx.fillText("SPECIAL", r.x + r.w / 2, r.y + r.h / 2 - 4);
     ctx.font = "10px system-ui, sans-serif";
     ctx.fillText(ready ? "READY" : "RELOAD", r.x + r.w / 2, r.y + r.h / 2 + 12);
     ctx.textAlign = "left";
     ctx.restore();
+  }
+}
+
+// On-screen BOOST button. Afterburner / speed boost — maps to Space key
+// or touch. Placed above the missile button in the action cluster.
+export class BoostButton {
+  constructor() {
+    this.pressed = false;
+    this.pointerId = null;
+    this.rect = { x: 0, y: 0, w: 48, h: 48 };
+  }
+  hit(x, y) {
+    const r = this.rect;
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+  start(pid) { this.pointerId = pid; this.pressed = true; }
+  end() { this.pointerId = null; this.pressed = false; }
+  consumeJustPressed() { return false; }
+  _updateDOM(domEl) {
+    if (!domEl) return;
+    domEl.classList.toggle("pressed", this.pressed);
   }
 }
 
@@ -399,7 +445,7 @@ export class AdmiralPanel {
 const MODE_OPTIONS = [
   { key: "open",      label: "Open Battle",     tagline: "Wipe the enemy fleet" },
   { key: "defend",    label: "Defend Station",  tagline: "Destroy enemy station" },
-  { key: "roguelite", label: "Frontier",        tagline: "Procedural war" },
+  { key: "roguelite", label: "Frontier",        tagline: "Procedural campaign" },
   { key: "custom",    label: "Custom",          tagline: "Pick fleets + races" },
   { key: "admiral",   label: "Admiral",         tagline: "Command, don't pilot" },
 ];
@@ -449,7 +495,7 @@ function classDisplayName(klass) {
 
 // Fleet-size presets. `mul` is a multiplier applied to every per-class
 // count in spawnRoster (rounded, minimum 1 per non-zero class). "Huge"
-// roughly doubles a stock skirmish to the upper edge of what the
+// roughly doubles a stock battle to the upper edge of what the
 // renderer handles smoothly on modest hardware.
 const FLEET_OPTIONS = [
   { key: "small",  label: "Small",  mul: 0.5, tagline: "Skirmish — half fleet" },
@@ -515,6 +561,9 @@ export class StartMenu {
     this._runMapNodePositions = null;
     this._runMapWorldW = 0;
     this._runMapWorldH = 0;
+    this._starmapControl = null;
+    this._menuSystem = null;        // initialized lazily in draw()
+    this._needsRelayout = false;    // set by DOM mode select callback
     // Energy state ref + IAP callback wired by main.js.
     this.energy = null;
     this.onEnergyPurchase = null;
@@ -685,7 +734,7 @@ export class StartMenu {
   }
 
   click(x, y) {
-    // Refill overlay grabs all clicks while open.
+    // Refill overlay — handle package purchase and close (canvas fallback)
     if (this.showRefill) {
       for (const r of this.refillRects) {
         if (this._hit(r, x, y)) {
@@ -694,26 +743,24 @@ export class StartMenu {
           return true;
         }
       }
-      // Close button OR clicking outside the overlay dismisses it.
       this.showRefill = false;
       return true;
     }
-    // Settings overlay grabs all clicks while open.
+    // Settings overlay (canvas fallback)
     if (this.showSettings) {
       this._clickSettingsOverlay(x, y);
       return true;
     }
-    // Settings gear button (top-right corner) opens the overlay.
+    // Settings gear button (canvas fallback)
     if (this.settingsButtonRect && this._hit(this.settingsButtonRect, x, y)) {
       this._layoutSettingsOverlay(this._lastViewW || 1200, this._lastViewH || 800);
       this.showSettings = true;
       return true;
     }
-    // Custom Match overlay also grabs all clicks while open.
+    // Custom Match overlay (canvas fallback for sliders)
     if (this.showCustom) {
       const result = this._clickCustomOverlay(x, y);
       if (result === "start") {
-        // Energy gate same as the main START path.
         if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
           this.showRefill = true;
           this.showCustom = false;
@@ -723,28 +770,29 @@ export class StartMenu {
         this.showCustom = false;
         return true;
       }
-      return true; // overlay swallows everything else
+      return true;
     }
-    // Roguelite overlays — each grabs all clicks while open. Order
-    // matters: battle-choice / event / resupply sit ON TOP of the run
-    // map, so check them first.
+    // Roguelite overlays (canvas fallback)
     if (this.showBattleChoice) { this._clickBattleChoice(x, y); return true; }
     if (this.showEvent)        { this._clickEvent(x, y);        return true; }
     if (this.showResupply)     { this._clickResupply(x, y);     return true; }
     if (this.showRunMap)       {
-      // Drag-aware: start a pan-drag here and stash the press position.
-      // The actual click routing is deferred to pointerUp so a drag
-      // doesn't fire a node tap on release.
       this._runMapPressX = x;
       this._runMapPressY = y;
       this._startRunMapDrag(x, y);
       return true;
     }
     if (this.showRunSetup)     { this._clickRunSetup(x, y);     return true; }
-    // Energy bar opens the refill overlay.
+    // Energy bar (canvas fallback)
     if (this.energyBarRect && this._hit(this.energyBarRect, x, y)) {
       this.showRefill = true;
       return true;
+    }
+    // Main menu chips — DOM handles these, but keep canvas fallback.
+    // Also check _needsRelayout set by DOM mode-select callback.
+    if (this._needsRelayout) {
+      this._needsRelayout = false;
+      return "relayout";
     }
     for (const r of this.sizeRects) {
       if (this._hit(r, x, y)) { this.selectedSize = r.key; return true; }
@@ -753,8 +801,6 @@ export class StartMenu {
       if (this._hit(r, x, y)) {
         const changed = this.selectedMode !== r.key;
         this.selectedMode = r.key;
-        // Returning the "remeasure" flag lets the caller relayout so
-        // the campaign panel appears / disappears immediately.
         if (changed) return "relayout";
         return true;
       }
@@ -765,18 +811,13 @@ export class StartMenu {
     for (const r of this.fleetRects) {
       if (this._hit(r, x, y)) { this.selectedFleet = r.key; return true; }
     }
+    // START button (canvas fallback)
     if (this.startRect && this._hit(this.startRect, x, y)) {
-      // Custom mode: START opens the configuration overlay instead of
-      // launching. The overlay's own START launches the match.
       if (this.selectedMode === "custom") {
         this._layoutCustomOverlay(this._lastViewW || 1200, this._lastViewH || 800);
         this.showCustom = true;
         return true;
       }
-      // Frontier mode: START opens either the run-setup overlay (no
-      // run in progress) or the run-map overlay (resume active run).
-      // It never launches a match directly — battles only fire when
-      // the player picks a node on the map.
       if (this.selectedMode === "roguelite") {
         const hasRun = this.runState && this.runState.run;
         if (hasRun) {
@@ -788,8 +829,6 @@ export class StartMenu {
         }
         return true;
       }
-      // Out-of-energy clicks pop the refill overlay instead of starting
-      // a match. Standard F2P funnel: friction → purchase prompt.
       if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
         this.showRefill = true;
         return true;
@@ -827,150 +866,311 @@ export class StartMenu {
 
   draw(ctx, viewW, viewH) {
     ctx.save();
-    // Full-screen dim with a subtle blue grade so the menu sits on a
-    // softly tinted void rather than raw black-over-stars.
-    ctx.fillStyle = "rgba(2,8,18,0.78)";
-    ctx.fillRect(0, 0, viewW, viewH);
 
-    // Energy + Settings corner pills — drawn before the title so the
-    // title can layer over the top-bar baseline if needed.
-    if (this.energyBarRect) this._drawEnergyHeader(ctx);
-
-    // Title with accent rule. The thin underline gives the wordmark a
-    // visual anchor without needing actual logo art.
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#e6f4ff";
-    ctx.font = "bold 38px system-ui, sans-serif";
-    ctx.fillText("APHELION STAR FIGHTER", viewW / 2, viewH / 2 - 230);
-    ctx.fillStyle = "#5af";
-    ctx.fillRect(viewW / 2 - 200, viewH / 2 - 214, 400, 2);
-    ctx.fillStyle = "#7bd";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("FLEET COMBAT", viewW / 2, viewH / 2 - 198);
-
-    this._drawSectionLabel(ctx, "MAP SIZE", this.sizeRects);
-    for (const r of this.sizeRects) {
-      this._drawChip(ctx, r, r.key === this.selectedSize,
-        r.label, `${r.mapW} × ${r.mapH}`);
+    // Lazy-init the menu system
+    if (!this._menuSystem) {
+      this._menuSystem = new MenuSystem(document.body);
+      this._wireMenuCallbacks();
     }
 
-    this._drawSectionLabel(ctx, "GAME MODE", this.modeRects);
-    for (const r of this.modeRects) {
-      this._drawChip(ctx, r, r.key === this.selectedMode,
-        r.label, r.tagline);
-    }
+    // Determine which screen to show
+    let screenName = 'main';
+    if (this.showSettings) screenName = 'settings';
+    else if (this.showRefill) screenName = 'refill';
+    else if (this.showCustom) screenName = 'custom';
+    else if (this.showRunSetup) screenName = 'runSetup';
+    else if (this.showResupply) screenName = 'resupply';
+    else if (this.showEvent) screenName = 'event';
+    else if (this.showBattleChoice) screenName = 'battleChoice';
 
-    this._drawSectionLabel(ctx, "ALLIED RACE", this.raceRects);
-    for (const r of this.raceRects) {
-      const race = RACES[r.key];
-      this._drawChip(ctx, r, r.key === this.selectedRace,
-        r.label, race.tagline || "");
-    }
-
-    if (this.fleetRects.length > 0) {
-      this._drawSectionLabel(ctx, "FLEET SIZE", this.fleetRects);
-      for (const r of this.fleetRects) {
-        this._drawChip(ctx, r, r.key === this.selectedFleet,
-          r.label, r.tagline);
+    // Show the menu root for all screens except runMap
+    if (!this.showRunMap) {
+      this._menuSystem.showScreen(screenName);
+      // Only dim canvas when main menu is showing (not for DOM overlays that have their own scrim)
+      if (screenName === 'main') {
+        ctx.fillStyle = "rgba(2,8,18,0.78)";
+        ctx.fillRect(0, 0, viewW, viewH);
       }
-    }
-
-    // Frontier panel: one-line status under the chip rows. Run state
-    // is rendered inside the run-map overlay; the menu just shows
-    // whether a run is in progress so the player knows what "START"
-    // does next.
-    if (this.selectedMode === "roguelite") {
-      const meta = this.runState && this.runState.meta;
-      const run = this.runState && this.runState.run;
-      ctx.fillStyle = "#cef";
-      ctx.font = "bold 14px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      const statusY = this.startRect.y - 22;
-      if (run) {
-        const totalNodes = run.graphs.reduce((n, g) => n + g.nodes.length, 0);
-        ctx.fillText(
-          `ACTIVE RUN — ${RACES[run.faction].name.toUpperCase()} · ACT ${run.act}/${ACTS_PER_RUN} · ${run.visitedNodeIds.length}/${totalNodes} cleared`,
-          viewW / 2, statusY,
-        );
-      } else if (meta) {
-        ctx.fillStyle = "#9bd";
-        ctx.font = "13px system-ui, sans-serif";
-        ctx.fillText(
-          `Runs cleared: ${meta.runsWon} / ${meta.runsCompleted}   ·   Perks: ${meta.unlockedPerks.length}/${Object.keys(PERKS).length}`,
-          viewW / 2, statusY,
-        );
-      }
-    }
-
-    const s = this.startRect;
-    const outOfEnergy = this.energy && !canSpend(this.energy, COST_PER_GAME);
-    // Outer glow plate — radial gradient under the button so the CTA
-    // visibly pops off the page without needing real shadow ops.
-    const glowCol = outOfEnergy ? "rgba(220,80,80," : "rgba(120,220,160,";
-    const g = ctx.createRadialGradient(
-      s.x + s.w / 2, s.y + s.h / 2, 0,
-      s.x + s.w / 2, s.y + s.h / 2, s.w * 0.7,
-    );
-    g.addColorStop(0, glowCol + "0.32)");
-    g.addColorStop(1, glowCol + "0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(s.x - 60, s.y - 28, s.w + 120, s.h + 56);
-
-    if (outOfEnergy) {
-      ctx.fillStyle = "rgba(70,30,30,0.95)";
-      ctx.fillRect(s.x, s.y, s.w, s.h);
-      ctx.strokeStyle = "#e88";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(s.x, s.y, s.w, s.h);
-      ctx.fillStyle = "#fdd";
-      ctx.font = "bold 18px system-ui, sans-serif";
-      ctx.fillText("OUT OF ENERGY", s.x + s.w / 2, s.y + s.h / 2 - 4);
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillStyle = "#fa8";
-      ctx.fillText("Tap to refill", s.x + s.w / 2, s.y + s.h / 2 + 14);
+      // Sync menu data
+      const menuState = this._buildMenuState(viewW, viewH);
+      this._menuSystem.sync(menuState);
     } else {
-      // Vertical gradient body — top a touch lighter than bottom for a
-      // subtle "lit from above" read.
-      const bg = ctx.createLinearGradient(0, s.y, 0, s.y + s.h);
-      bg.addColorStop(0, "rgba(80,170,110,0.95)");
-      bg.addColorStop(1, "rgba(40,110,75,0.95)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(s.x, s.y, s.w, s.h);
-      ctx.strokeStyle = "#bff";
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(s.x, s.y, s.w, s.h);
-      // Inner highlight rule along the top edge for that lit-from-above
-      // sheen.
-      ctx.fillStyle = "rgba(255,255,255,0.18)";
-      ctx.fillRect(s.x + 2, s.y + 2, s.w - 4, 1);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 24px system-ui, sans-serif";
-      let label = "START";
-      if (this.selectedMode === "custom") {
-        label = "CONFIGURE…";
-      } else if (this.selectedMode === "roguelite") {
-        label = (this.runState && this.runState.run) ? "RESUME RUN" : "NEW RUN";
-      }
-      ctx.fillText(label, s.x + s.w / 2, s.y + s.h / 2 + 9);
+      // Hide menu when run map is showing
+      this._menuSystem.hideAll();
     }
 
-    // Settings gear button — drawn alongside the rest of the menu
-    // chrome so it sits below modal overlays.
-    if (this.settingsButtonRect) this._drawSettingsButton(ctx);
+    // Starmap (existing code, keep as-is)
+    if (!this.showRunMap && this._starmapControl) {
+      destroyStarmap(this._starmapControl);
+      this._starmapControl = null;
+    }
+    if (this.showRunMap) this._drawRunMap(ctx, viewW, viewH);
+    if (this.showRunSetup) this._drawRunSetup(ctx, viewW, viewH);
 
-    // Refill overlay renders last so it sits on top of everything.
-    if (this.showRefill)       this._drawRefillOverlay(ctx, viewW, viewH);
-    if (this.showCustom)       this._drawCustomOverlay(ctx, viewW, viewH);
-    if (this.showSettings)     this._drawSettingsOverlay(ctx, viewW, viewH);
-    // Roguelite stack — run map below, sub-overlays above.
-    if (this.showRunMap)       this._drawRunMap(ctx, viewW, viewH);
-    if (this.showRunSetup)     this._drawRunSetup(ctx, viewW, viewH);
-    if (this.showResupply)     this._drawResupply(ctx, viewW, viewH);
-    if (this.showEvent)        this._drawEvent(ctx, viewW, viewH);
+    // Canvas sub-overlays drawn on top
+    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice;
+    if (this._starmapControl) {
+      this._starmapControl.root.classList.toggle("behind-canvas", hasSubOverlay);
+    }
+    if (this.showResupply) this._drawResupply(ctx, viewW, viewH);
+    if (this.showEvent) this._drawEvent(ctx, viewW, viewH);
     if (this.showBattleChoice) this._drawBattleChoice(ctx, viewW, viewH);
 
-    ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  _buildMenuState(viewW, viewH) {
+    const run = this.runState && this.runState.run;
+    const meta = this.runState && this.runState.meta;
+    const outOfEnergy = this.energy && !canSpend(this.energy, COST_PER_GAME);
+
+    // Calculate frontier status text
+    let frontierStatus = "";
+    if (this.selectedMode === "roguelite") {
+      if (run) {
+        const totalNodes = run.graphs.reduce((n, g) => n + g.nodes.length, 0);
+        frontierStatus = `ACTIVE CAMPAIGN — ${RACES[run.faction].name.toUpperCase()} · ACT ${run.act}/${ACTS_PER_RUN} · ${run.visitedNodeIds.length}/${totalNodes} cleared`;
+      } else if (meta) {
+        frontierStatus = `Campaigns won: ${meta.runsWon} / ${meta.runsCompleted}   ·   Perks: ${meta.unlockedPerks.length}/${Object.keys(PERKS).length}`;
+      }
+    }
+
+    // Build custom match state
+    const blueTotal = totalShipCount(this.customBlueCounts);
+    const redTotal = totalShipCount(this.customRedCounts);
+
+    // Build resupply state
+    let resupplyState = null;
+    if (this.showResupply && this._pendingResupplyNode) {
+      const run = this.runState && this.runState.run;
+      resupplyState = {
+        capitals: run ? run.capitals.map(cap => ({
+          klass: cap.klass,
+          instanceId: cap.instanceId,
+          hpFrac: cap.hpFrac,
+          repairCost: repairCostFor(cap),
+        })) : [],
+        smallCraft: run ? { ...run.smallCraft } : { fighter: 0, bomber: 0 },
+        boons: run ? [...run.boons] : [],
+        boonOffers: this._resupplyBoonOffers || [],
+        fuelPrice: 30,
+        fighterPrice: 40,
+        bomberPrice: 60,
+        canAffordFighter: run ? run.resources.credits >= 40 : false,
+        canAffordBomber: run ? run.resources.credits >= 60 : false,
+        canAffordRefuel: run ? run.resources.credits >= 30 : false,
+        credits: run ? run.resources.credits : 0,
+      };
+    }
+
+    // Build event state
+    let eventState = null;
+    if (this.showEvent && this._pendingEventNode) {
+      const card = eventCardById && this._pendingEventNode.eventId ? eventCardById(this._pendingEventNode.eventId) : null;
+      eventState = {
+        title: card ? card.title : "Anomaly Detected",
+        body: card ? card.body : "Something unusual is happening in this sector...",
+        choices: card ? card.options.map((c, i) => ({
+          key: String(i),
+          label: c.label,
+          hint: c.hint || "",
+        })) : [],
+      };
+    }
+
+    // Build battle choice state
+    let battleState = null;
+    if (this.showBattleChoice && this._pendingBattleNode) {
+      const node = this._pendingBattleNode;
+      battleState = {
+        title: node.type === "boss" ? "BOSS BATTLE" : node.type === "elite" ? "ELITE HUNT" : "PATROL ENCOUNTER",
+        faction: node.faction || "",
+        tier: node.tier || 1,
+      };
+    }
+
+    // Build energy regen info
+    let energyRegen = null;
+    if (this.energy && this.energy.current < MAX_ENERGY) {
+      energyRegen = {
+        next: formatDuration(timeUntilNext(this.energy)),
+        label: "until +1",
+      };
+    }
+
+    return {
+      selectedSize: this.selectedSize,
+      selectedMode: this.selectedMode,
+      selectedRace: this.selectedRace,
+      selectedFleet: this.selectedFleet,
+      modeOptions: MODE_OPTIONS,
+      fleetOptions: FLEET_OPTIONS,
+      mapSizes: MAP_SIZES,
+      raceKeys: RACE_KEYS,
+      races: RACES,
+      energy: this.energy ? { current: this.energy.current, max: MAX_ENERGY } : null,
+      energyRegen,
+      canSpendEnergy: !outOfEnergy,
+      packages: PACKAGES,
+      settings: this._settingsGet(),
+      custom: {
+        alliedRace: this.customAlliedRace,
+        hostileRace: this.customHostileRace,
+        blueCounts: { ...this.customBlueCounts },
+        redCounts: { ...this.customRedCounts },
+        blueTotal,
+        redTotal,
+        grandTotal: blueTotal + redTotal,
+        classes: CUSTOM_CLASSES,
+        classGlyphs: CLASS_GLYPHS,
+        classNames: {
+          fighter: "Fighter", bomber: "Bomber", frigate: "Frigate",
+          cruiser: "Cruiser", battleship: "Battleship", carrier: "Carrier",
+        },
+        maxPerClass: CUSTOM_MAX_PER_CLASS,
+      },
+      runState: { meta: meta || null, run: run || null },
+      actsPerRun: ACTS_PER_RUN,
+      perks: PERKS,
+      battleNode: battleState,
+      resupply: resupplyState,
+      event: eventState,
+      factions: RACE_KEYS,
+      factionMeta: meta ? Object.fromEntries(RACE_KEYS.map(k => [k, { wins: meta.runsWon }])) : {},
+      frontierStatus,
+      outOfEnergy,
+      startLabel: outOfEnergy ? "OUT OF STAMINA" :
+                  this.selectedMode === "custom" ? "CONFIGURE..." :
+                  this.selectedMode === "roguelite" ? (run ? "RESUME CAMPAIGN" : "NEW CAMPAIGN") :
+                  "DEPLOY",
+    };
+  }
+
+  _wireMenuCallbacks() {
+    if (!this._menuSystem) return;
+    this._menuSystem.setCallbacks({
+      onSizeSelect: (key) => { this.selectedSize = key; },
+      onModeSelect: (key) => {
+        this.selectedMode = key;
+        // Returning "relayout" from click() when mode changes is handled
+        // by the caller reading selectedMode after the click. But with
+        // DOM menus, we need to trigger a relayout explicitly.
+        // We'll handle this via a flag.
+        this._needsRelayout = true;
+      },
+      onRaceSelect: (key) => { this.selectedRace = key; },
+      onFleetSelect: (key) => { this.selectedFleet = key; },
+      onStart: () => {
+        if (this.selectedMode === "custom") {
+          this._layoutCustomOverlay(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showCustom = true;
+        } else if (this.selectedMode === "roguelite") {
+          const hasRun = this.runState && this.runState.run;
+          if (hasRun) {
+            this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
+            this.showRunMap = true;
+          } else {
+            this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+            this.showRunSetup = true;
+          }
+        } else {
+          this._emitStart();
+        }
+      },
+      onConfigure: () => {
+        this._layoutCustomOverlay(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showCustom = true;
+      },
+      onResumeRun: () => {
+        this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showRunMap = true;
+      },
+      onNewRun: () => {
+        this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showRunSetup = true;
+      },
+      onRefillOpen: () => { this.showRefill = true; },
+      onRefillBuy: (pkgId) => {
+        if (this.onEnergyPurchase) this.onEnergyPurchase(pkgId);
+        this.showRefill = false;
+      },
+      onRefillClose: () => { this.showRefill = false; },
+      onSettingsOpen: () => {
+        this._layoutSettingsOverlay(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showSettings = true;
+      },
+      onSettingsClose: () => { this.showSettings = false; },
+      onMusicToggle: () => {
+        const cur = this._settingsGet();
+        this._settingsApply({ musicMuted: !cur.musicMuted });
+      },
+      onSfxToggle: () => {
+        const cur = this._settingsGet();
+        this._settingsApply({ sfxMuted: !cur.sfxMuted });
+      },
+      onCustomClose: () => { this.showCustom = false; this._customDrag = null; },
+      onCustomStart: () => {
+        this._customDrag = null;
+        if (this.energy && !canSpend(this.energy, COST_PER_GAME)) {
+          this.showRefill = true;
+          this.showCustom = false;
+        } else {
+          this._emitStart();
+          this.showCustom = false;
+        }
+      },
+      onCustomRaceSelect: (side, raceKey) => {
+        if (side === "allied") {
+          this.customAlliedRace = raceKey;
+          this.customBlueCounts = rosterForRace(raceKey);
+        } else {
+          this.customHostileRace = raceKey;
+          this.customRedCounts = rosterForRace(raceKey);
+        }
+      },
+      onCustomSliderChange: (side, klass, count) => {
+        if (side === "allied") this.customBlueCounts[klass] = count;
+        else this.customRedCounts[klass] = count;
+      },
+      onBattleFly: () => {
+        if (this.onRunChoice) this.onRunChoice("enter-node", { nodeId: this._pendingBattleNode.id, battleMode: "fly" });
+        this.showBattleChoice = false;
+      },
+      onBattleCommand: () => {
+        if (this.onRunChoice) this.onRunChoice("enter-node", { nodeId: this._pendingBattleNode.id, battleMode: "command" });
+        this.showBattleChoice = false;
+      },
+      onBattleBack: () => { this.showBattleChoice = false; },
+      onResupplyRepair: (instanceId) => {
+        if (this.onRunChoice) this.onRunChoice("buy-repair", { instanceId });
+      },
+      onResupplyRecruit: (type) => {
+        if (this.onRunChoice) this.onRunChoice("buy-recruit", { klass: type });
+      },
+      onResupplyBoon: (slot) => {
+        if (this.onRunChoice && this._resupplyBoonOffers && this._resupplyBoonOffers[slot]) {
+          this.onRunChoice("apply-boon", { boonKey: this._resupplyBoonOffers[slot].key });
+        }
+      },
+      onResupplyContinue: () => {
+        if (this.onRunChoice) this.onRunChoice("enter-node-and-complete", { nodeId: this._pendingResupplyNode.id });
+        this.showResupply = false;
+      },
+      onResupplyClose: () => { this.showResupply = false; },
+      onEventChoice: (choiceKey) => {
+        if (this.onRunChoice) this.onRunChoice("apply-event", { eventId: this._pendingEventNode.eventId, choiceIndex: parseInt(choiceKey) });
+        this.showEvent = false;
+      },
+      onEventClose: () => { this.showEvent = false; },
+      onRunSetupSelect: (factionKey) => {
+        if (this.onRunChoice) this.onRunChoice("new-run", { faction: factionKey });
+        this.showRunSetup = false;
+        // Auto-open the run map so the player lands in their first act.
+        this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showRunMap = true;
+      },
+      onRunSetupCancel: () => { this.showRunSetup = false; },
+    });
   }
 
   // Section header — small caps centered above its row of chips, with
@@ -993,91 +1193,11 @@ export class StartMenu {
   }
 
   _drawEnergyHeader(ctx) {
-    const r = this.energyBarRect;
-    const e = this.energy;
-    const cur = e ? e.current : MAX_ENERGY;
-    const full = cur >= MAX_ENERGY;
-    const empty = cur <= 0;
-
-    ctx.fillStyle = empty ? "rgba(60,24,30,0.92)" : "rgba(14,28,42,0.92)";
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = empty ? "#e87" : (full ? "#9ec" : "#5ad");
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-
-    // Left: ENERGY label.
-    ctx.textAlign = "left";
-    ctx.fillStyle = empty ? "#fb8" : "#fd9";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText("ENERGY", r.x + 12, r.y + 17);
-    // Count below label.
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.fillText(`${cur}/${MAX_ENERGY}`, r.x + 12, r.y + 32);
-
-    // Center: regen countdown.
-    if (!full && e) {
-      ctx.fillStyle = "#9bd";
-      ctx.font = "11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      const next = timeUntilNext(e);
-      ctx.fillText(formatDuration(next), r.x + r.w / 2, r.y + 17);
-      ctx.fillText("until +1", r.x + r.w / 2, r.y + 30);
-    }
-
-    // Right: refill chip.
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#fd9";
-    ctx.font = "bold 12px system-ui, sans-serif";
-    ctx.fillText("+ REFILL", r.x + r.w - 12, r.y + 24);
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem */
   }
 
   _drawRefillOverlay(ctx, viewW, viewH) {
-    // Scrim.
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 26px system-ui, sans-serif";
-    ctx.fillText("REFUEL ENERGY", viewW / 2, this.refillRects[0].y - 30);
-    ctx.fillStyle = "#9bd";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("Get back in the cockpit instantly",
-      viewW / 2, this.refillRects[0].y - 12);
-
-    for (let i = 0; i < this.refillRects.length; i++) {
-      const rr = this.refillRects[i];
-      const pkg = PACKAGES[i];
-      ctx.fillStyle = "rgba(30,60,100,0.95)";
-      ctx.fillRect(rr.x, rr.y, rr.w, rr.h);
-      ctx.strokeStyle = "#9cf";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(rr.x, rr.y, rr.w, rr.h);
-
-      ctx.fillStyle = "#cef";
-      ctx.font = "bold 18px system-ui, sans-serif";
-      ctx.fillText(pkg.label, rr.x + rr.w / 2, rr.y + 28);
-      ctx.fillStyle = "#fe8";
-      ctx.font = "bold 32px system-ui, sans-serif";
-      ctx.fillText(`+${pkg.energy}`, rr.x + rr.w / 2, rr.y + 68);
-      ctx.fillStyle = "#9f8";
-      ctx.font = "bold 16px system-ui, sans-serif";
-      ctx.fillText(pkg.price, rr.x + rr.w / 2, rr.y + 95);
-    }
-
-    // Close button.
-    const cr = this.refillCloseRect;
-    ctx.fillStyle = "rgba(60,40,40,0.85)";
-    ctx.fillRect(cr.x, cr.y, cr.w, cr.h);
-    ctx.strokeStyle = "#c66";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(cr.x, cr.y, cr.w, cr.h);
-    ctx.fillStyle = "#fcc";
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.fillText("CLOSE", cr.x + cr.w / 2, cr.y + cr.h / 2 + 5);
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem */
   }
 
   // ---- Settings overlay ------------------------------------------------
@@ -1107,46 +1227,7 @@ export class StartMenu {
   }
 
   _drawSettingsOverlay(ctx, viewW, viewH) {
-    ctx.fillStyle = "rgba(2,8,18,0.86)";
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    const p = this.settingsRects.panel;
-    ctx.fillStyle = "rgba(8,16,28,0.92)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-    // Accent rule at the top so the panel reads in the same chrome
-    // family as the rest of the HUD.
-    ctx.fillStyle = "#5af";
-    ctx.fillRect(p.x, p.y, p.w, 3);
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#e6f4ff";
-    ctx.font = "bold 22px system-ui, sans-serif";
-    ctx.fillText("SETTINGS", viewW / 2, p.y + 36);
-
-    const state = this._settingsGet();
-    this._drawAudioToggleRow(ctx, this.settingsRects.musicToggle, "MUSIC", !state.musicMuted);
-    this._drawAudioToggleRow(ctx, this.settingsRects.sfxToggle,   "SFX",   !state.sfxMuted);
-
-    // Hint below the rows: tells the player about the P shortcut so
-    // they can mute music mid-match without coming back here.
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#9bd";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("Tap rows to toggle  ·  P mutes music mid-match",
-      viewW / 2, this.settingsRects.sfxToggle.y + this.settingsRects.sfxToggle.h + 24);
-
-    const c = this.settingsRects.close;
-    ctx.fillStyle = "rgba(40,80,60,0.9)";
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = "#9f8";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(c.x, c.y, c.w, c.h);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.fillText("CLOSE", c.x + c.w / 2, c.y + c.h / 2 + 6);
+  /* DOM-rendered by MenuSystem */
   }
 
   // Settings toggle row: full-width pill with the option label on the
@@ -1154,38 +1235,11 @@ export class StartMenu {
   // muted red when off — keeps the same visual language as the rest
   // of the chrome.
   _drawAudioToggleRow(ctx, t, label, on) {
-    ctx.fillStyle = on ? "rgba(40,90,140,0.95)" : "rgba(60,30,30,0.85)";
-    ctx.fillRect(t.x, t.y, t.w, t.h);
-    ctx.strokeStyle = on ? "#7df" : "#c66";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(t.x, t.y, t.w, t.h);
-    ctx.fillStyle = "#cef";
-    ctx.textAlign = "left";
-    ctx.font = "bold 17px system-ui, sans-serif";
-    ctx.fillText(label, t.x + 18, t.y + t.h / 2 + 6);
-    ctx.textAlign = "right";
-    ctx.fillStyle = on ? "#9f8" : "#fcc";
-    ctx.font = "bold 20px system-ui, sans-serif";
-    ctx.fillText(on ? "ON" : "OFF", t.x + t.w - 18, t.y + t.h / 2 + 7);
+  /* DOM-rendered by MenuSystem */
   }
 
   _drawSettingsButton(ctx) {
-    const r = this.settingsButtonRect;
-    const muted = this._settingsGet().musicMuted;
-    ctx.fillStyle = "rgba(20,40,60,0.85)";
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = muted ? "#fa8" : "#7df";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
-    ctx.textAlign = "center";
-    ctx.fillStyle = muted ? "#fda" : "#cef";
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.fillText("SETTINGS", r.x + r.w / 2, r.y + r.h / 2 + 5);
-    if (muted) {
-      // Small dot in the top-right of the button signals "music off".
-      ctx.fillStyle = "#fa8";
-      ctx.beginPath(); ctx.arc(r.x + r.w - 8, r.y + 8, 3, 0, Math.PI * 2); ctx.fill();
-    }
+  /* DOM-rendered by MenuSystem */
   }
 
   _clickSettingsOverlay(x, y) {
@@ -1330,83 +1384,7 @@ export class StartMenu {
   }
 
   _drawCustomOverlay(ctx, viewW, viewH) {
-    // Full-screen scrim — keeps the background visible but desaturated
-    // so the overlay reads as a focused modal.
-    ctx.fillStyle = "rgba(2,8,18,0.86)";
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    const p = this.customRects.panel;
-    // Outer overlay card: same chrome family as the rest of the HUD
-    // (rgba(8,16,28,0.85) + #5af border) so the overlay feels native
-    // to the game's UI rather than a separate dialog system.
-    ctx.fillStyle = "rgba(8,16,28,0.92)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-    // Top accent rule — same trick as the side strip / target panel.
-    ctx.fillStyle = "#5af";
-    ctx.fillRect(p.x, p.y, p.w, 3);
-
-    // Title block: large wordmark + thin accent + subtitle.
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#e6f4ff";
-    ctx.font = "bold 26px system-ui, sans-serif";
-    ctx.fillText("CUSTOM MATCH", viewW / 2, p.y + 38);
-    ctx.fillStyle = "#7bd";
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText("PICK RACE · DRAG SLIDERS TO SET FLEET", viewW / 2, p.y + 58);
-
-    this._drawCustomSide(ctx, "ALLIED", "blue", this.customRects.allied,
-      this.customAlliedRace, this.customBlueCounts);
-    this._drawCustomSide(ctx, "HOSTILE", "red", this.customRects.hostile,
-      this.customHostileRace, this.customRedCounts);
-
-    // Combined totals line — sits above the action buttons so it can't
-    // be missed when you're about to start a match that would melt the
-    // device. Color graded: blue under 200, soft amber 200–400, hot
-    // orange past 400 (rough "this will chug" threshold).
-    const blueTotal = totalShipCount(this.customBlueCounts);
-    const redTotal = totalShipCount(this.customRedCounts);
-    const totalAll = blueTotal + redTotal;
-    let totalsColor = "#9bd";
-    if (totalAll > 400) totalsColor = "#f97";
-    else if (totalAll > 200) totalsColor = "#fc8";
-    ctx.fillStyle = totalsColor;
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText(
-      `Total fleet · Allied ${blueTotal}  ·  Hostile ${redTotal}  ·  ${totalAll} ships`,
-      viewW / 2, this._customTotalsY,
-    );
-
-    // Footer buttons — match the rest of the menu's button language so
-    // CANCEL/START aren't visually different from the main START on the
-    // previous screen.
-    const cancel = this.customRects.cancel;
-    ctx.fillStyle = "rgba(60,30,30,0.92)";
-    ctx.fillRect(cancel.x, cancel.y, cancel.w, cancel.h);
-    ctx.strokeStyle = "#e88";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(cancel.x, cancel.y, cancel.w, cancel.h);
-    ctx.fillStyle = "#fdd";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText("CANCEL", cancel.x + cancel.w / 2, cancel.y + cancel.h / 2 + 6);
-
-    const start = this.customRects.start;
-    const startBg = ctx.createLinearGradient(0, start.y, 0, start.y + start.h);
-    startBg.addColorStop(0, "rgba(80,170,110,0.95)");
-    startBg.addColorStop(1, "rgba(40,110,75,0.95)");
-    ctx.fillStyle = startBg;
-    ctx.fillRect(start.x, start.y, start.w, start.h);
-    ctx.strokeStyle = "#bff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(start.x, start.y, start.w, start.h);
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    ctx.fillRect(start.x + 2, start.y + 2, start.w - 4, 1);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 22px system-ui, sans-serif";
-    ctx.fillText("START", start.x + start.w / 2, start.y + start.h / 2 + 8);
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem — sliders still use canvas */
   }
 
   _drawCustomSide(ctx, title, side, sideRects, raceKey, counts) {
@@ -1419,21 +1397,21 @@ export class StartMenu {
     ctx.strokeStyle = "rgba(120,180,220,0.25)";
     ctx.lineWidth = 1;
     ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
-    // Side-tinted accent rule on the outward edge (left=ALLIED on left
-    // edge; right=HOSTILE on right edge) — visually mirrors the HUD
+    // Side-tinted accent rule on the outward edge (left=FRIENDLY on left
+    // edge; right=ENEMY on right edge) — visually mirrors the HUD
     // side strips at the top of the screen.
-    const isLeft = title === "ALLIED";
+    const isLeft = side === "blue";
     ctx.fillStyle = accent;
     if (isLeft) ctx.fillRect(panel.x, panel.y, 3, panel.h);
     else ctx.fillRect(panel.x + panel.w - 3, panel.y, 3, panel.h);
 
-    // Header strip: ALLIED / HOSTILE label + currently selected race
+    // Header strip: FRIENDLY / ENEMY label + currently selected race
     // name on the same line. Big, easy to scan.
     const header = sideRects.header;
     ctx.textAlign = "left";
     ctx.fillStyle = accent;
     ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText(title, header.x + 16, header.y + 22);
+    ctx.fillText(isLeft ? "FRIENDLY" : "ENEMY", header.x + 16, header.y + 22);
     ctx.fillStyle = "#cdf";
     ctx.font = "bold 17px system-ui, sans-serif";
     ctx.fillText((RACES[raceKey] && RACES[raceKey].name) || "—",
@@ -1474,7 +1452,7 @@ export class StartMenu {
     ctx.textAlign = "right";
     ctx.fillStyle = "#9bd";
     ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.fillText(`${subtotal} SHIPS`,
+    ctx.fillText(`${subtotal} UNITS`,
       panel.x + panel.w - 16, panel.y + panel.h - 10);
     ctx.textAlign = "left";
   }
@@ -1781,121 +1759,7 @@ export class StartMenu {
   }
 
   _drawRunSetup(ctx, viewW, viewH) {
-    // Galaxy backdrop (no parallax — this is a static screen).
-    if (this._runSetupGalaxy) {
-      drawGalaxy(ctx, this._runSetupGalaxy, 0, 0, viewW, viewH);
-    } else {
-      ctx.fillStyle = "rgba(2,8,18,0.95)";
-      ctx.fillRect(0, 0, viewW, viewH);
-    }
-    // Dim overlay so the chrome over the galaxy stays legible.
-    ctx.fillStyle = "rgba(2,8,18,0.45)";
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    // Title block.
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#e6f4ff";
-    ctx.font = "bold 34px system-ui, sans-serif";
-    ctx.fillText("FRONTIER", viewW / 2, 80);
-    ctx.fillStyle = "#5af";
-    ctx.fillRect(viewW / 2 - 180, 92, 360, 2);
-    ctx.fillStyle = "#7bd";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("BEGIN A NEW RUN  ·  PICK YOUR COMMANDING FACTION", viewW / 2, 112);
-
-    // Faction emblem cards.
-    const t = performance.now() / 1000;
-    for (const r of this.runSetupRects.factionChips) {
-      const selected = r.key === this._runSetupFaction;
-      const accent = RACES[r.key] ? RACES[r.key].accent : "#7df";
-      // Card background — darker when not selected, lifted on select.
-      const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
-      if (selected) {
-        g.addColorStop(0, "rgba(20,36,60,0.95)");
-        g.addColorStop(1, "rgba(10,20,38,0.95)");
-      } else {
-        g.addColorStop(0, "rgba(8,16,28,0.85)");
-        g.addColorStop(1, "rgba(4,10,20,0.85)");
-      }
-      ctx.fillStyle = g;
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = selected ? accent : "rgba(120,160,200,0.4)";
-      ctx.lineWidth = selected ? 3 : 1.5;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      // Top accent rule when selected.
-      if (selected) {
-        ctx.fillStyle = accent;
-        ctx.fillRect(r.x, r.y, r.w, 3);
-      }
-      // Emblem in the upper half of the card.
-      const emblemR = Math.min(56, r.w * 0.35);
-      const emblemX = r.x + r.w / 2;
-      const emblemY = r.y + 80;
-      // Subtle pulse on the selected card so it reads as "chosen".
-      if (selected) {
-        ctx.save();
-        const pulse = 1 + Math.sin(t * 2.4) * 0.04;
-        ctx.translate(emblemX, emblemY);
-        ctx.scale(pulse, pulse);
-        ctx.translate(-emblemX, -emblemY);
-      }
-      drawFactionEmblem(ctx, emblemX, emblemY, emblemR, accent, r.key);
-      if (selected) ctx.restore();
-
-      // Name + tagline below the emblem.
-      ctx.fillStyle = selected ? "#fff" : "#cef";
-      ctx.font = "bold 18px system-ui, sans-serif";
-      ctx.fillText(r.label.toUpperCase(), r.x + r.w / 2, r.y + 178);
-      const tag = (RACES[r.key] && RACES[r.key].tagline) || "";
-      if (tag) {
-        ctx.fillStyle = "#7bd";
-        ctx.font = "11px system-ui, sans-serif";
-        // Simple wrap: split tagline at the midpoint word boundary so
-        // long taglines fit in two lines.
-        const words = tag.split(" ");
-        if (words.length > 3) {
-          const mid = Math.ceil(words.length / 2);
-          ctx.fillText(words.slice(0, mid).join(" "), r.x + r.w / 2, r.y + 200);
-          ctx.fillText(words.slice(mid).join(" "), r.x + r.w / 2, r.y + 216);
-        } else {
-          ctx.fillText(tag, r.x + r.w / 2, r.y + 200);
-        }
-      }
-      // War-progress trophy at the bottom of the card.
-      const wp = (this.runState && this.runState.meta && this.runState.meta.warProgress[r.key]) || 0;
-      ctx.fillStyle = wp > 0 ? "#fc8" : "rgba(140,160,180,0.6)";
-      ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText(wp > 0 ? `★ ${wp} VICTOR${wp > 1 ? "IES" : "Y"}` : "Unbroken",
-                   r.x + r.w / 2, r.y + r.h - 18);
-    }
-
-    // BEGIN button — gradient pill like the main menu START.
-    const b = this.runSetupRects.beginBtn;
-    const beginBg = ctx.createLinearGradient(0, b.y, 0, b.y + b.h);
-    beginBg.addColorStop(0, "rgba(80,170,110,0.95)");
-    beginBg.addColorStop(1, "rgba(40,110,75,0.95)");
-    ctx.fillStyle = beginBg;
-    ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = "#bff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(b.x, b.y, b.w, b.h);
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    ctx.fillRect(b.x + 2, b.y + 2, b.w - 4, 1);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 20px system-ui, sans-serif";
-    ctx.fillText("BEGIN RUN", b.x + b.w / 2, b.y + b.h / 2 + 7);
-
-    // CANCEL button — match the menu's red pill.
-    const c = this.runSetupRects.cancelBtn;
-    ctx.fillStyle = "rgba(60,30,30,0.92)";
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = "#e88";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(c.x, c.y, c.w, c.h);
-    ctx.fillStyle = "#fdd";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText("CANCEL", c.x + c.w / 2, c.y + c.h / 2 + 7);
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem */
   }
 
   _clickRunSetup(x, y) {
@@ -1925,10 +1789,6 @@ export class StartMenu {
   // Background is a procedural galaxy (parallax stars + nebula clouds)
   // generated deterministically from the run seed + act.
   _layoutRunMap(viewW, viewH) {
-    // No central panel — the map IS the screen. We still cache a small
-    // set of rects so the click handler can find the HUD chrome.
-    this.runMapRects.panel = { x: 0, y: 0, w: viewW, h: viewH };
-
     // World rect: wide enough that capital-end columns sit comfortably
     // off-screen on most viewports, encouraging the player to pan.
     const worldW = Math.max(viewW * 1.55, 1600);
@@ -1937,69 +1797,36 @@ export class StartMenu {
     this._runMapWorldH = worldH;
 
     const run = this.runState && this.runState.run;
-    this.runMapRects.nodes = [];
-    this.runMapRects.edges = [];
 
-    if (run) {
-      const graph = run.graphs[run.act - 1];
-      const galaxyKey = (run.seed >>> 0) + "_" + run.act;
-      if (galaxyKey !== this._runMapGalaxyKey) {
-        // Regenerate the galaxy + node positions for this (run, act).
-        this._runMapGalaxy = makeGalaxy(
-          (run.seed ^ (run.act * 0x6d2b79f5)) >>> 0,
-          worldW, worldH,
-        );
-        this._runMapNodePositions = graph
-          ? nodePositionsFor(graph, (run.seed >>> 0) + run.act,
-                             worldW, worldH, COLS_PER_ACT, ROWS_PER_ACT)
-          : new Map();
-        this._runMapGalaxyKey = galaxyKey;
-        // Centre the pan on the current node so a fresh open lands
-        // the player's position in view.
-        this._centerPanOnCurrent(viewW, viewH);
-      }
-
-      if (graph && this._runMapNodePositions) {
-        // World-space node rects — node draw + click both read these.
-        for (const n of graph.nodes) {
-          const p = this._runMapNodePositions.get(n.id);
-          if (!p) continue;
-          this.runMapRects.nodes.push({
-            id: n.id, type: n.type, faction: n.faction,
-            x: p.x, y: p.y,
-            // Node radius scales with type: bosses are visibly bigger,
-            // events are slightly smaller for a "checkpoint" feel.
-            r: n.type === "boss" ? 28 : n.type === "event" ? 18 : 22,
-          });
-        }
-        for (const e of graph.edges) {
-          const a = this._runMapNodePositions.get(e.fromId);
-          const b = this._runMapNodePositions.get(e.toId);
-          if (a && b) {
-            this.runMapRects.edges.push({
-              ax: a.x, ay: a.y, bx: b.x, by: b.y,
-              fromId: e.fromId, toId: e.toId, fuelCost: e.fuelCost,
-            });
-          }
-        }
-      }
+    // Create the DOM starmap on first open.
+    if (!this._starmapControl && run) {
+      this._starmapControl = createStarmap(document.body, run);
+      setStarmapCallbacks(this._starmapControl, {
+        onNodeClick: ({ nodeId, nodeType }) => {
+          // Find the full graph node from the run.
+          const graph = run.graphs[run.act - 1];
+          const node = graph && graph.nodes.find((m) => m.id === nodeId);
+          if (node) this._routeNodeClick(node);
+        },
+        onAbandon: () => {
+          if (this.onRunChoice) this.onRunChoice("abandon-run", {});
+          this.showRunMap = false;
+        },
+        onClose: () => {
+          this.showRunMap = false;
+        },
+      });
+      this._centerPanOnCurrent(viewW, viewH);
     }
 
-    // Top HUD strip — full-width, semi-transparent so the galaxy peeks
-    // through the chrome.
+    // Keep layout rects for drag-hit testing.
+    this.runMapRects.panel = { x: 0, y: 0, w: viewW, h: viewH };
     const stripH = 60;
-    this.runMapRects.header = { x: 0, y: 0, w: viewW, h: stripH };
-
-    // Fleet panel: right edge, full-height, ~300px wide.
     const fleetW = Math.min(320, Math.max(260, viewW * 0.24));
+    this.runMapRects.header = { x: 0, y: 0, w: viewW, h: stripH };
     this.runMapRects.fleetPanel = {
-      x: viewW - fleetW,
-      y: stripH,
-      w: fleetW,
-      h: viewH - stripH,
+      x: viewW - fleetW, y: stripH, w: fleetW, h: viewH - stripH,
     };
-
-    // Footer buttons sit centred at the bottom over the galaxy.
     const btnH = 42, btnW = 150;
     this.runMapRects.abandonBtn = {
       x: 20, y: viewH - btnH - 20, w: btnW, h: btnH,
@@ -2007,14 +1834,6 @@ export class StartMenu {
     this.runMapRects.closeBtn = {
       x: viewW - fleetW - btnW - 20, y: viewH - btnH - 20, w: btnW, h: btnH,
     };
-
-    // Clamp pan to the new viewport bounds.
-    const clamped = clampPan(
-      this._runMapPanX, this._runMapPanY,
-      worldW, worldH, viewW, viewH,
-    );
-    this._runMapPanX = clamped.x;
-    this._runMapPanY = clamped.y;
   }
 
   // Centre the map view on the player's current node. Called on first
@@ -2022,225 +1841,43 @@ export class StartMenu {
   // the middle of the screen.
   _centerPanOnCurrent(viewW, viewH) {
     const run = this.runState && this.runState.run;
-    if (!run || !this._runMapNodePositions) return;
-    const p = this._runMapNodePositions.get(run.nodePos);
-    if (!p) return;
-    // Shift the fleet panel's width out of the centring calc so the
-    // player position lands in the visible centre, not under the
-    // fleet panel.
-    const fleetW = Math.min(320, Math.max(260, viewW * 0.24));
-    const visibleCenterX = (viewW - fleetW) / 2;
-    const visibleCenterY = viewH / 2;
-    this._runMapPanX = visibleCenterX - p.x;
-    this._runMapPanY = visibleCenterY - p.y;
+    if (!run) return;
+    if (this._starmapControl) {
+      centerOnNode(this._starmapControl, run.nodePos, false);
+      // Sync our local pan vars so drag math stays consistent.
+      const pan = getPan(this._starmapControl);
+      this._runMapPanX = pan.x;
+      this._runMapPanY = pan.y;
+    }
   }
 
   _drawRunMap(ctx, viewW, viewH) {
-    const run = this.runState && this.runState.run;
-    const t = performance.now() / 1000;
-    const px = this._runMapPanX;
-    const py = this._runMapPanY;
-
-    // Galaxy backdrop — paints the whole screen with parallax stars +
-    // nebula clouds. Pan offset feeds the parallax.
-    if (this._runMapGalaxy) {
-      drawGalaxy(ctx, this._runMapGalaxy, px, py, viewW, viewH);
+    // The DOM starmap handles all its own rendering.
+    // Just sync the latest run data so HUD values stay fresh.
+    if (this._starmapControl) {
+      const run = this.runState && this.runState.run;
+      if (run) updateStarmap(this._starmapControl, run);
     } else {
+      // Fallback: dark bg if no starmap yet.
       ctx.fillStyle = "#02040a";
       ctx.fillRect(0, 0, viewW, viewH);
-    }
-
-    if (!run) {
       ctx.textAlign = "center";
       ctx.fillStyle = "#cef";
       ctx.font = "bold 26px system-ui, sans-serif";
-      ctx.fillText("NO ACTIVE RUN", viewW / 2, viewH / 2);
-      this._drawCloseFooterBtn(ctx);
+      ctx.fillText("NO ACTIVE CAMPAIGN", viewW / 2, viewH / 2);
       ctx.textAlign = "left";
-      return;
     }
-
-    // Reachable set — edges out of the player's current node.
-    const reachable = new Set();
-    for (const e of this.runMapRects.edges) {
-      if (e.fromId === run.nodePos) reachable.add(e.toId);
-    }
-
-    // Edges first — each translated by the pan offset so the curves
-    // ride with the chart.
-    for (const e of this.runMapRects.edges) {
-      const isCurrentOut = e.fromId === run.nodePos;
-      const isVisited = run.visitedNodeIds.includes(e.fromId) && run.visitedNodeIds.includes(e.toId);
-      const state = isCurrentOut ? "current-out"
-                  : isVisited     ? "visited"
-                  :                  "locked";
-      drawCurvedEdge(
-        ctx,
-        e.ax + px, e.ay + py,
-        e.bx + px, e.by + py,
-        state,
-        e.fromId * 31 + e.toId,
-        t,
-      );
-    }
-
-    // Nodes — pan offset applied per draw so click handler can keep
-    // working in world space.
-    const currentNode = this.runMapRects.nodes.find((n) => n.id === run.nodePos);
-    for (const n of this.runMapRects.nodes) {
-      const isCurrent = n.id === run.nodePos;
-      const isVisited = run.visitedNodeIds.includes(n.id);
-      const isReachable = reachable.has(n.id);
-      const state = isCurrent ? "current"
-                  : isVisited ? "visited"
-                  : isReachable ? "reachable"
-                  : "locked";
-      const screen = { ...n, x: n.x + px, y: n.y + py };
-      drawNodeArt(ctx, screen, state, t);
-    }
-
-    // Player fleet marker sits above the current node — small wing
-    // silhouette so the player's position is obvious at a glance.
-    if (currentNode) {
-      drawFleetMarker(ctx, currentNode.x + px, currentNode.y + py, t);
-    }
-
-    // Fuel-cost tooltip near each reachable edge: prevents the player
-    // from guessing which jumps they can afford.
-    ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    for (const e of this.runMapRects.edges) {
-      if (e.fromId !== run.nodePos) continue;
-      const midX = (e.ax + e.bx) / 2 + px;
-      const midY = (e.ay + e.by) / 2 + py;
-      const canAfford = run.resources.fuel >= e.fuelCost;
-      ctx.fillStyle = canAfford ? "rgba(140,210,255,0.95)" : "rgba(250,140,120,0.95)";
-      // Tiny chip background so the number reads over starfield.
-      const chipW = 32, chipH = 18;
-      ctx.fillStyle = "rgba(8,16,28,0.85)";
-      ctx.fillRect(midX - chipW / 2, midY - chipH / 2, chipW, chipH);
-      ctx.strokeStyle = canAfford ? "rgba(140,210,255,0.7)" : "rgba(250,140,120,0.7)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(midX - chipW / 2, midY - chipH / 2, chipW, chipH);
-      ctx.fillStyle = canAfford ? "#7df" : "#f97";
-      ctx.fillText(`⛽ ${e.fuelCost}`, midX, midY + 4);
-    }
-    ctx.textAlign = "left";
-
-    // Top HUD strip — currencies + act badge.
-    this._drawRunMapHeader(ctx, viewW, viewH, run);
-
-    // Fleet panel on the right.
-    this._drawFleetPanel(ctx, this.runMapRects.fleetPanel, run);
-
-    // Footer.
-    const ab = this.runMapRects.abandonBtn;
-    ctx.fillStyle = "rgba(60,30,30,0.88)";
-    ctx.fillRect(ab.x, ab.y, ab.w, ab.h);
-    ctx.strokeStyle = "#c66";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(ab.x, ab.y, ab.w, ab.h);
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#fbb";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText("ABANDON RUN", ab.x + ab.w / 2, ab.y + ab.h / 2 + 5);
-
-    this._drawCloseFooterBtn(ctx);
-    ctx.textAlign = "left";
   }
 
-  // Top header strip: act badge on the left, faction commander label,
+  // Top header strip: act badge on the left, faction admiral label,
   // and credits + fuel chips on the right. Sits over the galaxy so the
   // backdrop is still readable through the chrome.
-  _drawRunMapHeader(ctx, viewW, viewH, run) {
-    const h = this.runMapRects.header;
-    // Strip background — gradient from transparent at bottom up to
-    // semi-opaque at top so the chart fades cleanly into the chrome.
-    const g = ctx.createLinearGradient(0, h.y, 0, h.y + h.h);
-    g.addColorStop(0, "rgba(4,8,16,0.92)");
-    g.addColorStop(1, "rgba(4,8,16,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(h.x, h.y, h.w, h.h);
-    // Thin accent rule along the bottom of the strip.
-    ctx.fillStyle = "rgba(140,210,255,0.4)";
-    ctx.fillRect(h.x, h.y + h.h - 1, h.w, 1);
-
-    // Act badge — small rounded chip on the left.
-    const badgeW = 110, badgeH = 36;
-    ctx.fillStyle = "rgba(20,40,60,0.85)";
-    ctx.fillRect(20, 14, badgeW, badgeH);
-    ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(20, 14, badgeW, badgeH);
-    ctx.fillStyle = "#7bd";
-    ctx.font = "bold 10px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("CURRENT ACT", 28, 27);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.fillText(`${run.act} / ${ACTS_PER_RUN}`, 28, 46);
-
-    // Faction commander next to badge.
-    const faction = RACES[run.faction] ? RACES[run.faction].name : run.faction;
-    const factionAccent = (RACES[run.faction] && RACES[run.faction].accent) || "#7df";
-    ctx.fillStyle = "#9bd";
-    ctx.font = "10px system-ui, sans-serif";
-    ctx.fillText("COMMANDING", 20 + badgeW + 18, 27);
-    ctx.fillStyle = factionAccent;
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.fillText(faction, 20 + badgeW + 18, 46);
-
-    // Currency chips on the right — credits + fuel with icons.
-    const fleetW = this.runMapRects.fleetPanel ? this.runMapRects.fleetPanel.w : 280;
-    const chipsRight = viewW - fleetW - 20;
-    const fuelChipW = 100;
-    const credChipW = 130;
-    const chipH = 36;
-    const fuelChipX = chipsRight - fuelChipW;
-    const credChipX = fuelChipX - credChipW - 8;
-    // Credits chip.
-    ctx.fillStyle = "rgba(40,30,16,0.85)";
-    ctx.fillRect(credChipX, 14, credChipW, chipH);
-    ctx.strokeStyle = "#fc8";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(credChipX, 14, credChipW, chipH);
-    ctx.fillStyle = "#fc8";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("$", credChipX + 12, 38);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.textAlign = "right";
-    ctx.fillText(String(run.resources.credits), credChipX + credChipW - 12, 38);
-    // Fuel chip.
-    ctx.fillStyle = "rgba(20,40,50,0.85)";
-    ctx.fillRect(fuelChipX, 14, fuelChipW, chipH);
-    ctx.strokeStyle = "#7df";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(fuelChipX, 14, fuelChipW, chipH);
-    ctx.fillStyle = "#7df";
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("⛽", fuelChipX + 10, 38);
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "right";
-    ctx.fillText(String(run.resources.fuel), fuelChipX + fuelChipW - 12, 38);
-    ctx.textAlign = "left";
+  _drawRunMapHeader(/* ctx, viewW, viewH, run */) {
+    // now DOM-rendered by the starmap — see starmap.js
   }
 
-  _drawCloseFooterBtn(ctx) {
-    const c = this.runMapRects.closeBtn;
-    if (!c) return;
-    ctx.fillStyle = "rgba(30,50,40,0.85)";
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = "#6c9";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(c.x, c.y, c.w, c.h);
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#bfe";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText("BACK TO MENU", c.x + c.w / 2, c.y + c.h / 2 + 5);
-    ctx.textAlign = "left";
+  _drawCloseFooterBtn(/* ctx */) {
+    // now DOM-rendered by the starmap — see starmap.js
   }
 
   _drawNodeIcon(ctx, n, state) {
@@ -2304,101 +1941,8 @@ export class StartMenu {
     ctx.globalAlpha = 1;
   }
 
-  _drawFleetPanel(ctx, panel, run) {
-    if (!panel) return;
-    // Panel chrome — slightly lifted off the galaxy with a gradient so
-    // the right edge of the screen has visual weight as "your fleet HQ"
-    // distinct from the starmap chart.
-    const g = ctx.createLinearGradient(panel.x, 0, panel.x + panel.w, 0);
-    g.addColorStop(0, "rgba(4,10,20,0.6)");
-    g.addColorStop(0.25, "rgba(8,16,28,0.9)");
-    g.addColorStop(1, "rgba(8,16,28,0.95)");
-    ctx.fillStyle = g;
-    ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
-    // Left-edge accent rule (faces the chart).
-    ctx.fillStyle = "rgba(140,210,255,0.35)";
-    ctx.fillRect(panel.x, panel.y, 2, panel.h);
-
-    ctx.textAlign = "left";
-    ctx.fillStyle = "#7bd";
-    ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.fillText("FLEET ROSTER", panel.x + 18, panel.y + 24);
-    ctx.fillStyle = "rgba(140,210,255,0.18)";
-    ctx.fillRect(panel.x + 18, panel.y + 32, panel.w - 36, 1);
-
-    // Capital list — each ship gets a small silhouette + name + HP bar.
-    let cy = panel.y + 52;
-    for (const cap of run.capitals) {
-      // Silhouette badge.
-      this._drawCapitalGlyph(ctx, panel.x + 28, cy + 12, 14, cap.klass);
-      // Name + class role on two lines.
-      ctx.fillStyle = "#e6f4ff";
-      ctx.font = "bold 13px system-ui, sans-serif";
-      ctx.fillText(this._capitalName(cap.klass), panel.x + 52, cy + 8);
-      ctx.fillStyle = "#7bd";
-      ctx.font = "10px system-ui, sans-serif";
-      ctx.fillText(`HULL ${Math.round(cap.hpFrac * 100)}%`, panel.x + 52, cy + 22);
-      // HP bar across the right side of the row.
-      const barX = panel.x + 52;
-      const barW = panel.w - 80;
-      const barH = 6;
-      const barY = cy + 28;
-      ctx.fillStyle = "rgba(40,60,80,0.85)";
-      ctx.fillRect(barX, barY, barW, barH);
-      const fillW = barW * cap.hpFrac;
-      ctx.fillStyle = cap.hpFrac > 0.6 ? "#7df"
-                    : cap.hpFrac > 0.3 ? "#fc6"
-                    : "#f76";
-      ctx.fillRect(barX, barY, fillW, barH);
-      cy += 46;
-    }
-
-    // Small craft block.
-    cy += 8;
-    ctx.fillStyle = "#7bd";
-    ctx.font = "bold 11px system-ui, sans-serif";
-    ctx.fillText("SMALL CRAFT", panel.x + 18, cy);
-    ctx.fillStyle = "rgba(140,210,255,0.18)";
-    ctx.fillRect(panel.x + 18, cy + 6, panel.w - 36, 1);
-    cy += 22;
-    // Fighter + bomber rows with mini icons.
-    this._drawCapitalGlyph(ctx, panel.x + 28, cy + 8, 9, "fighter");
-    ctx.fillStyle = "#e6f4ff";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText("Fighters", panel.x + 50, cy + 12);
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 15px system-ui, sans-serif";
-    ctx.fillText(`× ${run.smallCraft.fighter}`, panel.x + panel.w - 18, cy + 12);
-    ctx.textAlign = "left";
-    cy += 26;
-    this._drawCapitalGlyph(ctx, panel.x + 28, cy + 8, 9, "bomber");
-    ctx.fillStyle = "#e6f4ff";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText("Bombers", panel.x + 50, cy + 12);
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 15px system-ui, sans-serif";
-    ctx.fillText(`× ${run.smallCraft.bomber}`, panel.x + panel.w - 18, cy + 12);
-    ctx.textAlign = "left";
-    cy += 30;
-
-    // Boons.
-    if (run.boons.length > 0) {
-      ctx.fillStyle = "#7bd";
-      ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.fillText("BOONS", panel.x + 18, cy);
-      ctx.fillStyle = "rgba(140,210,255,0.18)";
-      ctx.fillRect(panel.x + 18, cy + 6, panel.w - 36, 1);
-      cy += 22;
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillStyle = "#fe8";
-      for (const b of run.boons) {
-        // Wrap each boon at panel width.
-        ctx.fillText(`◆ ${b.desc}`, panel.x + 18, cy);
-        cy += 16;
-      }
-    }
+  _drawFleetPanel(/* ctx, panel, run */) {
+    // now DOM-rendered by the starmap — see starmap.js
   }
 
   // Tiny ship silhouette for the fleet panel. Each klass gets a
@@ -2491,67 +2035,26 @@ export class StartMenu {
     return klass;
   }
 
-  _clickRunMap(x, y) {
+  _clickRunMap(/* x, y */) {
+    // handled by DOM starmap — all click routing is in onNodeClick callback
+  }
+
+  _routeNodeClick(node) {
     const run = this.runState && this.runState.run;
-    // A drag that moved the map shouldn't also count as a click on a
-    // node underneath the release point. The drag start was logged in
-    // _startRunMapDrag; we only treat this as a tap if no significant
-    // pan happened during the gesture.
-    if (this._runMapDragMoved) {
-      this._runMapDragMoved = false;
-      return;
-    }
-    if (this._hit(this.runMapRects.closeBtn, x, y)) {
-      this.showRunMap = false; return;
-    }
-    if (this._hit(this.runMapRects.abandonBtn, x, y)) {
-      if (this.onRunChoice) this.onRunChoice("abandon-run", {});
-      this.showRunMap = false; return;
-    }
     if (!run) return;
-    // Reject clicks landing inside the fleet panel — that's chrome,
-    // not the chart.
-    if (this._hit(this.runMapRects.fleetPanel, x, y)) return;
-    // Node clicks. Nodes are stored in WORLD space; translate the
-    // pointer back to world space by subtracting the pan offset.
-    const wx = x - this._runMapPanX;
-    const wy = y - this._runMapPanY;
-    for (const n of this.runMapRects.nodes) {
-      const dx = wx - n.x, dy = wy - n.y;
-      // Generous touch slack so a tap near (but not on) a star still
-      // registers — important on phones with thick fingers.
-      const hitR = n.r + 12;
-      if (dx * dx + dy * dy > hitR * hitR) continue;
-      // Must be a reachable edge target.
-      let reachable = false;
-      for (const e of this.runMapRects.edges) {
-        if (e.fromId === run.nodePos && e.toId === n.id) {
-          reachable = run.resources.fuel >= e.fuelCost;
-          break;
-        }
-      }
-      if (!reachable) return;
-      // Route to the right sub-overlay or launch a battle.
-      const graphNode = run.graphs[run.act - 1].nodes.find((m) => m.id === n.id);
-      if (!graphNode) return;
-      if (graphNode.type === "battle" || graphNode.type === "elite" || graphNode.type === "boss") {
-        this._pendingBattleNode = graphNode;
-        this._layoutBattleChoice(this._lastViewW || 1200, this._lastViewH || 800);
-        this.showBattleChoice = true;
-      } else if (graphNode.type === "resupply") {
-        // Resupply nodes open the depot overlay. Fuel cost + node
-        // completion happen when the player clicks CONTINUE inside the
-        // overlay (which dispatches enter-node-and-complete).
-        this._pendingResupplyNode = graphNode;
-        this._resupplyBoonOffers = this._pickBoonOffers();
-        this._layoutResupply(this._lastViewW || 1200, this._lastViewH || 800);
-        this.showResupply = true;
-      } else if (graphNode.type === "event") {
-        this._pendingEventNode = graphNode;
-        this._layoutEvent(this._lastViewW || 1200, this._lastViewH || 800);
-        this.showEvent = true;
-      }
-      return;
+    if (node.type === "battle" || node.type === "elite" || node.type === "boss") {
+      this._pendingBattleNode = node;
+      this._layoutBattleChoice(this._lastViewW || 1200, this._lastViewH || 800);
+      this.showBattleChoice = true;
+    } else if (node.type === "resupply") {
+      this._pendingResupplyNode = node;
+      this._resupplyBoonOffers = this._pickBoonOffers();
+      this._layoutResupply(this._lastViewW || 1200, this._lastViewH || 800);
+      this.showResupply = true;
+    } else if (node.type === "event") {
+      this._pendingEventNode = node;
+      this._layoutEvent(this._lastViewW || 1200, this._lastViewH || 800);
+      this.showEvent = true;
     }
   }
 
@@ -2567,10 +2070,11 @@ export class StartMenu {
     if (this._hit(this.runMapRects.header, x, y)) return false;
     if (this._hit(this.runMapRects.abandonBtn, x, y)) return false;
     if (this._hit(this.runMapRects.closeBtn, x, y)) return false;
+    const pan = this._starmapControl ? getPan(this._starmapControl) : { x: this._runMapPanX, y: this._runMapPanY };
     this._runMapDrag = {
       startX: x, startY: y,
-      startPanX: this._runMapPanX,
-      startPanY: this._runMapPanY,
+      startPanX: pan.x,
+      startPanY: pan.y,
     };
     this._runMapDragMoved = false;
     return true;
@@ -2585,16 +2089,14 @@ export class StartMenu {
     if (!this._runMapDragMoved && (dx * dx + dy * dy) > 16) {
       this._runMapDragMoved = true;
     }
-    if (this._runMapDragMoved) {
+    if (this._runMapDragMoved && this._starmapControl) {
       const panX = this._runMapDrag.startPanX + dx;
       const panY = this._runMapDrag.startPanY + dy;
-      const clamped = clampPan(
-        panX, panY,
-        this._runMapWorldW, this._runMapWorldH,
-        this._lastViewW || 1200, this._lastViewH || 800,
-      );
-      this._runMapPanX = clamped.x;
-      this._runMapPanY = clamped.y;
+      setPan(this._starmapControl, panX, panY);
+      // Sync local pan vars for consistency.
+      const pan = getPan(this._starmapControl);
+      this._runMapPanX = pan.x;
+      this._runMapPanY = pan.y;
     }
     return true;
   }
@@ -2673,111 +2175,7 @@ export class StartMenu {
   }
 
   _drawResupply(ctx, viewW, viewH) {
-    ctx.fillStyle = "rgba(2,8,18,0.78)";
-    ctx.fillRect(0, 0, viewW, viewH);
-
-    const p = this.resupplyRects.panel;
-    if (!p) return;
-    ctx.fillStyle = "rgba(8,16,28,0.95)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#6c9";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-    ctx.fillStyle = "#6c9";
-    ctx.fillRect(p.x, p.y, p.w, 3);
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 22px system-ui, sans-serif";
-    ctx.fillText("RESUPPLY DEPOT", p.x + p.w / 2, p.y + 38);
-
-    const run = this.runState && this.runState.run;
-    if (!run) { ctx.textAlign = "left"; return; }
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillStyle = "#9bd";
-    ctx.fillText(`${run.resources.credits} credits  ·  ${run.resources.fuel} fuel`,
-                 p.x + p.w / 2, p.y + 60);
-
-    // Repair rows.
-    ctx.textAlign = "left";
-    for (const r of this.resupplyRects.repairBtns) {
-      const cap = run.capitals.find((c) => c.instanceId === r.instanceId);
-      if (!cap) continue;
-      const cost = repairCostFor(cap);
-      const afford = run.resources.credits >= cost && cap.hpFrac < 1;
-      ctx.fillStyle = afford ? "rgba(30,60,90,0.92)" : "rgba(40,40,55,0.85)";
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = afford ? "#9cf" : "#566";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = "#cef";
-      ctx.font = "13px system-ui, sans-serif";
-      ctx.fillText(
-        `${this._capitalName(r.klass)} — ${Math.round(cap.hpFrac * 100)}%  →  100%`,
-        r.x + 12, r.y + 24,
-      );
-      ctx.textAlign = "right";
-      ctx.fillStyle = afford ? "#fe8" : "#866";
-      ctx.fillText(
-        cap.hpFrac >= 1 ? "FULL" : `${cost} cr`,
-        r.x + r.w - 12, r.y + 24,
-      );
-      ctx.textAlign = "left";
-    }
-
-    // Recruit / refuel.
-    const rf = this.resupplyRects.recruitFighterBtn;
-    const rb = this.resupplyRects.recruitBomberBtn;
-    const re = this.resupplyRects.refuelBtn;
-    this._drawShopBtn(ctx, rf, "Recruit Fighter (+1)", `8 cr`, run.resources.credits >= 8);
-    this._drawShopBtn(ctx, rb, "Recruit Bomber (+1)", `20 cr`, run.resources.credits >= 20);
-    this._drawShopBtn(ctx, re, "Refuel (+1 fuel)", `10 cr`, run.resources.credits >= 10);
-
-    // Boons.
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#9bd";
-    ctx.font = "bold 12px system-ui, sans-serif";
-    ctx.fillText("REFITS (1 FUEL EACH)", p.x + p.w / 2, this.resupplyRects.boonBtns[0].y - 6);
-    ctx.textAlign = "left";
-    for (const b of this.resupplyRects.boonBtns) {
-      const offer = this._resupplyBoonOffers && this._resupplyBoonOffers[b.slot];
-      if (!offer) continue;
-      const afford = run.resources.fuel >= 1;
-      ctx.fillStyle = afford ? "rgba(50,30,70,0.92)" : "rgba(40,40,55,0.85)";
-      ctx.fillRect(b.x, b.y, b.w, b.h);
-      ctx.strokeStyle = afford ? "#c9f" : "#566";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = "#fcf";
-      ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.fillText(offer.key, b.x + 8, b.y + 16);
-      ctx.font = "10px system-ui, sans-serif";
-      ctx.fillStyle = "#bce";
-      ctx.fillText(offer.desc, b.x + 8, b.y + 32);
-    }
-
-    // Continue + close.
-    const c = this.resupplyRects.continueBtn;
-    ctx.textAlign = "center";
-    ctx.fillStyle = "rgba(80,170,110,0.95)";
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = "#bff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(c.x, c.y, c.w, c.h);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.fillText("CONTINUE", c.x + c.w / 2, c.y + c.h / 2 + 6);
-
-    const cl = this.resupplyRects.closeBtn;
-    ctx.fillStyle = "rgba(40,50,60,0.85)";
-    ctx.fillRect(cl.x, cl.y, cl.w, cl.h);
-    ctx.strokeStyle = "#789";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(cl.x, cl.y, cl.w, cl.h);
-    ctx.fillStyle = "#bce";
-    ctx.fillText("BACK", cl.x + cl.w / 2, cl.y + cl.h / 2 + 6);
-
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem */
   }
 
   _drawShopBtn(ctx, r, label, cost, afford) {
@@ -2867,56 +2265,7 @@ export class StartMenu {
   }
 
   _drawEvent(ctx, viewW, viewH) {
-    ctx.fillStyle = "rgba(2,8,18,0.78)";
-    ctx.fillRect(0, 0, viewW, viewH);
-    const p = this.eventRects.panel;
-    if (!p) return;
-    ctx.fillStyle = "rgba(8,16,28,0.95)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#fc6";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-    ctx.fillStyle = "#fc6";
-    ctx.fillRect(p.x, p.y, p.w, 3);
-
-    const card = this._pendingEventNode
-      ? eventCardById(this._pendingEventNode.eventId)
-      : null;
-    if (!card) return;
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 22px system-ui, sans-serif";
-    ctx.fillText(card.title.toUpperCase(), p.x + p.w / 2, p.y + 40);
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillStyle = "#bce";
-    // Wrap body into multiple lines for readability.
-    this._wrapText(ctx, card.body, p.x + 32, p.y + 72, p.w - 64, 18);
-
-    // If a choice was just applied, show the result line above the
-    // buttons so the player sees what happened before clicking
-    // CONTINUE.
-    if (this.eventRects.lastResult) {
-      ctx.fillStyle = "#fe8";
-      ctx.font = "bold 12px system-ui, sans-serif";
-      ctx.fillText("» " + this.eventRects.lastResult,
-                   p.x + p.w / 2, p.y + p.h - this.eventRects.choiceBtns.length * 56 - 24);
-    }
-
-    // Choice buttons.
-    ctx.textAlign = "left";
-    for (const r of this.eventRects.choiceBtns) {
-      const opt = card.options[r.choiceIndex];
-      ctx.fillStyle = "rgba(40,50,60,0.92)";
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = "#9cf";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = "#cef";
-      ctx.font = "13px system-ui, sans-serif";
-      ctx.fillText(opt.label, r.x + 12, r.y + r.h / 2 + 5);
-    }
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem */
   }
 
   _clickEvent(x, y) {
@@ -2985,53 +2334,7 @@ export class StartMenu {
   }
 
   _drawBattleChoice(ctx, viewW, viewH) {
-    ctx.fillStyle = "rgba(2,8,18,0.78)";
-    ctx.fillRect(0, 0, viewW, viewH);
-    const p = this.battleChoiceRects.panel;
-    if (!p) return;
-    ctx.fillStyle = "rgba(8,16,28,0.95)";
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.strokeStyle = "#5af";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(p.x, p.y, p.w, p.h);
-
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#cef";
-    ctx.font = "bold 20px system-ui, sans-serif";
-    ctx.fillText("HOW WILL YOU FIGHT?", p.x + p.w / 2, p.y + 40);
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillStyle = "#9bd";
-    ctx.fillText("Pilot a fighter or command from the bridge.",
-                 p.x + p.w / 2, p.y + 60);
-
-    const fly = this.battleChoiceRects.fly;
-    const cmd = this.battleChoiceRects.command;
-    ctx.fillStyle = "rgba(80,170,110,0.95)";
-    ctx.fillRect(fly.x, fly.y, fly.w, fly.h);
-    ctx.strokeStyle = "#bff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(fly.x, fly.y, fly.w, fly.h);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 16px system-ui, sans-serif";
-    ctx.fillText("FLY", fly.x + fly.w / 2, fly.y + fly.h / 2 + 6);
-
-    ctx.fillStyle = "rgba(110,80,170,0.95)";
-    ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h);
-    ctx.strokeStyle = "#cbf";
-    ctx.strokeRect(cmd.x, cmd.y, cmd.w, cmd.h);
-    ctx.fillStyle = "#fff";
-    ctx.fillText("COMMAND", cmd.x + cmd.w / 2, cmd.y + cmd.h / 2 + 6);
-
-    const back = this.battleChoiceRects.back;
-    ctx.fillStyle = "rgba(40,50,60,0.85)";
-    ctx.fillRect(back.x, back.y, back.w, back.h);
-    ctx.strokeStyle = "#789";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(back.x, back.y, back.w, back.h);
-    ctx.fillStyle = "#bce";
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillText("BACK", back.x + back.w / 2, back.y + back.h / 2 + 5);
-    ctx.textAlign = "left";
+  /* DOM-rendered by MenuSystem */
   }
 
   _clickBattleChoice(x, y) {
@@ -3059,13 +2362,19 @@ export class StartMenu {
 export class InputManager {
   constructor(canvas) {
     this.canvas = canvas;
-    this.left = new VirtualStick({ side: "left", color: "#5cf" });
-    this.right = new VirtualStick({ side: "right", color: "#f76" });
+    this.left = new VirtualStick({ side: "left", color: "#7a9ab0",
+      baseEl: document.getElementById("vstick-left-base"),
+      knobEl: document.getElementById("vstick-left-knob") });
+    this.right = new VirtualStick({ side: "right", color: "#b05040",
+      baseEl: document.getElementById("vstick-right-base"),
+      knobEl: document.getElementById("vstick-right-knob") });
     this.missileBtn = new MissileButton();
     this.fireBtn = new FireButton();
+    this.boostBtn = new BoostButton();
     this.spectateBtn = new SpectateButton();
     this.admiralPanel = new AdmiralPanel();
     this.admiralActive = false; // set from main.js when game.admiralMode
+    this._battleHUD = null;
     this.startMenu = new StartMenu();
     this.menuActive = false;
 
@@ -3138,14 +2447,6 @@ export class InputManager {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  layoutOverlays(viewW, viewH) {
-    this.missileBtn.layout(viewW, viewH);
-    this.fireBtn.layout(viewW, viewH);
-    this.spectateBtn.layout(viewW, viewH);
-    this.startMenu.layout(viewW, viewH);
-    this.admiralPanel.layout(viewW, viewH);
-  }
-
   onDown(e) {
     e.preventDefault();
     const { x, y } = this.pos(e);
@@ -3157,7 +2458,7 @@ export class InputManager {
     } else {
       // Track every touch pointer for pinch detection. A second active
       // touch seeds the pinch baseline distance; the per-move handler
-      // accumulates zoom delta from changes to that distance.
+      // emits a zoom delta from changes to that distance.
       this._touches.set(e.pointerId, { x, y });
       if (this._touches.size === 2) {
         this._pinchPrevDist = this._touchDistance();
@@ -3199,6 +2500,11 @@ export class InputManager {
     if (this.spectateBtn.hit(x, y)) {
       this.canvas.setPointerCapture(e.pointerId);
       this.spectateBtn.start(e.pointerId);
+      return;
+    }
+    if (this.boostBtn.hit(x, y)) {
+      this.canvas.setPointerCapture(e.pointerId);
+      this.boostBtn.start(e.pointerId);
       return;
     }
 
@@ -3263,6 +2569,7 @@ export class InputManager {
     if (this.missileBtn.pointerId === e.pointerId) this.missileBtn.end();
     if (this.fireBtn.pointerId === e.pointerId) this.fireBtn.end();
     if (this.spectateBtn.pointerId === e.pointerId) this.spectateBtn.end();
+    if (this.boostBtn.pointerId === e.pointerId) this.boostBtn.end();
     if (e.pointerType !== "touch") {
       if (e.button === 2) this.mouseRightDown = false;
       else this.mouseDown = false;
@@ -3374,11 +2681,14 @@ export class InputManager {
     const firing = this.keys.has("Enter") || this.keys.has("Space")
                 || this.mouseDown || this.fireBtn.pressed;
 
-    return { thrust, aim, firing };
+    const boosting = this.keys.has("Space") || this.boostBtn.pressed
+                  || this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
+
+    return { thrust, aim, firing, boosting };
   }
 
   drawSticks(ctx) {
-    this.left.draw(ctx);
-    this.right.draw(ctx);
+    this.left._updateDOM();
+    this.right._updateDOM();
   }
 }

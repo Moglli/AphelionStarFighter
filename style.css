@@ -21,3 +21,4778 @@ html, body {
   touch-action: none;
 }
 
+
+/* ============================================================
+   HOLOGRAPHIC WAR TABLE STYLES — Aphelion Star Fighter Starmap
+   ============================================================ */
+
+/* -----------------------------------------------------------
+   1. CSS Custom Properties (Design Tokens)
+   ----------------------------------------------------------- */
+:root {
+  /* Background — deep void blue */
+  --starmap-bg: #02060f;
+  --starmap-grid: rgba(120, 180, 220, 0.08);
+
+  /* Glassmorphism panels — cool blue tints */
+  --panel-bg: rgba(10, 18, 30, 0.92);
+  --panel-border: rgba(120, 180, 220, 0.25);
+  --panel-glow: rgba(120, 200, 255, 0.12);
+
+  /* Node colors (semantic; tuned for space palette) */
+  --battle-color: #f44;
+  --battle-glow: rgba(255, 80, 80, 0.5);
+  --elite-color: #b070d0;
+  --elite-glow: rgba(176, 112, 208, 0.5);
+  --event-color: #6cc070;
+  --event-glow: rgba(108, 192, 112, 0.45);
+  --resupply-color: #5cf;
+  --resupply-glow: rgba(92, 204, 255, 0.45);
+  --boss-color: #ffd040;
+  --boss-glow: rgba(255, 208, 64, 0.6);
+  --current-halo: rgba(140, 220, 255, 0.9);
+
+  /* Connection lines */
+  --path-traversed: rgba(140, 180, 220, 0.7);
+  --path-available: rgba(180, 220, 255, 0.85);
+  --path-locked: rgba(60, 80, 100, 0.18);
+
+  /* Text */
+  --text-primary: #e8f0ff;
+  --text-secondary: #7898b8;
+  --text-accent: #9cf;
+
+  /* Side colors — match SIDES.blue/red in classes.js */
+  --allied-primary: #5cf;
+  --allied-accent: #2a6a90;
+  --hostile-primary: #f55;
+  --hostile-accent: #802020;
+
+  /* HUD */
+  --hud-strip-height: 56px;
+  --fleet-panel-width: clamp(260px, 24vw, 320px);
+}
+
+/* -----------------------------------------------------------
+   2. Root container — fullscreen overlay above canvas
+   ----------------------------------------------------------- */
+.starmap-root {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  touch-action: none;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+}
+
+/* -----------------------------------------------------------
+   3. Background layers — grid + starfield
+   ----------------------------------------------------------- */
+.starmap-bg-layer {
+  position: absolute;
+  inset: 0;
+  background: var(--starmap-bg);
+  overflow: hidden;
+}
+
+/* Subtle grid pattern */
+.starmap-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--starmap-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--starmap-grid) 1px, transparent 1px);
+  background-size: 80px 80px;
+  pointer-events: none;
+}
+
+/* CSS-generated starfield using box-shadow (no JS particles) */
+.starmap-starfield {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.starmap-starfield::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow:
+    12vw 8vh 1px 0 rgba(220,235,255,0.3),
+    34vw 22vh 1px 0 rgba(200,225,255,0.25),
+    56vw 12vh 2px 0 rgba(180,210,240,0.4),
+    78vw 35vh 1px 0 rgba(220,235,255,0.35),
+    18vw 45vh 2px 0 rgba(255,220,210,0.3),
+    45vw 55vh 1px 0 rgba(220,235,255,0.25),
+    67vw 68vh 2px 0 rgba(180,210,240,0.35),
+    89vw 78vh 1px 0 rgba(200,225,255,0.3),
+    25vw 82vh 1px 0 rgba(220,235,255,0.4),
+    52vw 88vh 2px 0 rgba(255,220,210,0.25),
+    8vw 62vh 1px 0 rgba(180,210,240,0.3),
+    72vw 18vh 1px 0 rgba(220,235,255,0.35),
+    38vw 72vh 2px 0 rgba(200,225,255,0.3),
+    92vw 48vh 1px 0 rgba(220,235,255,0.4),
+    15vw 28vh 1px 0 rgba(180,210,240,0.25),
+    62vw 42vh 2px 0 rgba(255,220,210,0.35),
+    82vw 92vh 1px 0 rgba(220,235,255,0.3),
+    5vw 95vh 1px 0 rgba(200,225,255,0.25),
+    48vw 5vh 2px 0 rgba(180,210,240,0.4),
+    95vw 62vh 1px 0 rgba(220,235,255,0.3),
+    28vw 38vh 1px 0 rgba(220,235,255,0.35),
+    55vw 75vh 1px 0 rgba(255,220,210,0.3),
+    73vw 28vh 2px 0 rgba(180,210,240,0.25),
+    88vw 15vh 1px 0 rgba(220,235,255,0.4),
+    20vw 58vh 1px 0 rgba(200,225,255,0.35),
+    42vw 92vh 1px 0 rgba(220,235,255,0.3),
+    60vw 3vh 2px 0 rgba(180,210,240,0.3),
+    85vw 52vh 1px 0 rgba(255,220,210,0.25),
+    35vw 65vh 1px 0 rgba(220,235,255,0.4),
+    10vw 15vh 1px 0 rgba(180,210,240,0.3),
+    68vw 85vh 1px 0 rgba(200,225,255,0.35),
+    50vw 48vh 3px 1px rgba(220,235,255,0.5),
+    22vw 18vh 2px 0 rgba(180,210,240,0.4),
+    75vw 72vh 1px 0 rgba(220,235,255,0.3);
+}
+
+.starmap-starfield::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow:
+    8vw 12vh 1px 0 rgba(220,235,255,0.5),
+    30vw 68vh 2px 0 rgba(180,210,240,0.45),
+    58vw 25vh 1px 0 rgba(200,225,255,0.4),
+    80vw 82vh 1px 0 rgba(220,235,255,0.5),
+    14vw 88vh 2px 0 rgba(180,210,240,0.35),
+    40vw 35vh 1px 0 rgba(255,220,210,0.4),
+    65vw 58vh 1px 0 rgba(220,235,255,0.45),
+    90vw 42vh 2px 0 rgba(200,225,255,0.35),
+    3vw 52vh 1px 0 rgba(180,210,240,0.5),
+    47vw 78vh 1px 0 rgba(220,235,255,0.4),
+    70vw 8vh 2px 0 rgba(255,220,210,0.45),
+    22vw 95vh 1px 0 rgba(180,210,240,0.35),
+    85vw 28vh 1px 0 rgba(220,235,255,0.5),
+    12vw 42vh 1px 0 rgba(200,225,255,0.4),
+    53vw 62vh 2px 0 rgba(180,210,240,0.45),
+    76vw 48vh 1px 0 rgba(220,235,255,0.4),
+    95vw 88vh 1px 0 rgba(255,220,210,0.35),
+    18vw 75vh 2px 0 rgba(180,210,240,0.5),
+    36vw 15vh 1px 0 rgba(220,235,255,0.45),
+    64vw 95vh 1px 0 rgba(200,225,255,0.4);
+}
+
+/* -----------------------------------------------------------
+   4. World container — pannable via CSS transform
+   ----------------------------------------------------------- */
+.starmap-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  will-change: transform;
+  cursor: grab;
+}
+
+.starmap-world.dragging {
+  cursor: grabbing;
+}
+
+/* -----------------------------------------------------------
+   5. SVG Edges layer
+   ----------------------------------------------------------- */
+.starmap-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.starmap-edge {
+  fill: none;
+  stroke-linecap: round;
+  transition: opacity 0.3s ease;
+}
+
+.starmap-edge.edge-traversed {
+  stroke: var(--path-traversed);
+  stroke-width: 2.5;
+  opacity: 0.7;
+  filter: drop-shadow(0 0 4px var(--path-traversed));
+}
+
+.starmap-edge.edge-available {
+  stroke: var(--path-available);
+  stroke-width: 2;
+  stroke-dasharray: 8 4;
+  animation: marching-ants 1s linear infinite;
+  filter: drop-shadow(0 0 3px var(--path-available));
+}
+
+.starmap-edge.edge-locked {
+  stroke: var(--path-locked);
+  stroke-width: 1;
+  opacity: 0.1;
+}
+
+/* Warp lane flash animation for jumps */
+@keyframes warp-lane {
+  0% { opacity: 0; stroke-width: 1; }
+  50% { opacity: 1; stroke-width: 4; }
+  100% { opacity: 0; stroke-width: 1; }
+}
+
+/* Marching ants for available paths */
+@keyframes marching-ants {
+  to { stroke-dashoffset: -20; }
+}
+
+/* -----------------------------------------------------------
+   6. Nodes container
+   ----------------------------------------------------------- */
+.starmap-nodes {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* -----------------------------------------------------------
+   7. Base node styles
+   ----------------------------------------------------------- */
+.starmap-node {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  margin-top: -22px;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+  animation: node-bob 3s ease-in-out infinite;
+  z-index: 2;
+}
+
+.starmap-node:hover {
+  z-index: 5;
+  filter: brightness(1.2);
+}
+
+/* Node internal parts */
+.node-glow {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  opacity: 0.6;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.node-core {
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.node-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: bold;
+  color: rgba(20, 16, 12, 0.9);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.node-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  pointer-events: none;
+  transition: border-color 0.3s ease;
+}
+
+/* Visited checkmark stamp */
+.node-visited-stamp {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  width: 16px;
+  height: 16px;
+  display: none;
+  pointer-events: none;
+}
+
+.node-visited-stamp::after {
+  content: "\2713";
+  color: #5a8aaa;
+  font-size: 12px;
+  font-weight: bold;
+  text-shadow: 0 0 4px rgba(140, 120, 80, 0.6);
+}
+
+/* "YOU ARE HERE" chevron for current node */
+.node-chevron {
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  color: var(--current-halo);
+  text-shadow: 0 0 6px var(--current-halo);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: node-bob 3s ease-in-out infinite reverse;
+  z-index: 4;
+}
+
+/* -----------------------------------------------------------
+   8. Node type styles — each with unique shape, color, glow
+   ----------------------------------------------------------- */
+
+/* Battle — sharp crosshair (4-point star), orange-red */
+.node-battle .node-glow {
+  background: radial-gradient(circle, var(--battle-glow) 0%, transparent 70%);
+}
+
+.node-battle .node-core {
+  background: var(--battle-color);
+  clip-path: polygon(50% 0%, 65% 35%, 100% 50%, 65% 65%, 50% 100%, 35% 65%, 0% 50%, 35% 35%);
+  animation: battle-pulse 2s ease-in-out infinite;
+}
+
+.node-battle .node-glyph::after {
+  content: "B";
+  font-size: 14px;
+}
+
+/* Elite — jagged diamond (rotated square), purple */
+.node-elite .node-glow {
+  background: radial-gradient(circle, var(--elite-glow) 0%, transparent 70%);
+}
+
+.node-elite .node-core {
+  background: var(--elite-color);
+  clip-path: polygon(50% 5%, 95% 50%, 50% 95%, 5% 50%);
+  animation: elite-rotate 8s linear infinite, battle-pulse 2s ease-in-out infinite;
+}
+
+.node-elite .node-glyph::after {
+  content: "E";
+  font-size: 14px;
+}
+
+/* Elite crown aura ring */
+.node-elite .node-ring {
+  border-color: var(--elite-color);
+  border-style: dashed;
+  inset: -10px;
+  animation: elite-rotate 12s linear infinite reverse;
+}
+
+/* Event — swirl circle, cyan */
+.node-event .node-glow {
+  background: radial-gradient(circle, var(--event-glow) 0%, transparent 70%);
+}
+
+.node-event .node-core {
+  background: var(--event-color);
+  clip-path: circle(45%);
+  animation: event-drift 4s ease-in-out infinite;
+}
+
+.node-event .node-glyph::after {
+  content: "?";
+  font-size: 18px;
+  color: rgba(20, 16, 12, 0.85);
+}
+
+/* Event swirl via conic gradient overlay */
+.node-event .node-core::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0%, var(--event-color) 30%, transparent 60%, var(--event-color) 80%, transparent 100%);
+  opacity: 0.3;
+  animation: elite-rotate 6s linear infinite;
+  pointer-events: none;
+}
+
+/* Resupply — hexagon, teal-green */
+.node-resupply .node-glow {
+  background: radial-gradient(circle, var(--resupply-glow) 0%, transparent 70%);
+}
+
+.node-resupply .node-core {
+  background: var(--resupply-color);
+  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+  animation: ring-rotate 6s linear infinite;
+}
+
+.node-resupply .node-glyph::after {
+  content: "R";
+  font-size: 12px;
+}
+
+/* Resupply rotating ring */
+.node-resupply .node-ring {
+  border-color: var(--resupply-color);
+  inset: -10px;
+  animation: ring-rotate 6s linear infinite;
+}
+
+/* Boss — large starburst (8-point), gold */
+.node-boss {
+  width: 64px;
+  height: 64px;
+  margin-left: -32px;
+  margin-top: -32px;
+}
+
+.node-boss .node-glow {
+  background: radial-gradient(circle, var(--boss-glow) 0%, transparent 70%);
+  animation: lens-pulse 3s ease-in-out infinite;
+}
+
+.node-boss .node-core {
+  background: var(--boss-color);
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+}
+
+.node-boss .node-glyph::after {
+  content: "\2605";
+  font-size: 20px;
+  color: rgba(20, 16, 12, 0.8);
+}
+
+/* -----------------------------------------------------------
+   9. Node state styles
+   ----------------------------------------------------------- */
+
+/* Current — bright halo + "YOU ARE HERE" chevron */
+.node-state-current .node-glow {
+  box-shadow: 0 0 12px var(--current-halo), 0 0 24px var(--current-halo);
+  animation: breathe-glow 2.5s ease-in-out infinite;
+}
+
+.node-state-current .node-ring {
+  border-color: var(--current-halo);
+  border-width: 2px;
+  animation: breathe-glow 2.5s ease-in-out infinite;
+}
+
+/* Reachable — full brightness, clickable */
+.node-state-reachable {
+  opacity: 1;
+}
+
+.node-state-reachable .node-glow {
+  opacity: 0.8;
+}
+
+.node-state-reachable .node-ring {
+  border-color: rgba(180, 220, 255, 0.5);
+  border-style: solid;
+}
+
+/* Visited — desaturated, dimmed, checkmark stamp */
+.node-state-visited {
+  filter: grayscale(70%) brightness(0.6);
+  opacity: 0.75;
+}
+
+.node-state-visited .node-glow {
+  opacity: 0.3;
+}
+
+.node-state-visited .node-visited-stamp {
+  display: block;
+}
+
+/* Locked — small, grayscale, low opacity, no interactions */
+.node-state-locked {
+  transform: scale(0.75);
+  opacity: 0.3;
+  pointer-events: none;
+  filter: grayscale(100%);
+}
+
+.node-state-locked .node-glow {
+  opacity: 0.1;
+}
+
+.node-state-locked .node-ring {
+  border-color: #666;
+  border-style: dashed;
+}
+
+/* -----------------------------------------------------------
+   10. Keyframe animations
+   ----------------------------------------------------------- */
+
+/* Gentle bob per node */
+@keyframes node-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+/* Battle heartbeat pulse */
+@keyframes battle-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+/* Elite slow rotation */
+@keyframes elite-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Event drift */
+@keyframes event-drift {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(2px, -1px); }
+  75% { transform: translate(-1px, 2px); }
+}
+
+/* Resupply ring rotation */
+@keyframes ring-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Boss lensing pulse */
+@keyframes lens-pulse {
+  0%, 100% { filter: blur(0); }
+  50% { filter: blur(2px) brightness(1.3); }
+}
+
+/* Current breathing halo */
+@keyframes breathe-glow {
+  0%, 100% { box-shadow: 0 0 12px var(--current-halo); }
+  50% { box-shadow: 0 0 24px var(--current-halo), 0 0 48px var(--current-halo); }
+}
+
+/* -----------------------------------------------------------
+   11. Fleet Panel — right sidebar, glassmorphism
+   ----------------------------------------------------------- */
+.starmap-fleet-panel {
+  position: fixed;
+  top: var(--hud-strip-height);
+  right: 0;
+  width: var(--fleet-panel-width);
+  bottom: 0;
+  background: linear-gradient(180deg,
+    rgba(4, 10, 20, 0.6) 0%,
+    rgba(30, 24, 18, 0.9) 25%,
+    rgba(30, 24, 18, 0.95) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-left: 2px solid rgba(180, 220, 255, 0.35);
+  padding: 18px 16px;
+  overflow-y: auto;
+  z-index: 20;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+.fleet-panel-header {
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.fleet-panel-divider {
+  height: 1px;
+  background: rgba(180, 220, 255, 0.18);
+  margin: 12px 0;
+}
+
+.fleet-panel-capitals {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fleet-capital-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fleet-capital-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fleet-capital-glyph {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.fleet-capital-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.fleet-capital-hp-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.fleet-hp-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fleet-hp-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.fleet-hp-bar-fill.hp-high {
+  background: #5cf;
+}
+
+.fleet-hp-bar-fill.hp-mid {
+  background: #fc6;
+}
+
+.fleet-hp-bar-fill.hp-low {
+  background: #f55;
+}
+
+.fleet-panel-craft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fleet-craft-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.fleet-craft-name {
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.fleet-craft-count {
+  font-weight: bold;
+  font-size: 15px;
+  color: #fff;
+}
+
+.fleet-panel-boons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fleet-boon-item {
+  font-size: 12px;
+  color: #fe8;
+}
+
+.fleet-panel-section-title {
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 1.2px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+/* -----------------------------------------------------------
+   12. Header HUD — top strip
+   ----------------------------------------------------------- */
+.starmap-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: var(--fleet-panel-width);
+  height: var(--hud-strip-height);
+  background: linear-gradient(180deg,
+    rgba(4, 8, 16, 0.92) 0%,
+    rgba(4, 8, 16, 0) 100%);
+  border-bottom: 1px solid rgba(180, 220, 255, 0.4);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 20px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.header-badge {
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 40, 60, 0.85);
+  border: 1.5px solid #5cf;
+  padding: 4px 14px;
+  min-width: 90px;
+}
+
+.badge-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: #a89878;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.badge-value {
+  font-size: 18px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.header-faction {
+  display: flex;
+  flex-direction: column;
+  margin-left: 4px;
+}
+
+.faction-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.faction-value {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.header-currencies {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.cred-chip,
+.fuel-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 15px;
+  font-weight: bold;
+}
+
+.cred-chip {
+  background: rgba(40, 30, 16, 0.85);
+  border: 1.5px solid #fc8;
+  color: #fff;
+}
+
+.cred-icon {
+  color: #fc8;
+  font-size: 16px;
+}
+
+.fuel-chip {
+  background: rgba(20, 40, 50, 0.85);
+  border: 1.5px solid #5cf;
+  color: #fff;
+}
+
+.fuel-icon {
+  color: #5cf;
+  font-size: 14px;
+}
+
+/* -----------------------------------------------------------
+   13. Footer buttons
+   ----------------------------------------------------------- */
+.starmap-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: var(--fleet-panel-width);
+  padding: 14px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.starmap-btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1.5px solid;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+}
+
+.starmap-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.15);
+}
+
+.starmap-btn:active {
+  transform: translateY(0);
+  filter: brightness(0.9);
+}
+
+.abandon-btn {
+  background: rgba(60, 30, 30, 0.88);
+  border-color: #c66;
+  color: #fbb;
+}
+
+.close-btn {
+  background: rgba(30, 50, 40, 0.85);
+  border-color: #6c9;
+  color: #bfe;
+}
+
+/* -----------------------------------------------------------
+   14. Node tooltip
+   ----------------------------------------------------------- */
+.node-tooltip {
+  position: fixed;
+  z-index: 30;
+  background: rgba(30, 24, 18, 0.92);
+  border: 1px solid rgba(180, 220, 255, 0.4);
+  border-radius: 6px;
+  padding: 10px 14px;
+  min-width: 160px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.node-tooltip[aria-hidden="false"] {
+  opacity: 1;
+}
+
+.tooltip-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  text-transform: capitalize;
+}
+
+.tooltip-body {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.tooltip-cost {
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-accent);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tooltip-cost.unaffordable {
+  color: #f97;
+}
+
+/* -----------------------------------------------------------
+   15. Jump confirmation overlay
+   ----------------------------------------------------------- */
+.jump-confirm {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 40;
+  background: rgba(30, 24, 18, 0.95);
+  border: 1.5px solid rgba(180, 220, 255, 0.5);
+  border-radius: 8px;
+  padding: 24px 32px;
+  text-align: center;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: none;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+.jump-confirm[aria-hidden="false"] {
+  display: block;
+}
+
+.jump-confirm-text {
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.jump-confirm-cost {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 18px;
+}
+
+.jump-confirm-btn,
+.jump-cancel-btn {
+  padding: 8px 20px;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border: 1.5px solid;
+  cursor: pointer;
+  margin: 0 6px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+}
+
+.jump-confirm-btn {
+  background: rgba(30, 60, 80, 0.9);
+  border-color: #5cf;
+  color: #cdf;
+}
+
+.jump-confirm-btn:hover {
+  background: rgba(50, 42, 28, 0.95);
+  transform: translateY(-1px);
+}
+
+.jump-cancel-btn {
+  background: rgba(40, 30, 30, 0.85);
+  border-color: #c66;
+  color: #ebb;
+}
+
+.jump-cancel-btn:hover {
+  background: rgba(70, 40, 40, 0.9);
+  transform: translateY(-1px);
+}
+
+/* -----------------------------------------------------------
+   16. Fuel cost chips along edges
+   ----------------------------------------------------------- */
+.fuel-cost-chip {
+  position: absolute;
+  background: rgba(30, 24, 18, 0.9);
+  border: 1px solid rgba(180, 220, 255, 0.5);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-accent);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 3;
+}
+
+.fuel-cost-chip.unaffordable {
+  border-color: rgba(250, 140, 120, 0.5);
+  color: #f97;
+}
+
+/* -----------------------------------------------------------
+   17. Animations continued
+   ----------------------------------------------------------- */
+
+/* Warp lane animation class (applied via JS on jump) */
+.starmap-edge.warping {
+  animation: warp-lane 0.8s ease-out forwards;
+}
+
+/* -----------------------------------------------------------
+   18. Responsive breakpoints
+   ----------------------------------------------------------- */
+
+/* Mobile (375px+) */
+@media (max-width: 767px) {
+  :root {
+    --fleet-panel-width: 200px;
+    --hud-strip-height: 48px;
+  }
+  .starmap-node {
+    transform: scale(0.8);
+  }
+  .starmap-fleet-panel {
+    font-size: 12px;
+    padding: 10px 8px;
+  }
+  .starmap-header {
+    gap: 8px;
+    padding: 0 10px;
+  }
+  .header-badge {
+    padding: 3px 8px;
+    min-width: 70px;
+  }
+  .badge-value {
+    font-size: 15px;
+  }
+  .faction-value {
+    font-size: 13px;
+  }
+  .starmap-footer {
+    padding: 8px 10px;
+  }
+  .starmap-btn {
+    padding: 8px 12px;
+    font-size: 11px;
+  }
+}
+
+/* Tablet */
+@media (min-width: 768px) and (max-width: 1199px) {
+  :root {
+    --fleet-panel-width: 260px;
+  }
+}
+
+/* Desktop (1200px+) */
+@media (min-width: 1200px) {
+  :root {
+    --fleet-panel-width: 300px;
+  }
+}
+
+/* 4K */
+@media (min-width: 2560px) {
+  :root {
+    --fleet-panel-width: 360px;
+  }
+  .starmap-node {
+    transform: scale(1.1);
+  }
+}
+
+/* -----------------------------------------------------------
+   19. Accessibility — prefers-reduced-motion
+   ----------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .starmap-node,
+  .starmap-edge,
+  .node-ring,
+  .node-glow,
+  .node-core,
+  .node-boss .node-glow,
+  .node-event .node-core::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .starmap-world {
+    transition: none !important;
+  }
+}
+
+/* -----------------------------------------------------------
+   20. Canvas / Starmap layering coordination
+   -----------------------------------------------------------
+   The canvas (#game) draws sub-overlays (resupply, event, battle
+   choice) which must appear on top of the starmap.  The starmap
+   normally sits at z-index 10; when a canvas sub-overlay is
+   active it drops to z-index 1 so the canvas (z-index 5) renders
+   above it.  The starmap background peeks through the semi-
+   transparent overlay fills drawn by the canvas code.
+   ----------------------------------------------------------- */
+#game { z-index: 5; }
+.starmap-root.behind-canvas { z-index: 1; }
+
+
+/* ============================================================
+   MENU SYSTEM — DOM-based screens for all game menus
+   ============================================================ */
+
+/* -----------------------------------------------------------
+   1. CSS Custom Properties (Menu Design Tokens)
+   ----------------------------------------------------------- */
+:root {
+  /* Menu backgrounds */
+  --menu-bg: rgba(26, 21, 16, 0.78);
+  --panel-bg: rgba(30, 24, 18, 0.92);
+  --panel-border: rgba(120, 180, 220, 0.25);
+  --panel-accent: #5cf;
+
+  /* Chip styling */
+  --chip-bg: rgba(30, 24, 18, 0.92);
+  --chip-border: rgba(120, 180, 220, 0.55);
+  --chip-selected-bg: linear-gradient(180deg, rgba(140, 120, 80, 0.95), rgba(90, 70, 40, 0.95));
+  --chip-selected-border: #9cf;
+
+  /* Button colors */
+  --btn-start-bg: linear-gradient(180deg, rgba(140, 120, 80, 0.95), rgba(90, 70, 40, 0.95));
+  --btn-start-border: #9cf;
+  --btn-cancel-bg: rgba(80, 30, 30, 0.92);
+  --btn-cancel-border: #c06060;
+
+  /* Text colors */
+  --text-primary: #e8f0ff;
+  --text-secondary: #a89878;
+  --text-muted: #8a7a5a;
+  --scrim: rgba(26, 21, 16, 0.86);
+
+  /* z-index layering */
+  --menu-z-root: 15;
+  --menu-z-widgets: 25;
+}
+
+/* -----------------------------------------------------------
+   2. .menu-root — fullscreen container
+   ----------------------------------------------------------- */
+.menu-root {
+  position: fixed;
+  inset: 0;
+  z-index: var(--menu-z-root);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.menu-root.active {
+  visibility: visible;
+}
+
+.menu-screen {
+  pointer-events: auto;
+}
+
+/* -----------------------------------------------------------
+   3. .menu-scrim — dark overlay behind panels
+   ----------------------------------------------------------- */
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.menu-root.active:has(.menu-screen.active:not(.menu-main)) .menu-scrim {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Fallback for browsers without :has() support —
+   menus.js toggles .menu-scrim.active directly */
+.menu-scrim.active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* -----------------------------------------------------------
+   4. Screen visibility system
+   ----------------------------------------------------------- */
+.menu-screen {
+  display: none;
+}
+
+.menu-screen.active {
+  display: flex;
+}
+
+.menu-main {
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+/* -----------------------------------------------------------
+   5. Main Menu — title
+   ----------------------------------------------------------- */
+.menu-title {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.menu-title h1 {
+  font-size: 38px;
+  font-weight: bold;
+  color: var(--text-primary);
+  letter-spacing: 3px;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.menu-title-accent {
+  width: 400px;
+  max-width: 80vw;
+  height: 2px;
+  background: var(--panel-accent);
+  margin: 8px auto;
+  box-shadow: 0 0 8px rgba(120, 200, 255, 0.5);
+}
+
+.menu-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  letter-spacing: 6px;
+  margin: 4px 0 0;
+  text-transform: uppercase;
+}
+
+/* -----------------------------------------------------------
+   6. Chip rows
+   ----------------------------------------------------------- */
+.menu-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-muted);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-label::before,
+.section-label::after {
+  content: "";
+  display: block;
+  width: 40px;
+  height: 1px;
+  background: rgba(120, 180, 220, 0.3);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: center;
+}
+
+.chip-item {
+  background: var(--chip-bg);
+  border: 1.5px solid var(--chip-border);
+  color: #cdf;
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 120px;
+  text-align: center;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  font-family: inherit;
+}
+
+.chip-item:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.chip-item.selected {
+  background: var(--chip-selected-bg);
+  border-color: var(--chip-selected-border);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.chip-label {
+  font-size: 15px;
+  font-weight: bold;
+}
+
+.chip-sublabel {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: normal;
+}
+
+.chip-item.selected .chip-sublabel {
+  color: rgba(220, 240, 255, 0.85);
+}
+
+/* -----------------------------------------------------------
+   7. START button
+   ----------------------------------------------------------- */
+.menu-start-btn {
+  position: relative;
+  width: 260px;
+  height: 56px;
+  background: var(--btn-start-bg);
+  border: 1.5px solid var(--btn-start-border);
+  color: #fff;
+  font-size: 24px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  clip-path: polygon(10px 0%, calc(100% - 10px) 0%, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0% calc(100% - 10px), 0% 10px);
+  margin-top: 4px;
+}
+
+/* Glow plate behind */
+.menu-start-btn::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  background: radial-gradient(ellipse, rgba(140, 120, 80, 0.3) 0%, transparent 70%);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.menu-start-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-2px);
+}
+
+.menu-start-btn:active {
+  filter: brightness(0.9);
+  transform: translateY(0);
+}
+
+/* Out of energy variant */
+.menu-start-btn.out-of-energy {
+  background: linear-gradient(180deg, rgba(180, 60, 60, 0.95), rgba(110, 30, 30, 0.95));
+  border-color: #f88;
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+.menu-start-btn.out-of-energy::before {
+  background: radial-gradient(ellipse, rgba(180, 60, 60, 0.25) 0%, transparent 70%);
+}
+
+/* -----------------------------------------------------------
+   8. Energy bar widget
+   ----------------------------------------------------------- */
+.menu-energy-bar {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  z-index: var(--menu-z-widgets);
+  background: var(--panel-bg);
+  border: 1.5px solid var(--panel-border);
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: auto;
+}
+
+.menu-energy-bar:hover {
+  filter: brightness(1.15);
+  border-color: rgba(180, 220, 255, 0.45);
+}
+
+.energy-bar-inner {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.energy-label {
+  font-size: 10px;
+  font-weight: bold;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+
+.energy-count {
+  font-size: 18px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.energy-regen {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.energy-refill-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: var(--panel-accent);
+  letter-spacing: 0.5px;
+}
+
+/* Energy bar border states */
+.menu-energy-bar.energy-empty {
+  border-color: rgba(220, 80, 80, 0.55);
+}
+
+.menu-energy-bar.energy-full {
+  border-color: rgba(80, 200, 120, 0.55);
+}
+
+/* -----------------------------------------------------------
+   9. Settings button widget
+   ----------------------------------------------------------- */
+.menu-settings-btn {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: var(--menu-z-widgets);
+  background: var(--panel-bg);
+  border: 1.5px solid var(--panel-border);
+  padding: 10px 18px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  pointer-events: auto;
+}
+
+.menu-settings-btn:hover {
+  filter: brightness(1.15);
+  border-color: rgba(180, 220, 255, 0.45);
+}
+
+/* Orange dot indicator when music is muted */
+.menu-settings-btn.muted::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f80;
+  box-shadow: 0 0 4px rgba(255, 136, 0, 0.6);
+}
+
+/* -----------------------------------------------------------
+   10. Overlay panels (shared)
+   ----------------------------------------------------------- */
+.overlay-panel {
+  background: var(--panel-bg);
+  border: 1.5px solid var(--panel-border);
+  padding: 32px;
+  min-width: 360px;
+  max-width: 90vw;
+  position: relative;
+  clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.panel-accent-rule {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--panel-accent);
+}
+
+.overlay-panel h2 {
+  font-size: 20px;
+  font-weight: bold;
+  color: var(--text-primary);
+  letter-spacing: 2px;
+  margin: 0;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+/* Panel sizing per overlay type */
+.settings-panel,
+.refill-panel {
+  min-width: 360px;
+}
+
+.custom-panel {
+  min-width: 720px;
+  max-width: 95vw;
+}
+
+.resupply-panel {
+  min-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.event-panel {
+  min-width: 420px;
+}
+
+.runsetup-panel {
+  background: var(--panel-bg);
+  border: 1.5px solid var(--panel-border);
+  padding: 40px;
+  min-width: 560px;
+  max-width: 90vw;
+  position: relative;
+  clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.runsetup-panel h2 {
+  font-size: 20px;
+  font-weight: bold;
+  color: var(--text-primary);
+  letter-spacing: 2px;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+/* Close button inside overlays */
+.overlay-close-btn {
+  padding: 10px 28px;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  background: rgba(40, 80, 60, 0.9);
+  border: 1.5px solid #9f8;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  margin-top: 8px;
+  pointer-events: auto;
+}
+
+.overlay-close-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+/* Animation: fade-in + scale on active */
+.menu-screen.active .overlay-panel,
+.menu-screen.active .runsetup-panel {
+  animation: menu-fade-in 0.2s ease-out;
+}
+
+/* -----------------------------------------------------------
+   11. Settings overlay
+   ----------------------------------------------------------- */
+.settings-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.settings-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: rgba(50, 42, 30, 0.95);
+  border: 2px solid #5cf;
+  color: #cdf;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  width: 100%;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  pointer-events: auto;
+}
+
+.settings-toggle.off {
+  background: rgba(60, 30, 30, 0.85);
+  border-color: #c66;
+}
+
+.settings-toggle:hover {
+  filter: brightness(1.1);
+}
+
+.toggle-label {
+  font-size: 14px;
+  letter-spacing: 1px;
+}
+
+.toggle-value {
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.settings-toggle:not(.off) .toggle-value {
+  color: #9f8;
+}
+
+.settings-toggle.off .toggle-value {
+  color: #fcc;
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 4px 0;
+}
+
+/* -----------------------------------------------------------
+   12. Refill overlay
+   ----------------------------------------------------------- */
+.refill-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
+}
+
+.refill-packages {
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.refill-package {
+  background: rgba(32, 26, 20, 0.95);
+  border: 1.5px solid rgba(120, 180, 220, 0.4);
+  padding: 20px 16px;
+  min-width: 120px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.refill-package:hover {
+  filter: brightness(1.15);
+  transform: translateY(-3px);
+  border-color: rgba(180, 220, 255, 0.6);
+}
+
+.refill-package .package-label {
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.refill-package .package-amount {
+  font-size: 28px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.refill-package .package-price {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--panel-accent);
+}
+
+/* -----------------------------------------------------------
+   13. Custom match overlay
+   ----------------------------------------------------------- */
+.custom-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  text-align: center;
+  margin: 0;
+}
+
+.custom-sides {
+  display: flex;
+  gap: 24px;
+  width: 100%;
+}
+
+.custom-side {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.custom-side-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(120, 180, 220, 0.2);
+}
+
+.side-title {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-muted);
+  letter-spacing: 1.5px;
+}
+
+.side-race {
+  font-size: 18px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.side-tagline {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Race chips in custom panel — smaller variant */
+.custom-race-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.custom-race-chips .chip-item {
+  min-width: 80px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.custom-divider {
+  height: 1px;
+  background: rgba(120, 180, 220, 0.15);
+  margin: 4px 0;
+}
+
+/* Slider rows */
+.custom-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slider-badge {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 40, 60, 0.9);
+  border: 1px solid rgba(120, 180, 220, 0.35);
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  clip-path: polygon(3px 0%, calc(100% - 3px) 0%, 100% 3px, 100% calc(100% - 3px), calc(100% - 3px) 100%, 3px 100%, 0% calc(100% - 3px), 0% 3px);
+}
+
+.slider-class-name {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-primary);
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.custom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 8px;
+  background: rgba(32, 26, 20, 0.95);
+  border: 1px solid rgba(120, 180, 220, 0.35);
+  outline: none;
+  cursor: pointer;
+}
+
+.custom-slider::-webkit-slider-runnable-track {
+  height: 8px;
+  background: rgba(32, 26, 20, 0.95);
+  border: none;
+}
+
+.custom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--panel-accent);
+  cursor: pointer;
+  margin-top: -5px;
+}
+
+.custom-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--panel-accent);
+  cursor: pointer;
+}
+
+.custom-slider::-moz-range-track {
+  height: 8px;
+  background: rgba(32, 26, 20, 0.95);
+  border: none;
+}
+
+.slider-count {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Side total */
+.custom-side-total {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  text-align: center;
+  padding-top: 8px;
+  border-top: 1px solid rgba(120, 180, 220, 0.2);
+}
+
+/* Grand total */
+.custom-totals {
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.custom-totals.total-blue {
+  color: #5cf;
+}
+
+.custom-totals.total-amber {
+  color: #fc6;
+}
+
+.custom-totals.total-red {
+  color: #f55;
+}
+
+/* Footer buttons */
+.custom-footer {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* -----------------------------------------------------------
+   14. Run setup overlay
+   ----------------------------------------------------------- */
+.runsetup-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
+}
+
+.faction-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 20px;
+  width: 100%;
+}
+
+.faction-card {
+  background: rgba(32, 26, 20, 0.95);
+  border: 1.5px solid rgba(120, 180, 220, 0.3);
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  pointer-events: auto;
+}
+
+.faction-card:hover {
+  transform: translateY(-4px) scale(1.03);
+  filter: brightness(1.15);
+  border-color: rgba(180, 220, 255, 0.55);
+}
+
+.faction-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  margin-bottom: 4px;
+}
+
+.faction-name {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+}
+
+.faction-tagline {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  font-style: italic;
+}
+
+.faction-record {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.runsetup-footer {
+  margin-top: 12px;
+}
+
+/* -----------------------------------------------------------
+   15. Battle choice overlay
+   ----------------------------------------------------------- */
+.battle-info {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin: 4px 0;
+}
+
+.battle-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  align-items: center;
+}
+
+.battle-btn {
+  width: 240px;
+  padding: 14px 20px;
+  font-size: 15px;
+}
+
+/* FLY INTO BATTLE — green */
+#battle-fly {
+  background: linear-gradient(180deg, rgba(140, 120, 80, 0.95), rgba(90, 70, 40, 0.95));
+  border-color: #9f8;
+  color: #fff;
+}
+
+/* COMMAND FLEET — blue */
+#battle-command {
+  background: linear-gradient(180deg, rgba(120, 100, 60, 0.95), rgba(70, 55, 30, 0.95));
+  border-color: #5cf;
+  color: #fff;
+}
+
+#battle-back {
+  margin-top: 8px;
+}
+
+/* -----------------------------------------------------------
+   16. Resupply overlay
+   ----------------------------------------------------------- */
+.resupply-section {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.resupply-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Repair rows */
+.repair-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(120, 180, 220, 0.1);
+}
+
+.repair-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-primary);
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.repair-hp-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.repair-hp-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.repair-hp-fill.hp-high {
+  background: #5cf;
+}
+
+.repair-hp-fill.hp-mid {
+  background: #fc6;
+}
+
+.repair-hp-fill.hp-low {
+  background: #f55;
+}
+
+.shop-btn {
+  padding: 10px 18px;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: rgba(30, 60, 40, 0.9);
+  border: 1.5px solid #6c9;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shop-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.shop-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+  pointer-events: none;
+}
+
+.shop-btn.wide {
+  width: 100%;
+  justify-content: center;
+}
+
+.shop-cost {
+  font-size: 11px;
+  color: #fc8;
+}
+
+/* Boon offers */
+.boon-offers {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.boon-card {
+  background: rgba(20, 30, 20, 0.95);
+  border: 1.5px solid rgba(120, 200, 255, 0.4);
+  padding: 16px 12px;
+  min-width: 100px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  pointer-events: auto;
+}
+
+.boon-card:hover {
+  filter: brightness(1.15);
+  transform: translateY(-2px);
+}
+
+.boon-card .boon-desc {
+  font-size: 12px;
+  color: #cfe;
+}
+
+/* Resupply footer */
+.overlay-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* -----------------------------------------------------------
+   17. Event overlay
+   ----------------------------------------------------------- */
+.event-body {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  text-align: center;
+  max-width: 480px;
+  padding: 8px 0;
+}
+
+.event-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  align-items: center;
+}
+
+.event-choice-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 20px;
+  background: rgba(20, 40, 60, 0.9);
+  border: 1.5px solid rgba(120, 180, 220, 0.4);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  pointer-events: auto;
+  width: 100%;
+  max-width: 400px;
+}
+
+.event-choice-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+  border-color: rgba(180, 220, 255, 0.6);
+}
+
+.choice-label {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.choice-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* -----------------------------------------------------------
+   18. Base button classes
+   ----------------------------------------------------------- */
+.menu-btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1.5px solid;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+}
+
+.menu-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.menu-btn:active {
+  filter: brightness(0.9);
+}
+
+.start-btn {
+  background: var(--btn-start-bg);
+  border-color: var(--btn-start-border);
+  color: #fff;
+}
+
+.cancel-btn {
+  background: var(--btn-cancel-bg);
+  border-color: var(--btn-cancel-border);
+  color: #fdd;
+}
+
+.close-btn {
+  background: rgba(40, 80, 60, 0.9);
+  border-color: #9f8;
+  color: #fff;
+}
+
+/* -----------------------------------------------------------
+   19. Animations
+   ----------------------------------------------------------- */
+@keyframes menu-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* -----------------------------------------------------------
+   20. Responsive breakpoints
+   ----------------------------------------------------------- */
+
+/* Mobile (<768px) */
+@media (max-width: 767px) {
+  .menu-title h1 {
+    font-size: 24px;
+    letter-spacing: 2px;
+  }
+
+  .menu-title-accent {
+    width: 240px;
+  }
+
+  .menu-subtitle {
+    font-size: 11px;
+    letter-spacing: 3px;
+  }
+
+  .chip-row {
+    gap: 8px;
+  }
+
+  .chip-item {
+    min-width: 90px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .overlay-panel {
+    min-width: 300px;
+    padding: 20px;
+  }
+
+  .custom-panel {
+    min-width: unset;
+    width: 95vw;
+  }
+
+  .custom-sides {
+    flex-direction: column;
+  }
+
+  .runsetup-panel {
+    min-width: unset;
+    width: 92vw;
+    padding: 24px 16px;
+  }
+
+  .faction-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+  }
+
+  .resupply-panel {
+    min-width: unset;
+    width: 95vw;
+  }
+
+  .menu-start-btn {
+    width: 220px;
+    height: 48px;
+    font-size: 20px;
+  }
+
+  .menu-energy-bar {
+    top: 10px;
+    left: 10px;
+    padding: 8px 12px;
+  }
+
+  .menu-settings-btn {
+    top: 10px;
+    right: 10px;
+    padding: 8px 14px;
+  }
+
+  .menu-main {
+    gap: 14px;
+    padding: 20px;
+  }
+
+  .event-panel {
+    min-width: unset;
+    width: 92vw;
+  }
+}
+
+/* Tablet (768px - 1199px) */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .menu-title h1 {
+    font-size: 34px;
+  }
+
+  .custom-panel {
+    min-width: 640px;
+  }
+
+  .overlay-panel {
+    min-width: 380px;
+  }
+}
+
+/* Desktop (1200px - 2559px) — default sizing, explicit for clarity */
+@media (min-width: 1200px) and (max-width: 2559px) {
+  /* Default sizing applies */
+}
+
+/* 4K (>=2560px) */
+@media (min-width: 2560px) {
+  .menu-title h1 {
+    font-size: 48px;
+    letter-spacing: 4px;
+  }
+
+  .menu-title-accent {
+    width: 520px;
+    height: 3px;
+  }
+
+  .menu-subtitle {
+    font-size: 16px;
+    letter-spacing: 8px;
+  }
+
+  .chip-item {
+    font-size: 18px;
+    padding: 16px 28px;
+    min-width: 150px;
+  }
+
+  .chip-sublabel {
+    font-size: 12px;
+  }
+
+  .overlay-panel {
+    padding: 40px;
+    min-width: 440px;
+  }
+
+  .overlay-panel h2 {
+    font-size: 24px;
+  }
+
+  .custom-panel {
+    min-width: 900px;
+  }
+
+  .menu-start-btn {
+    width: 300px;
+    height: 64px;
+    font-size: 28px;
+  }
+
+  .runsetup-panel {
+    min-width: 700px;
+    padding: 48px;
+  }
+
+  .faction-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 24px;
+  }
+
+  .menu-main {
+    gap: 28px;
+  }
+}
+
+/* -----------------------------------------------------------
+   21. Accessibility — prefers-reduced-motion
+   ----------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .menu-root,
+  .menu-scrim,
+  .menu-screen,
+  .overlay-panel,
+  .runsetup-panel,
+  .chip-item,
+  .menu-start-btn,
+  .menu-energy-bar,
+  .menu-settings-btn,
+  .settings-toggle,
+  .menu-btn,
+  .overlay-close-btn,
+  .shop-btn,
+  .refill-package,
+  .faction-card,
+  .event-choice-btn,
+  .boon-card,
+  .custom-slider {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .menu-screen.active .overlay-panel,
+  .menu-screen.active .runsetup-panel {
+    animation: none !important;
+  }
+}
+
+/* Focus-visible outlines for keyboard navigation */
+.chip-item:focus-visible,
+.menu-start-btn:focus-visible,
+.menu-energy-bar:focus-visible,
+.menu-settings-btn:focus-visible,
+.settings-toggle:focus-visible,
+.menu-btn:focus-visible,
+.overlay-close-btn:focus-visible,
+.shop-btn:focus-visible:not(:disabled),
+.refill-package:focus-visible,
+.faction-card:focus-visible,
+.event-choice-btn:focus-visible,
+.boon-card:focus-visible,
+.custom-slider:focus-visible {
+  outline: 2px solid var(--panel-accent);
+  outline-offset: 2px;
+}
+
+/* -----------------------------------------------------------
+   22. z-index coordination
+   -----------------------------------------------------------
+   Layer stack (bottom to top):
+
+     z-index  1  — .starmap-root.behind-canvas (starmap dimmed)
+     z-index  5  — #game (canvas element)
+     z-index 10  — .starmap-root (starmap active)
+     z-index 15  — .menu-root (menu system)
+     z-index 20  — .starmap-fleet-panel, .starmap-header,
+                   .starmap-footer (starmap HUD chrome)
+     z-index 25  — .menu-energy-bar, .menu-settings-btn
+                   (menu widgets above menu root)
+     z-index 30  — .node-tooltip (floating tooltip)
+     z-index 40  — .jump-confirm (modal dialog)
+   ----------------------------------------------------------- */
+
+
+/* ============================================================
+   UNIFIED DOM MENU SYSTEM — Aphelion Star Fighter
+   ============================================================ */
+
+/* -----------------------------------------------------------
+   1. CSS Custom Properties (Menu Design Tokens)
+   ----------------------------------------------------------- */
+:root {
+  --menu-bg: rgba(26, 21, 16, 0.78);
+  --panel-bg: rgba(30, 24, 18, 0.92);
+  --panel-border: rgba(120, 180, 220, 0.25);
+  --panel-accent: #5cf;
+  --chip-bg: rgba(30, 24, 18, 0.92);
+  --chip-border: rgba(120, 180, 220, 0.55);
+  --chip-selected-bg: linear-gradient(180deg, rgba(140,120,80,0.95), rgba(90,70,40,0.95));
+  --chip-selected-border: #9cf;
+  --btn-start-bg: linear-gradient(180deg, rgba(140,120,80,0.95), rgba(90,70,40,0.95));
+  --btn-start-border: #9cf;
+  --btn-cancel-bg: rgba(80, 30, 30, 0.92);
+  --btn-cancel-border: #c06060;
+  --text-primary: #e8f0ff;
+  --text-secondary: #a89878;
+  --text-muted: #8a7a5a;
+  --scrim: rgba(26, 21, 16, 0.86);
+}
+
+/* -----------------------------------------------------------
+   2. Root container
+   ----------------------------------------------------------- */
+.menu-root {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+  pointer-events: none;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.menu-root > * {
+  pointer-events: auto;
+}
+
+/* -----------------------------------------------------------
+   3. Scrim
+   ----------------------------------------------------------- */
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: none;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* -----------------------------------------------------------
+   4. Screen visibility
+   ----------------------------------------------------------- */
+.menu-screen {
+  display: none;
+}
+
+.menu-screen.active {
+  display: flex;
+}
+
+/* -----------------------------------------------------------
+   5. Main Menu
+   ----------------------------------------------------------- */
+.menu-main {
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+  padding: 40px 20px;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+.menu-title {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.menu-title h1 {
+  font-size: 38px;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: 1px;
+}
+
+.menu-title-accent {
+  width: 400px;
+  max-width: 80vw;
+  height: 2px;
+  background: var(--panel-accent);
+  margin: 8px auto;
+}
+
+.menu-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+  letter-spacing: 2px;
+}
+
+/* Chip sections */
+.menu-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  letter-spacing: 2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-label span {
+  display: inline-block;
+  width: 24px;
+  height: 1px;
+  background: rgba(120, 180, 220, 0.35);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: center;
+}
+
+/* Chips */
+.chip-item {
+  background: var(--chip-bg);
+  border: 1.5px solid var(--chip-border);
+  color: #cdf;
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 120px;
+  text-align: center;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  font-family: inherit;
+}
+
+.chip-item:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.chip-item.selected {
+  background: var(--chip-selected-bg);
+  border-color: var(--chip-selected-border);
+  color: #fff;
+}
+
+.chip-item .chip-sublabel {
+  font-size: 10px;
+  color: #a89878;
+  font-weight: normal;
+  margin-top: 2px;
+}
+
+.chip-item.selected .chip-sublabel {
+  color: rgba(220,240,255,0.85);
+}
+
+/* Small chips (custom match) */
+.chip-sm {
+  min-width: 70px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* Frontier status */
+.frontier-status {
+  font-size: 13px;
+  font-weight: bold;
+  color: #a89878;
+  text-align: center;
+  min-height: 20px;
+}
+
+/* START button */
+.menu-start-btn {
+  padding: 18px 64px;
+  font-size: 22px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border: 2px solid var(--btn-start-border);
+  cursor: pointer;
+  color: #fff;
+  background: var(--btn-start-bg);
+  clip-path: polygon(10px 0%, calc(100% - 10px) 0%, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0% calc(100% - 10px), 0% 10px);
+  transition: all 0.2s ease;
+  font-family: inherit;
+  margin-top: 8px;
+  position: relative;
+}
+
+.menu-start-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.menu-start-btn.out-of-energy {
+  background: rgba(70,30,30,0.95);
+  border-color: #c06060;
+  color: #fdd;
+  font-size: 18px;
+}
+
+/* -----------------------------------------------------------
+   6. Energy Bar
+   ----------------------------------------------------------- */
+.menu-energy-bar {
+  position: fixed;
+  top: 18px;
+  left: 18px;
+  z-index: 25;
+  background: rgba(36, 28, 22, 0.92);
+  border: 1.5px solid #5ad;
+  padding: 10px 16px;
+  min-width: 160px;
+  cursor: pointer;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: filter 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.menu-energy-bar:hover {
+  filter: brightness(1.15);
+}
+
+.energy-bar-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.energy-label {
+  font-size: 11px;
+  font-weight: bold;
+  color: #fd9;
+  letter-spacing: 0.5px;
+}
+
+.energy-count {
+  font-size: 16px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.energy-regen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 11px;
+  color: #a89878;
+}
+
+.energy-regen .regen-label {
+  font-size: 10px;
+  color: #a89878;
+}
+
+.energy-refill-label {
+  font-size: 11px;
+  font-weight: bold;
+  color: #fd9;
+  margin-left: auto;
+}
+
+/* -----------------------------------------------------------
+   7. Settings Button
+   ----------------------------------------------------------- */
+.menu-settings-btn {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 25;
+  background: rgba(20, 40, 60, 0.85);
+  border: 1.5px solid #5cf;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: bold;
+  color: #cdf;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.menu-settings-btn:hover {
+  filter: brightness(1.15);
+}
+
+.settings-mute-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fa8;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* -----------------------------------------------------------
+   8. Overlay Panels (shared)
+   ----------------------------------------------------------- */
+.overlay-panel {
+  background: var(--panel-bg);
+  border: 1.5px solid var(--panel-border);
+  padding: 32px;
+  min-width: 360px;
+  max-width: 90vw;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
+}
+
+.panel-accent-rule {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--panel-accent);
+}
+
+.overlay-panel h2 {
+  font-size: 22px;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin: 0;
+  text-align: center;
+}
+
+.overlay-close-btn {
+  padding: 10px 32px;
+  font-size: 15px;
+  font-weight: bold;
+  border: 2px solid #9f8;
+  background: rgba(40, 80, 60, 0.9);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: all 0.2s ease;
+}
+
+.overlay-close-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.overlay-footer {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* -----------------------------------------------------------
+   9. Settings Overlay
+   ----------------------------------------------------------- */
+.menu-settings .overlay-panel {
+  min-width: 380px;
+  padding: 32px 28px;
+}
+
+.settings-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.settings-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: rgba(50, 42, 30, 0.95);
+  border: 2px solid #5cf;
+  color: #cdf;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  width: 100%;
+  font-family: inherit;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  transition: all 0.2s ease;
+}
+
+.settings-toggle:hover {
+  filter: brightness(1.1);
+}
+
+.settings-toggle.off {
+  background: rgba(60, 30, 30, 0.85);
+  border-color: #c66;
+}
+
+.toggle-label {
+  font-size: 16px;
+}
+
+.toggle-value {
+  font-size: 20px;
+}
+
+.settings-toggle:not(.off) .toggle-value {
+  color: #9f8;
+}
+
+.settings-toggle.off .toggle-value {
+  color: #fcc;
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 4px 0 16px;
+  text-align: center;
+}
+
+/* -----------------------------------------------------------
+   10. Refill Overlay
+   ----------------------------------------------------------- */
+.refill-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.refill-packages {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.refill-package {
+  background: var(--chip-bg);
+  border: 1.5px solid var(--chip-border);
+  padding: 20px 28px;
+  text-align: center;
+  cursor: pointer;
+  color: #cdf;
+  font-family: inherit;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: all 0.2s ease;
+  min-width: 100px;
+}
+
+.refill-package:hover {
+  filter: brightness(1.15);
+  transform: translateY(-2px);
+  border-color: var(--panel-accent);
+}
+
+.pkg-amount {
+  font-size: 28px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.pkg-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.pkg-price {
+  font-size: 13px;
+  color: #fe8;
+  margin-top: 8px;
+  font-weight: bold;
+}
+
+/* -----------------------------------------------------------
+   11. Custom Match Overlay
+   ----------------------------------------------------------- */
+.custom-panel {
+  min-width: 720px;
+  max-width: 95vw;
+  padding: 28px 32px;
+}
+
+.custom-subtitle {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+  margin: 0;
+}
+
+.custom-sides {
+  display: flex;
+  gap: 24px;
+  width: 100%;
+  margin: 8px 0;
+}
+
+.custom-side {
+  flex: 1;
+  background: rgba(34, 28, 22, 0.85);
+  border: 1px solid rgba(120, 180, 220, 0.25);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.custom-side[data-side="allied"] {
+  border-left: 3px solid #5cf;
+}
+
+.custom-side[data-side="hostile"] {
+  border-right: 3px solid #f55;
+}
+
+.custom-side-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side-title {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--panel-accent);
+}
+
+.custom-side[data-side="hostile"] .side-title {
+  color: #f55;
+}
+
+.side-race {
+  font-size: 17px;
+  font-weight: bold;
+  color: #cdf;
+}
+
+.side-tagline {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.custom-race-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.custom-divider {
+  height: 1px;
+  background: rgba(120, 180, 220, 0.18);
+}
+
+.custom-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slider-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: rgba(20, 32, 48, 0.85);
+  border: 1px solid rgba(120, 180, 220, 0.4);
+  font-size: 10px;
+  font-weight: bold;
+  color: #cdf;
+  flex-shrink: 0;
+}
+
+.slider-name {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--text-primary);
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.custom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  background: rgba(32, 26, 20, 0.95);
+  border: 1px solid rgba(120, 180, 220, 0.35);
+  outline: none;
+  flex: 1;
+}
+
+.custom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--panel-accent);
+  cursor: pointer;
+}
+
+.custom-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--panel-accent);
+  cursor: pointer;
+}
+
+.slider-count {
+  font-size: 16px;
+  font-weight: bold;
+  color: #fff;
+  width: 28px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.custom-side-total {
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.custom-totals {
+  font-size: 13px;
+  color: #a89878;
+  text-align: center;
+  width: 100%;
+}
+
+.custom-footer {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* -----------------------------------------------------------
+   12. Run Setup Overlay
+   ----------------------------------------------------------- */
+.menu-runsetup {
+  align-items: center;
+  justify-content: center;
+}
+
+.runsetup-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 40px;
+  width: 100%;
+  max-width: 1200px;
+}
+
+.runsetup-panel h2 {
+  font-size: 34px;
+  font-weight: bold;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.runsetup-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+  margin: 0;
+}
+
+.faction-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 20px;
+  width: 100%;
+  max-width: 1000px;
+  margin: 20px 0;
+}
+
+.faction-card {
+  background: rgba(30, 24, 18, 0.85);
+  border: 1.5px solid rgba(120, 180, 220, 0.4);
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: all 0.2s ease;
+}
+
+.faction-card:hover {
+  filter: brightness(1.15);
+  transform: translateY(-4px);
+}
+
+.faction-emblem {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.faction-name {
+  font-size: 16px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.faction-tagline {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.faction-record {
+  font-size: 11px;
+  color: #fc8;
+}
+
+.runsetup-footer {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-top: 20px;
+}
+
+/* -----------------------------------------------------------
+   13. Battle Choice Overlay
+   ----------------------------------------------------------- */
+.menu-battlechoice .overlay-panel {
+  min-width: 440px;
+}
+
+.battle-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.battle-faction {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.battle-tier {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.battle-actions {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  width: 100%;
+  margin: 16px 0;
+}
+
+.battle-btn {
+  padding: 14px 28px;
+  font-size: 14px;
+  font-weight: bold;
+  border: 2px solid #9cf;
+  cursor: pointer;
+  font-family: inherit;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: all 0.2s ease;
+}
+
+#battle-fly {
+  background: rgba(140, 120, 80, 0.95);
+  color: #fff;
+}
+
+#battle-command {
+  background: rgba(160, 80, 160, 0.95);
+  color: #fff;
+  border-color: #9cf;
+}
+
+.battle-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+/* -----------------------------------------------------------
+   14. Resupply Overlay
+   ----------------------------------------------------------- */
+.resupply-panel {
+  min-width: 520px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 28px;
+}
+
+.resupply-credits {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.resupply-section {
+  width: 100%;
+  margin: 6px 0;
+}
+
+.resupply-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.repair-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(34, 28, 22, 0.7);
+  border: 1px solid rgba(120, 180, 220, 0.2);
+  margin-bottom: 6px;
+}
+
+.repair-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.repair-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.repair-hp {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.repair-hp-bar {
+  width: 80px;
+  height: 6px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.repair-hp-fill {
+  height: 100%;
+  background: #5cf;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.shop-btn {
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: bold;
+  background: rgba(40, 32, 24, 0.92);
+  border: 1.5px solid #9cf;
+  color: #cdf;
+  cursor: pointer;
+  font-family: inherit;
+  flex: 1;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.shop-btn:hover {
+  filter: brightness(1.15);
+}
+
+.shop-btn.disabled {
+  background: rgba(40, 40, 55, 0.85);
+  border-color: #566;
+  color: #866;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.shop-btn.wide {
+  width: 100%;
+}
+
+.shop-cost {
+  color: #fe8;
+  font-size: 11px;
+}
+
+.boon-card {
+  background: rgba(50, 30, 70, 0.92);
+  border: 1.5px solid #c9f;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  color: #fcf;
+  font-family: inherit;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  transition: all 0.2s ease;
+}
+
+.boon-card:hover {
+  filter: brightness(1.15);
+}
+
+.boon-card.disabled {
+  background: rgba(40, 40, 55, 0.85);
+  border-color: #566;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.boon-name {
+  font-size: 12px;
+  font-weight: bold;
+  color: #fcf;
+}
+
+.boon-desc {
+  font-size: 11px;
+  color: #bce;
+  margin-top: 4px;
+}
+
+#resupply-boons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+/* -----------------------------------------------------------
+   15. Event Overlay
+   ----------------------------------------------------------- */
+.event-panel {
+  min-width: 480px;
+  max-width: 90vw;
+}
+
+.event-body {
+  font-size: 14px;
+  color: #bce;
+  line-height: 1.6;
+  text-align: center;
+  width: 100%;
+  padding: 8px 0;
+}
+
+.event-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin: 8px 0;
+}
+
+.event-choice-btn {
+  background: rgba(40, 50, 60, 0.92);
+  border: 1.5px solid #9cf;
+  padding: 14px 18px;
+  text-align: left;
+  cursor: pointer;
+  color: #cdf;
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  transition: all 0.2s ease;
+}
+
+.event-choice-btn:hover {
+  filter: brightness(1.15);
+  transform: translateX(4px);
+}
+
+.choice-label {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.choice-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* -----------------------------------------------------------
+   16. Shared Button Classes
+   ----------------------------------------------------------- */
+.menu-btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1.5px solid;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.2s ease;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  font-family: inherit;
+}
+
+.menu-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.start-btn {
+  background: var(--btn-start-bg);
+  border-color: var(--btn-start-border);
+  color: #fff;
+}
+
+.cancel-btn {
+  background: var(--btn-cancel-bg);
+  border-color: var(--btn-cancel-border);
+  color: #fdd;
+}
+
+/* -----------------------------------------------------------
+   17. Animations
+   ----------------------------------------------------------- */
+@keyframes menu-fade-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.menu-screen.active .overlay-panel {
+  animation: menu-fade-in 0.2s ease-out;
+}
+
+/* -----------------------------------------------------------
+   18. Responsive
+   ----------------------------------------------------------- */
+@media (max-width: 767px) {
+  .menu-title h1 { font-size: 24px; }
+  .chip-row { gap: 8px; }
+  .chip-item { min-width: 90px; padding: 8px 12px; font-size: 12px; }
+  .custom-sides { flex-direction: column; }
+  .custom-panel { min-width: unset; width: 95vw; }
+  .faction-grid { grid-template-columns: repeat(2, 1fr); }
+  .overlay-panel { min-width: unset; width: 92vw; padding: 20px; }
+  .battle-actions { flex-direction: column; }
+  .resupply-panel { min-width: unset; width: 92vw; }
+  .menu-start-btn { padding: 14px 40px; font-size: 18px; }
+}
+
+@media (min-width: 2560px) {
+  .menu-title h1 { font-size: 48px; }
+  .chip-item { font-size: 18px; padding: 16px 28px; }
+  .overlay-panel { min-width: 480px; }
+}
+
+
+/* ============================================================
+   BATTLE HUD — DOM-based in-game HUD for mobile optimization
+   ============================================================ */
+
+/* -----------------------------------------------------------
+   Section 1: Root container
+   ----------------------------------------------------------- */
+.battle-root {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  visibility: hidden;
+}
+.battle-root.active {
+  visibility: visible;
+}
+
+/* -----------------------------------------------------------
+   Section 2: Side strips (allied/enemy fleet counts)
+   ----------------------------------------------------------- */
+.side-strip {
+  position: absolute;
+  top: 12px;
+  background: rgba(8, 14, 24, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1.5px solid;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+}
+
+.side-left {
+  left: 12px;
+  border-color: rgba(140, 110, 60, 0.4);
+}
+
+.side-right {
+  right: 12px;
+  border-color: rgba(220, 60, 60, 0.4);
+}
+
+.side-strip .side-title {
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.side-left .side-title {
+  color: #7a9ab0;
+}
+
+.side-right .side-title {
+  color: #f55;
+}
+
+.side-strip .side-race {
+  font-size: 9px;
+  color: #a89878;
+  margin-bottom: 4px;
+}
+
+.roster-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.roster-cell {
+  text-align: center;
+  padding: 3px 2px;
+  background: rgba(34, 28, 22, 0.8);
+  border: 1px solid rgba(120, 180, 220, 0.2);
+  border-radius: 3px;
+  min-width: 36px;
+}
+
+.roster-cell.empty {
+  opacity: 0.35;
+}
+
+.roster-cell .cell-glyph {
+  font-size: 8px;
+  color: #a89878;
+  font-weight: bold;
+}
+
+.roster-cell .cell-count {
+  font-size: 12px;
+  color: #fff;
+  font-weight: bold;
+}
+
+/* -----------------------------------------------------------
+   Section 3: Vitals bar (shield/hull/gun at bottom center)
+   ----------------------------------------------------------- */
+.vitals-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(8, 14, 24, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1.5px solid rgba(120, 180, 220, 0.3);
+  border-radius: 8px;
+  padding: 10px 16px;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+}
+
+.vitals-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vital-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: #a89878;
+  width: 44px;
+  letter-spacing: 0.5px;
+}
+
+.vital-bar {
+  flex: 1;
+  height: 8px;
+  background: #0a1420;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.vital-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.15s ease-out;
+}
+
+.shield-fill {
+  background: linear-gradient(90deg, #7a9ab0, #5cf);
+}
+
+.hull-fill {
+  background: linear-gradient(90deg, #2a5a2a, #4f6);
+}
+
+.hull-fill.critical {
+  background: linear-gradient(90deg, #5a1a1a, #f64);
+}
+
+.gun-fill {
+  background: linear-gradient(90deg, #8a6a1a, #fd6);
+}
+
+.vital-value {
+  font-size: 10px;
+  color: #fff;
+  width: 60px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -----------------------------------------------------------
+   Section 4: Virtual sticks
+   ----------------------------------------------------------- */
+.vstick {
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.vstick.active {
+  opacity: 1;
+}
+
+.vstick-base {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2.5px solid rgba(180, 220, 255, 0.3);
+  background: radial-gradient(circle, rgba(20, 40, 60, 0.4) 0%, transparent 70%);
+}
+
+.vstick-knob {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, rgba(220, 200, 160, 0.9), rgba(120, 200, 255, 0.6));
+  box-shadow: 0 0 16px rgba(180, 220, 255, 0.5), inset 0 0 8px rgba(255, 255, 255, 0.3);
+  transform: translate3d(62px, 62px, 0);
+  will-change: transform;
+}
+
+.vstick-deadzone {
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px dashed rgba(180, 220, 255, 0.15);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.vstick-left {
+  left: 30px;
+  bottom: 220px;
+}
+
+.vstick-right {
+  right: 130px;
+  bottom: 220px;
+}
+
+/* -----------------------------------------------------------
+   Section 5: Action buttons (fire/missile/boost)
+   ----------------------------------------------------------- */
+.action-cluster {
+  position: absolute;
+  right: 20px;
+  bottom: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  pointer-events: auto;
+}
+
+.action-btn {
+  position: relative;
+  border-radius: 50%;
+  border: 2px solid rgba(180, 220, 255, 0.5);
+  background: radial-gradient(circle at 40% 40%, rgba(50, 40, 25, 0.9), rgba(34, 28, 22, 0.95));
+  color: #cdf;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  touch-action: none;
+  transition: transform 0.08s ease, filter 0.08s ease;
+}
+
+.action-btn:active {
+  transform: scale(0.92);
+  filter: brightness(1.3);
+}
+
+.fire-btn {
+  width: 80px;
+  height: 80px;
+}
+
+.missile-btn {
+  width: 56px;
+  height: 56px;
+}
+
+.boost-btn {
+  width: 48px;
+  height: 48px;
+}
+
+.btn-glow {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  pointer-events: none;
+}
+
+.action-btn.pressed .btn-glow {
+  opacity: 1;
+  box-shadow: 0 0 20px rgba(180, 220, 255, 0.6);
+}
+
+.fire-btn.pressed {
+  border-color: rgba(255, 220, 100, 0.8);
+}
+
+.fire-btn.pressed .btn-glow {
+  box-shadow: 0 0 24px rgba(255, 200, 50, 0.7);
+}
+
+.missile-btn.ready {
+  animation: missile-ready-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes missile-ready-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(96, 160, 96, 0.4); }
+  50% { box-shadow: 0 0 20px rgba(96, 160, 96, 0.8); }
+}
+
+.btn-cooldown {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  background: conic-gradient(rgba(0, 0, 0, 0.5) var(--cooldown-angle, 0deg), transparent 0deg);
+  pointer-events: none;
+}
+
+.btn-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.btn-label {
+  font-size: 8px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+/* -----------------------------------------------------------
+   Section 6: Minimap
+   ----------------------------------------------------------- */
+.minimap {
+  position: absolute;
+  bottom: 120px;
+  right: 12px;
+  background: rgba(8, 14, 24, 0.88);
+  border: 1.5px solid rgba(120, 180, 220, 0.3);
+  border-radius: 6px;
+  overflow: hidden;
+  width: 200px;
+}
+
+.minimap-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: rgba(16, 32, 52, 0.9);
+  font-size: 9px;
+  font-weight: bold;
+  color: #a89878;
+}
+
+.minimap-viewport {
+  position: relative;
+  width: 200px;
+  height: 140px;
+  background: #03070d;
+}
+
+.minimap-dot {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  will-change: transform;
+}
+
+.dot-blue {
+  background: rgba(120, 200, 255, 0.85);
+}
+
+.dot-red {
+  background: rgba(255, 60, 60, 0.85);
+}
+
+.dot-player {
+  background: #fff;
+  box-shadow: 0 0 4px #fff;
+}
+
+/* Size classes */
+.dot-size-station {
+  width: 8px;
+  height: 8px;
+}
+
+.dot-size-carrier {
+  width: 7px;
+  height: 7px;
+}
+
+.dot-size-battleship {
+  width: 6px;
+  height: 6px;
+}
+
+.dot-size-cruiser {
+  width: 5px;
+  height: 5px;
+}
+
+.dot-size-bomber {
+  width: 4px;
+  height: 4px;
+}
+
+.dot-size-fighter {
+  width: 3px;
+  height: 3px;
+}
+
+/* -----------------------------------------------------------
+   Section 7: Damage direction indicator
+   ----------------------------------------------------------- */
+.damage-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 200px;
+  height: 200px;
+  pointer-events: none;
+}
+
+.damage-arc {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.damage-arc.hit {
+  animation: damage-flash 0.5s ease-out;
+}
+
+@keyframes damage-flash {
+  0% { opacity: 0.8; filter: brightness(2); }
+  100% { opacity: 0; }
+}
+
+.damage-north {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse at bottom, rgba(255, 50, 50, 0.6), transparent 70%);
+}
+
+.damage-south {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse at top, rgba(255, 50, 50, 0.6), transparent 70%);
+}
+
+.damage-east {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: radial-gradient(ellipse at left, rgba(255, 50, 50, 0.6), transparent 70%);
+}
+
+.damage-west {
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: radial-gradient(ellipse at right, rgba(255, 50, 50, 0.6), transparent 70%);
+}
+
+/* -----------------------------------------------------------
+   Section 8: Lock-on reticle
+   ----------------------------------------------------------- */
+.lock-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 120px;
+  height: 120px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.lock-reticle.active {
+  opacity: 1;
+}
+
+.reticle-ring {
+  position: absolute;
+  inset: 10px;
+  border: 1.5px solid rgba(255, 80, 80, 0.6);
+  border-radius: 50%;
+  animation: reticle-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes reticle-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+.reticle-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  background: #f66;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.reticle-bracket-left,
+.reticle-bracket-right {
+  position: absolute;
+  top: 30%;
+  bottom: 30%;
+  width: 12px;
+  border-top: 2px solid rgba(255, 80, 80, 0.5);
+  border-bottom: 2px solid rgba(255, 80, 80, 0.5);
+}
+
+.reticle-bracket-left {
+  left: 0;
+  border-left: 2px solid rgba(255, 80, 80, 0.5);
+}
+
+.reticle-bracket-right {
+  right: 0;
+  border-right: 2px solid rgba(255, 80, 80, 0.5);
+}
+
+/* -----------------------------------------------------------
+   Section 9: Compass
+   ----------------------------------------------------------- */
+.compass {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.compass.active {
+  opacity: 1;
+}
+
+.compass-arrow {
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 14px solid rgba(255, 80, 80, 0.8);
+  filter: drop-shadow(0 0 4px rgba(255, 60, 60, 0.5));
+  transition: transform 0.2s ease;
+}
+
+.compass-label {
+  font-size: 8px;
+  font-weight: bold;
+  color: #f88;
+  letter-spacing: 1px;
+}
+
+/* -----------------------------------------------------------
+   Section 10: Spectate / Respawn / Match-over panels
+   ----------------------------------------------------------- */
+.spectate-pill {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(8, 14, 24, 0.88);
+  border: 1.5px solid rgba(120, 200, 255, 0.4);
+  border-radius: 6px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.spectate-pill.active {
+  opacity: 1;
+}
+
+.spectate-tag {
+  color: #a89878;
+  font-weight: bold;
+}
+
+.spectate-ship {
+  color: #cdf;
+}
+
+.respawn-panel {
+  position: absolute;
+  top: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(8, 14, 24, 0.88);
+  border: 1.5px solid rgba(120, 200, 255, 0.5);
+  border-radius: 8px;
+  padding: 12px 40px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.respawn-panel.active {
+  opacity: 1;
+}
+
+.respawn-label {
+  font-size: 10px;
+  font-weight: bold;
+  color: #a89878;
+}
+
+.respawn-timer {
+  font-size: 24px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.matchover-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(8, 14, 24, 0.92);
+  border: 2px solid;
+  border-radius: 10px;
+  padding: 32px 60px;
+  text-align: center;
+  clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.matchover-panel.active {
+  opacity: 1;
+}
+
+.matchover-title {
+  font-size: 32px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.matchover-subtitle {
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+.matchover-prompt {
+  font-size: 12px;
+  color: #a89878;
+  margin-top: 16px;
+}
+
+/* -----------------------------------------------------------
+   Section 11: Target panel
+   ----------------------------------------------------------- */
+.target-panel {
+  position: absolute;
+  bottom: 120px;
+  left: 12px;
+  background: rgba(8, 14, 24, 0.88);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1.5px solid rgba(220, 80, 80, 0.35);
+  border-radius: 6px;
+  padding: 10px 12px;
+  width: 260px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+}
+
+.target-panel.active {
+  opacity: 1;
+}
+
+.target-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.target-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: #f66;
+}
+
+.target-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: #e8f0ff;
+}
+
+.target-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+
+.target-bar {
+  flex: 1;
+  height: 5px;
+  background: #1a1a1a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.target-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+.target-module-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  padding: 1px 0;
+}
+
+.target-module-row.destroyed {
+  color: #a55;
+  text-decoration: line-through;
+}
+
+.target-module-name {
+  color: #cdf;
+}
+
+.target-module-hp {
+  color: #a89878;
+  font-size: 9px;
+}
+
+/* -----------------------------------------------------------
+   Section 12: Admiral command panel
+   ----------------------------------------------------------- */
+.admiral-panel {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(8, 14, 24, 0.9);
+  border: 1.5px solid rgba(120, 200, 255, 0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  width: min(600px, 90vw);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.admiral-panel.active {
+  opacity: 1;
+}
+
+.admiral-title {
+  font-size: 10px;
+  font-weight: bold;
+  color: #a89878;
+  text-align: center;
+  margin-bottom: 6px;
+  letter-spacing: 1px;
+}
+
+.admiral-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.admiral-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: rgba(34, 28, 22, 0.8);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.admiral-toggle {
+  padding: 3px 8px;
+  border-radius: 3px;
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  background: rgba(20, 40, 60, 0.8);
+  color: #cdf;
+  font-size: 9px;
+  font-weight: bold;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.admiral-toggle.active {
+  background: rgba(100, 80, 50, 0.8);
+  border-color: rgba(180, 220, 255, 0.6);
+}
+
+/* -----------------------------------------------------------
+   Section 13: Top-right pill buttons
+   ----------------------------------------------------------- */
+.battle-top-right {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.battle-pill {
+  background: rgba(8, 14, 24, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1.5px solid rgba(120, 180, 220, 0.35);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 9px;
+  font-weight: bold;
+  color: #a89878;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  pointer-events: auto;
+}
+
+.battle-pill:hover {
+  filter: brightness(1.15);
+  border-color: rgba(180, 220, 255, 0.55);
+}
+
+/* -----------------------------------------------------------
+   Section 14: Animations (keyframe definitions)
+   ----------------------------------------------------------- */
+/* missile-ready-pulse defined in Section 5 */
+/* damage-flash defined in Section 7 */
+/* reticle-pulse defined in Section 8 */
+
+/* -----------------------------------------------------------
+   Section 15: Responsive breakpoints
+   ----------------------------------------------------------- */
+
+/* Mobile (< 768px) */
+@media (max-width: 767px) {
+  .side-strip {
+    display: none;
+  }
+
+  .vitals-bar {
+    width: 95%;
+    min-width: unset;
+    padding: 8px 12px;
+  }
+
+  .vital-label {
+    font-size: 8px;
+    width: 36px;
+  }
+
+  .vital-value {
+    font-size: 9px;
+    width: 48px;
+  }
+
+  .vstick {
+    width: 140px;
+    height: 140px;
+  }
+
+  .vstick-knob {
+    width: 44px;
+    height: 44px;
+    transform: translate3d(48px, 48px, 0);
+  }
+
+  .vstick-left {
+    left: 10px;
+    bottom: 180px;
+  }
+
+  .vstick-right {
+    right: 100px;
+    bottom: 180px;
+  }
+
+  .action-cluster {
+    right: 10px;
+    bottom: 170px;
+    gap: 8px;
+  }
+
+  .fire-btn {
+    width: 68px;
+    height: 68px;
+  }
+
+  .missile-btn {
+    width: 48px;
+    height: 48px;
+  }
+
+  .boost-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  .minimap {
+    width: 140px;
+  }
+
+  .minimap-viewport {
+    width: 140px;
+    height: 100px;
+  }
+
+  .damage-indicator {
+    width: 150px;
+    height: 150px;
+  }
+
+  .damage-arc {
+    width: 45px;
+    height: 45px;
+  }
+
+  .compass-arrow {
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 10px solid rgba(255, 80, 80, 0.8);
+  }
+
+  .admiral-panel {
+    width: 95vw;
+    bottom: 60px;
+    padding: 8px 10px;
+  }
+
+  .admiral-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+  }
+
+  .admiral-row {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+
+  .target-panel {
+    width: 200px;
+    bottom: 100px;
+    padding: 8px 10px;
+  }
+
+  .matchover-panel {
+    padding: 20px 30px;
+  }
+
+  .matchover-title {
+    font-size: 24px;
+  }
+}
+
+/* Tablet (768-1199px) */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .side-strip {
+    padding: 6px 8px;
+  }
+
+  .roster-cell {
+    min-width: 30px;
+    padding: 2px 1px;
+  }
+
+  .minimap {
+    width: 180px;
+  }
+
+  .minimap-viewport {
+    width: 180px;
+    height: 130px;
+  }
+}
+
+/* Desktop (1200px+) */
+@media (min-width: 1200px) {
+  .minimap {
+    width: 220px;
+  }
+
+  .minimap-viewport {
+    width: 220px;
+    height: 160px;
+  }
+}
+
+/* 4K (2560px+) */
+@media (min-width: 2560px) {
+  .battle-root {
+    font-size: 1.25em;
+  }
+
+  .vstick {
+    width: 225px;
+    height: 225px;
+  }
+
+  .vstick-knob {
+    width: 70px;
+    height: 70px;
+    transform: translate3d(77px, 77px, 0);
+  }
+
+  .fire-btn {
+    width: 100px;
+    height: 100px;
+  }
+
+  .missile-btn {
+    width: 70px;
+    height: 70px;
+  }
+
+  .boost-btn {
+    width: 60px;
+    height: 60px;
+  }
+
+  .minimap {
+    width: 250px;
+  }
+
+  .minimap-viewport {
+    width: 250px;
+    height: 180px;
+  }
+
+  .vitals-bar {
+    min-width: 350px;
+    padding: 12px 20px;
+  }
+}
+
+/* -----------------------------------------------------------
+   Section 16: Accessibility
+   ----------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .vstick,
+  .vstick-knob,
+  .action-btn,
+  .action-btn .btn-glow,
+  .missile-btn.ready,
+  .damage-arc,
+  .damage-arc.hit,
+  .lock-reticle,
+  .reticle-ring,
+  .compass,
+  .compass-arrow,
+  .spectate-pill,
+  .respawn-panel,
+  .matchover-panel,
+  .target-panel,
+  .admiral-panel,
+  .vital-fill,
+  .minimap-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Focus-visible outlines for keyboard users */
+.action-btn:focus-visible,
+.battle-pill:focus-visible,
+.admiral-toggle:focus-visible {
+  outline: 2px solid rgba(180, 220, 255, 0.8);
+  outline-offset: 2px;
+}
+
+/* -----------------------------------------------------------
+   Section 17: z-index documentation
+   -----------------------------------------------------------
+   Battle HUD layer stack (bottom to top within battle-root):
+
+     z-index  5  — #game canvas (behind battle-root)
+     z-index 20  — .battle-root (DOM HUD overlay)
+
+   Internal layering (all within .battle-root):
+     Stacking order follows DOM order; later siblings paint
+     above earlier siblings. Key elements:
+
+     .side-strip          — fleet roster panels
+     .battle-top-right    — settings / spectate pills
+     .damage-indicator    — directional damage arcs (center)
+     .lock-reticle        — target lock ring (center)
+     .compass             — enemy direction arrow (top-center)
+     .target-panel        — enemy info (bottom-left)
+     .minimap             — fleet map (bottom-right)
+     .vitals-bar          — shield/hull/gun bars (bottom-center)
+     .respawn-panel       — respawn timer (top-center)
+     .matchover-panel     — match result (center, highest)
+     .spectate-pill       — spectating indicator (top-center)
+     .vstick              — virtual joystick overlays
+     .action-cluster      — fire/missile/boost buttons
+     .admiral-panel       — fleet command panel (bottom-center)
+
+   Global layer stack (from style.css / SPEC Section 18):
+     z-index  1  — .starmap-root.behind-canvas
+     z-index  5  — #game (canvas element)
+     z-index 10  — .starmap-root
+     z-index 15  — .menu-root
+     z-index 20  — .battle-root (this HUD)
+     z-index 25  — .menu-widgets (energy bar, settings)
+     z-index 30  — .node-tooltip
+     z-index 40  — .jump-confirm
+   ----------------------------------------------------------- */

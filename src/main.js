@@ -5,7 +5,7 @@ import {
 import { drawArena, drawArenaBounds, ARENA } from "./arena.js";
 import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
-import { drawHUD, drawBeams } from "./hud.js";
+import { drawHUD, drawBeams, BattleHUD } from "./hud.js";
 import { drawWreck, drawDebris } from "./wreckage.js";
 import { InputManager } from "./input.js";
 import { prerenderSprites } from "./sprites.js";
@@ -300,7 +300,7 @@ function frame(now) {
       if (choice.mode === "roguelite") {
         // Roguelite battles are launched indirectly: clicking a node on
         // the run map calls handleRunChoice("enter-node", ...) which
-        // builds the modeConfig and calls startGame itself. The "START"
+        // builds the modeConfig and calls startGame itself. The "DEPLOY"
         // path from a Frontier-mode chip click should never fire — the
         // chip opens overlays via _emitStart returning early. Defensive
         // no-op for any future regression.
@@ -479,19 +479,18 @@ function draw() {
 
   ctx.restore();
 
-  drawHUD(ctx, game, viewW, viewH, input.missileBtn, input.startMenu);
-  // Touch-action overlays: only meaningful in-match, hidden in the
-  // pre-match menu and at match-over so they don't catch stray taps.
-  if (game.state === "playing" && !game.matchOver) {
-    const player = game.ships.find((s) => s.isPlayer && !s.dead);
-    if (player || game.spectating) {
-      // FIRE button is only useful when there's a live player to fire.
-      if (player) input.fireBtn.draw(ctx);
-      input.spectateBtn.draw(ctx, game.spectating);
-    }
-    // Admiral command panel — only in admiral mode, only mid-match.
-    if (game.admiralMode) input.admiralPanel.draw(ctx);
+  // DOM-based BattleHUD (lazy init)
+  if (!input._battleHUD) {
+    input._battleHUD = new BattleHUD(document.body, input);
   }
+  input._battleHUD.sync(game, viewW, viewH);
+  if (game.state === "playing") {
+    input._battleHUD.show();
+  } else {
+    input._battleHUD.hide();
+  }
+
+  // Virtual stick DOM updates
   input.drawSticks(ctx);
 }
 
