@@ -7,6 +7,8 @@
 //
 // Damage interaction with shields is computed in game.js (see applyDamage).
 
+import { createShockwave, createSpark } from "./particles.js";
+
 export function createProjectile({
   pos, vel, damage, ttl, radius, color, side, ownerId,
   kind = "cannon", fromKlass = null,
@@ -98,12 +100,34 @@ function updateMissile(m, dt, world) {
     // children carry their own much smaller payload + hp so PD has to
     // intercept multiple tracks. Children don't carry `.cluster` so
     // they don't recursively split.
+    //
+    // Two design rules layer on top of `cluster.bloomDistance`:
+    //   1. Bloom OUTSIDE the target's PD range. The whole point of
+    //      clustering is to overwhelm PD with multiple tracks; if the
+    //      parent waited until inside PD it'd just get shot down whole.
+    //      Effective bloom = max(spec bloom, target PD range + slack).
+    //   2. If the parent was *fired* from inside the target's PD range
+    //      (point-blank launch), it would bloom in the same frame next
+    //      to the owner's hull. Gate the bloom on having cleared the
+    //      launching ship by at least owner.radius + 80u.
     if (m.cluster) {
       const ddx = target.pos.x - m.pos.x;
       const ddy = target.pos.y - m.pos.y;
       const ddist2 = ddx * ddx + ddy * ddy;
-      const bloom = m.cluster.bloomDistance;
-      if (ddist2 <= bloom * bloom) {
+      const targetPdRange = (target.spec && target.spec.pdCannons && target.spec.pdCannons.range) || 0;
+      const effectiveBloom = Math.max(m.cluster.bloomDistance, targetPdRange + 60);
+      let clearedOwner = true;
+      if (m.ownerId != null && world && world.ships) {
+        const owner = world.ships.find((s) => s.id === m.ownerId);
+        if (owner) {
+          const ox = owner.pos.x - m.pos.x;
+          const oy = owner.pos.y - m.pos.y;
+          const ownerR = (owner.spec && owner.spec.radius) || 60;
+          const minClear = ownerR + 80;
+          clearedOwner = (ox * ox + oy * oy) >= (minClear * minClear);
+        }
+      }
+      if (ddist2 <= effectiveBloom * effectiveBloom && clearedOwner) {
         spawnClusterChildren(m, target, world);
         m.dead = true;
         return;
@@ -169,6 +193,55 @@ function spawnClusterChildren(parent, target, world) {
   // instead of stacking on top of each other. PD has to intercept
   // multiple incoming tracks rather than one fat round.
   const baseAng = Math.atan2(target.pos.y - parent.pos.y, target.pos.x - parent.pos.x);
+
+  // "Umbrella" bloom VFX. We spawn one paired shockwave + a forward-
+  // facing cone of sparks before the children, so by the time the
+  // first warhead frame paints the player has already seen the bloom
+  // happen. The shockwave colour borrows the parent missile tint so
+  // each cluster reads as its own faction.
+  if (world && world.particles) {
+    const tint = parent.color || "#fff";
+    const rgba = hexToRgba(tint, "0.85");
+    world.particles.push(createShockwave(parent.pos.x, parent.pos.y, {
+      size: parent.radius + 6,
+      growth: 540,
+      ttl: 0.55,
+      color: hexToRgba(tint, ""), // shockwave appends its own alpha
+    }));
+    world.particles.push(createShockwave(parent.pos.x, parent.pos.y, {
+      size: parent.radius + 2,
+      growth: 360,
+      ttl: 0.42,
+      color: "rgba(255,255,255,",
+    }));
+    // Forward-cone sparks fan along the children's heading band so the
+    // umbrella has "ribs" before the actual warheads start moving.
+    const sparkCount = Math.max(10, count * 3);
+    const coneSpread = Math.max(spread * 1.4, 0.9);
+    for (let i = 0; i < sparkCount; i++) {
+      const off = (Math.random() - 0.5) * coneSpread;
+      const sp = 320 + Math.random() * 220;
+      world.particles.push(createSpark(parent.pos.x, parent.pos.y, {
+        angle: baseAng + off,
+        speed: sp,
+        ttl: 0.32 + Math.random() * 0.25,
+        color: tint,
+      }));
+    }
+    // Side-trim glints — a couple sparks shooting laterally to suggest
+    // the canister bursting open in cross-section.
+    for (let i = 0; i < 4; i++) {
+      const side = (i % 2 === 0) ? 1 : -1;
+      const a = baseAng + side * (Math.PI / 2 + (Math.random() - 0.5) * 0.4);
+      world.particles.push(createSpark(parent.pos.x, parent.pos.y, {
+        angle: a,
+        speed: 150 + Math.random() * 100,
+        ttl: 0.22 + Math.random() * 0.18,
+        color: rgba,
+      }));
+    }
+  }
+
   for (let i = 0; i < count; i++) {
     const offset = (count === 1) ? 0 : ((i - (count - 1) / 2) * (spread / Math.max(1, count - 1)));
     const heading = baseAng + offset;
@@ -190,6 +263,21 @@ function spawnClusterChildren(parent, target, world) {
       // Children carry no .cluster so they don't recursively split.
     }));
   }
+}
+
+// Tiny helper so the bloom VFX can take a `#rrggbb` parent colour and
+// turn it into the `rgba(r,g,b,` prefix that createShockwave wants
+// (the shockwave appends its own alpha at draw time). Hex shorthand
+// (#rgb) gets expanded, anything else falls back to a neutral white.
+function hexToRgba(hex, alpha) {
+  if (typeof hex !== "string" || hex[0] !== "#") return `rgba(255,255,255,${alpha})`;
+  let h = hex.slice(1);
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6) return `rgba(255,255,255,${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return alpha === "" ? `rgba(${r},${g},${b},` : `rgba(${r},${g},${b},${alpha})`;
 }
 
 function acquireMissileTarget(m, ships) {

@@ -122,6 +122,88 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — +2 missile launchers, cluster cruiser, umbrella bloom, bomber shield buff
+
+**What changed**
+
+Four balance + VFX requests:
+
+1. **Every non-fighter missile carrier gets +2 launchers.**
+   - bomber: 3 → 5
+   - frigate: 1 → 3
+   - cruiser: 2 → 4
+   - battleship: 4 → 6
+   (Carrier has no missilePods. Fighter has a single `missile`, not
+   `missilePods` — left alone.)
+
+2. **Cruiser cluster missiles restored.** The original 4bc4974 cruiser-
+   refit shipped cluster pods; they were dropped in a later merge and
+   the user remembered them. Re-added with cruiser-scale numbers:
+   `bloomDistance: 360, childCount: 4, childSpread: 0.55, childSpeed:
+   380, childTurnRate: 2.8, childTtl: 2.8, childDamage: 30,
+   childRadius: 4, childHp: 1`. Parent damage dropped 110 → 60 so the
+   bloom (4 × 30 = 120) is the optimal play instead of a point-blank
+   ram.
+
+3. **Cluster bloom now obeys two new rules.**
+   - **Burst outside the target's PD range.** Effective bloom
+     distance = `max(cluster.bloomDistance, target.spec.pdCannons.range
+     + 60)`. The whole point of clustering is to overwhelm PD with
+     multiple tracks — pre-fix, the BB cluster bloomed at 420u but
+     BB PD reach was 560u, so the parent died entire before splitting.
+   - **Point-blank launches wait until clear of the firing ship.**
+     If the parent is still within `owner.radius + 80` of its
+     launching ship, the bloom is held. Without this, an unlucky
+     launch from inside the target's PD range would burst against
+     the launcher's own hull.
+
+4. **Umbrella bloom VFX.** Before the children spawn,
+   `spawnClusterChildren` pushes:
+   - A coloured outer shockwave (parent tint, size = parent.radius +
+     6, growth 540 u/s, ttl 0.55 s).
+   - A white inner shockwave (smaller, faster growth) — gives the
+     bloom a two-ring opening read.
+   - `max(10, childCount × 3)` sparks fanning along the children's
+     heading cone (`spread × 1.4` half-angle) so the umbrella has
+     "ribs" before the warheads start moving.
+   - Four side-trim sparks shooting laterally for a cross-section pop.
+
+5. **Bomber shields buffed.** Bombers were getting overrun before
+   delivering a strike: `shield.max: 130 → 220, regen: 16 → 24`. The
+   2.2 s regenDelay is unchanged.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | Bomber `shield.max` 130→220, `regen` 16→24, `missilePods.count` 3→5. Frigate `missilePods.count` 1→3. Cruiser `missilePods.count` 2→4 plus full `cluster` block restored (and `damage` 110→60 so the cluster is the right play). Battleship `missilePods.count` 4→6. |
+| `src/projectile.js` | New `import { createShockwave, createSpark } from "./particles.js"`. Cluster-bloom branch now computes `effectiveBloom = max(spec, target.pdCannons.range + 60)` and gates on `clearedOwner = ownerDist >= owner.radius + 80`. `spawnClusterChildren` spawns the two-ring shockwave + cone of sparks + 4 lateral trim sparks before the warheads. Local `hexToRgba(hex, alpha)` helper expands `#rgb` and `#rrggbb` into the `rgba(r,g,b,` prefix the shockwave painter needs. |
+
+**Design decisions / gotchas**
+
+- **Cruiser re-armed with clusters, not just buffed.** The user said
+  "cluster missiles from cruisers must balloon" — present-tense as if
+  cruiser already shoots clusters. The repo's current main only had
+  BB clusters; this restores the original cruiser-as-artillery role
+  rather than treating the user's request as a typo for "battleship."
+- **PD-range slack is 60 u.** A round number that puts the bloom
+  just outside the densest PD bubble for every ship in the roster
+  (PD ranges run 400–560). If you ever push a PD range past ~600 the
+  cluster will bloom proportionally further out; that's load-bearing.
+- **`clearedOwner` reads `owner.spec.radius`.** Stations and
+  unconventional hulls might not have a `spec.radius`; default 60 u
+  if missing — keeps the rule from no-oping into "bloom on launch"
+  for any odd carrier.
+- **Shockwave colour pipeline assumes `#hex` parent colours.**
+  Every faction's `missilePods.colors` shipped today is a hex
+  literal — `hexToRgba` falls back to white if it sees anything
+  else, so adding an `hsl()` race override later won't crash.
+- **Verified via Playwright** (Galaxy S9+ UA, admiral mode): bomber
+  shield = 220/24, missile counts = 5/3/4/6 per class, cruiser has
+  `cluster`, and after 15s of live combat the world held 28 cluster
+  parents + 54 child warheads (i.e. blooms are firing). No
+  pageerrors.
+
 ### 2026-05-21 — Battleship cannon shells + FIRE-button dead wiring + tap-to-inspect + escort leash
 
 **What changed**

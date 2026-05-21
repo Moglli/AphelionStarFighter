@@ -90,14 +90,14 @@ export const CLASSES = {
       capacity: 24,
       reloadTime: 1.2,
     },
-    shield: { max: 130, regen: 16, regenDelay: 2.2 },
+    shield: { max: 220, regen: 24, regenDelay: 2.2 },
     // No armor — bombers are still light craft.
     // Heavy missile pods are the bomber's reason to exist. Each pod is
     // tougher than a frigate's missile (more hp) so it survives some PD.
-    // Three pods, faster propellant, better tracking — bombers were
+    // Five pods, faster propellant, better tracking — bombers were
     // getting overrun before they could deliver a meaningful strike.
     missilePods: {
-      count: 3,
+      count: 5,
       damage: 70,
       cooldown: 7.5,
       projectileSpeed: 420,
@@ -162,10 +162,10 @@ export const CLASSES = {
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
-    // Single light pod gives the frigate a token anti-capital option but
-    // it's on a long cooldown — the cannons do the work.
+    // Three light pods give the frigate a token anti-capital option but
+    // they're on a long cooldown — the cannons do the work.
     missilePods: {
-      count: 1,
+      count: 3,
       damage: 36,
       cooldown: 11.0,
       projectileSpeed: 340,
@@ -218,13 +218,16 @@ export const CLASSES = {
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
-    // Heavy torpedoes: slow, high damage, lots of hp so PD has to commit
-    // multiple rounds to kill one. The cruiser's defining weapon.
+    // Cluster missile pods. Each parent is a slow heavy carrier; the
+    // headline payload comes from the four warheads it splits into
+    // outside PD range. Direct-hit damage (60) is intentionally lower
+    // than the cluster total (4 × 30 = 120) so the bloom is the
+    // optimal play instead of a point-blank ram.
     missilePods: {
-      count: 2,
-      damage: 110,
+      count: 4,
+      damage: 60,
       cooldown: 11.0,
-      projectileSpeed: 220,
+      projectileSpeed: 240,
       range: 2000,
       ttl: 9.0,
       turnRate: 1.4,
@@ -232,6 +235,17 @@ export const CLASSES = {
       radius: 10,
       acquireRange: 2200,
       colors: { blue: "#3df", red: "#f4a" },
+      cluster: {
+        bloomDistance: 360,
+        childCount: 4,
+        childSpread: 0.55,
+        childSpeed: 380,
+        childTurnRate: 2.8,
+        childTtl: 2.8,
+        childDamage: 30,
+        childRadius: 4,
+        childHp: 1,
+      },
     },
     aiRange: 1050,
     aiOrbit: 880,
@@ -283,7 +297,7 @@ export const CLASSES = {
       projectileColors: { blue: "#cef", red: "#fda" },
     },
     missilePods: {
-      count: 4,
+      count: 6,
       // Parent missile is a slow heavy carrier — most of its job is
       // delivering the cluster payload to bloom range. The headline
       // `damage` is the direct-hit damage if it ever connects without
