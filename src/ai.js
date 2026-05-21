@@ -471,6 +471,47 @@ function wallAvoidance(ship, bounds) {
   return { x: nx / len, y: ny / len, strength: Math.min(1, len) };
 }
 
+// Same-side capital crowding push. The big ships are heading-locked
+// so they have no built-in collision avoidance — without this they
+// drift through each other under the cell-overlap resolver in
+// game.js (which kicks in on contact, not before). This helper
+// returns a steering vector that points AWAY from the nearest live
+// ally capital inside `range`, weighted by how close it is. Result
+// is normalised so callers can scale it like the other avoidance
+// vectors (bigShipDanger / wallAvoidance).
+//
+// Fighters/bombers don't trigger this — they're allowed to share
+// space with capitals because their AI already accounts for hull
+// proximity. Stations are excluded (they don't move).
+function allyAvoidance(ship, ships) {
+  if (!ships || ships.length === 0) return null;
+  const myR = (ship.spec && ship.spec.radius) || 30;
+  let nx = 0, ny = 0, any = false;
+  for (const o of ships) {
+    if (o === ship || o.dead) continue;
+    if (o.side !== ship.side) continue;
+    if (o.klass === "fighter" || o.klass === "bomber" || o.klass === "station") continue;
+    const otherR = (o.spec && o.spec.radius) || 30;
+    // Activation distance: when the gap between hulls falls under
+    // ~1.5× the larger radius, start pushing. Pad ramps up linearly
+    // so the closer the two ships are, the stronger the shove.
+    const minGap = Math.max(myR, otherR) * 1.5;
+    const dx = ship.pos.x - o.pos.x;
+    const dy = ship.pos.y - o.pos.y;
+    const d = Math.hypot(dx, dy);
+    const gap = d - (myR + otherR);
+    if (gap > minGap || d < 1e-6) continue;
+    const t = 1 - Math.max(0, gap / minGap);  // 0 (just at minGap) → 1 (touching)
+    nx += (dx / d) * t;
+    ny += (dy / d) * t;
+    any = true;
+  }
+  if (!any) return null;
+  const len = Math.hypot(nx, ny);
+  if (len < 0.05) return null;
+  return { x: nx / len, y: ny / len };
+}
+
 function flybyAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
@@ -777,6 +818,14 @@ function battleshipAI(ship, target, dt, world) {
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
   }
+  // Capital crowding: push away from same-side capitals so two BBs
+  // don't drift through each other. Blend is moderate so the push
+  // doesn't override the broadside-hold aim entirely.
+  const crowd = allyAvoidance(ship, world ? world.ships : []);
+  if (crowd) {
+    const aimN = V.norm(c.aim);
+    c.aim = { x: aimN.x + crowd.x * 0.55, y: aimN.y + crowd.y * 0.55 };
+  }
   c.firing = false;        // broadsides fire automatically via arc check
   c.firingMissile = false; // missile pods auto-fire
 }
@@ -846,6 +895,13 @@ function cruiserAI(ship, target, dt, world) {
   // not only at perfect alignment.
   c.firing = dist <= s.weapon.range && aligned > 0.88;
   c.firingMissile = false;
+
+  // Capital crowding — don't barge into ally cruisers/BBs.
+  const crowd = allyAvoidance(ship, world ? world.ships : []);
+  if (crowd) {
+    const aimN = V.norm(c.aim);
+    c.aim = { x: aimN.x + crowd.x * 0.55, y: aimN.y + crowd.y * 0.55 };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -861,15 +917,45 @@ function frigateAI(ship, target, dt, world) {
   const dist = V.len(rel);
   const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
 
-  const orbitR = s.aiOrbit || 380;
+  // PD-aware orbit. Vs capitals the frigate hugs the outside of the
+  // target's PD bubble + slack so the ring cannons can chip without
+  // the frigate eating PD rounds. Vs small craft we orbit tighter at
+  // the spec's `aiOrbit`.
+  let orbitR = s.aiOrbit || 380;
+  const targetPdRange = (target.spec && target.spec.pdCannons && target.spec.pdCannons.range) || 0;
+  if (targetPdRange > 0 && target.klass !== "fighter" && target.klass !== "bomber") {
+    orbitR = Math.max(orbitR, targetPdRange + 140);
+  }
+
   const sign = (ship.id % 2 === 0) ? 1 : -1;
   const perpX = -dir.y * sign, perpY = dir.x * sign;
-  // Same orbit-slot construction as the cruiser — far away the slot
-  // sits roughly behind the target so we curve in, then transitions
-  // to a circular strafe near orbitR.
+  // Orbit slot perpendicular to the target — frigate strafes past
+  // rather than charging in.
   const slotX = target.pos.x + perpX * orbitR;
   const slotY = target.pos.y + perpY * orbitR;
   c.aim = { x: slotX - ship.pos.x, y: slotY - ship.pos.y };
+
+  // Evasion blend. Frigates use their speed (maxSpeed 150 — fastest
+  // non-fighter) to slide out of broadside / heavy-laser arcs and to
+  // skirt PD bubbles. bigShipDanger excludes the target so we still
+  // commit to the run; other capitals' PD + main guns still push.
+  // The `dangerWeight` is bigger than for fighters (0.55) because
+  // frigates can't tank PD the way a swarm of fighters can.
+  const danger = bigShipDanger(ship, world ? world.ships : [], target);
+  const wall   = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
+  // Same-side avoidance: don't barge into ally capitals.
+  const crowd  = allyAvoidance(ship, world ? world.ships : []);
+  if (danger || wall || crowd) {
+    const aimN = V.norm(c.aim);
+    let ax = aimN.x, ay = aimN.y;
+    if (danger) { ax += danger.x * 0.95; ay += danger.y * 0.95; }
+    if (crowd)  { ax += crowd.x  * 0.70; ay += crowd.y  * 0.70; }
+    if (wall)   {
+      const w = 2.2 * wall.strength;
+      ax += wall.x * w; ay += wall.y * w;
+    }
+    c.aim = { x: ax, y: ay };
+  }
 
   c.firing = false;
   c.firingMissile = false;
@@ -900,19 +986,27 @@ function carrierAI(ship, world) {
   const SAFE_DIST = 1500;
   if (threat && Math.sqrt(threatD2) < SAFE_DIST) {
     c.aim = { x: ship.pos.x - threat.pos.x, y: ship.pos.y - threat.pos.y };
-    return;
-  }
-
-  // No nearby capital threat — strafe perpendicular to the nearest
-  // enemy so the carrier's PD wall still has a usable target axis.
-  const enemy = nearestEnemy(ship, world.ships);
-  if (enemy) {
-    const dx = enemy.pos.x - ship.pos.x;
-    const dy = enemy.pos.y - ship.pos.y;
-    const sign = (ship.id % 2 === 0) ? 1 : -1;
-    c.aim = { x: -dy * sign, y: dx * sign };
   } else {
-    c.aim = null;
+    // No nearby capital threat — strafe perpendicular to the nearest
+    // enemy so the carrier's PD wall still has a usable target axis.
+    const enemy = nearestEnemy(ship, world.ships);
+    if (enemy) {
+      const dx = enemy.pos.x - ship.pos.x;
+      const dy = enemy.pos.y - ship.pos.y;
+      const sign = (ship.id % 2 === 0) ? 1 : -1;
+      c.aim = { x: -dy * sign, y: dx * sign };
+    } else {
+      c.aim = null;
+    }
+  }
+  // Capital crowding — keep distance from ally capitals. Carriers
+  // are huge; a small push avoids two carriers pancaking together.
+  const crowd = allyAvoidance(ship, world ? world.ships : []);
+  if (crowd && c.aim) {
+    const aimN = V.norm(c.aim);
+    c.aim = { x: aimN.x + crowd.x * 0.60, y: aimN.y + crowd.y * 0.60 };
+  } else if (crowd) {
+    c.aim = { x: crowd.x, y: crowd.y };
   }
 }
 

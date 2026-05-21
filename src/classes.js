@@ -238,12 +238,11 @@ export const CLASSES = {
       cluster: {
         bloomDistance: 360,
         childCount: 6,
-        // childSpacing is the perpendicular pixel distance between
-        // adjacent children at bloom. Replaces the old `childSpread`
-        // angular cone — the canister now opens into a *line* of
-        // warheads with real horizontal separation, not a tight
-        // angular fan from a single point.
-        childSpacing: 90,
+        // 160° total angular spread (≈ 2.793 rad). Children fan out
+        // very wide so the cluster bursts in a true cone — a target
+        // can't dodge sideways past the whole spread, and PD has to
+        // engage tracks coming from every angle.
+        childSpread: Math.PI * 160 / 180,
         childSpeed: 380,
         childTurnRate: 2.8,
         childTtl: 2.8,
@@ -325,10 +324,8 @@ export const CLASSES = {
       cluster: {
         bloomDistance: 420,
         childCount: 6,
-        // Perpendicular pixel spacing between adjacent children at
-        // bloom — gives the BB cluster the same line-of-warheads
-        // signature as the cruiser version.
-        childSpacing: 110,
+        // 160° angular spread — same shape as the cruiser cluster.
+        childSpread: Math.PI * 160 / 180,
         childSpeed: 360,
         childTurnRate: 3.2,
         childTtl: 3.0,

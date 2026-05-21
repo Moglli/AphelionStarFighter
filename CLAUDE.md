@@ -122,6 +122,85 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Cluster 160° cone, frigates dart around big ships, capital crowding
+
+**What changed**
+
+Three follow-ups:
+
+1. **Cluster missiles burst into a 160° angular cone, not a line.**
+   `cluster.childSpacing` (perpendicular pixel offset, introduced
+   yesterday) reverted in favour of `cluster.childSpread` again, but
+   the spread is now `Math.PI * 160/180` (≈ 2.793 rad). All 6 children
+   launch from the parent position with headings spanning ±80° off
+   the target axis. Outer warheads loop back onto the target via
+   homing, so the cluster opens into a genuinely wide arc instead of
+   a tight line. Bloom VFX (shockwave growth + spark fan) scales
+   with `childSpread / π` so a wide cone gets a wider flash.
+
+2. **Frigates dart around big ships instead of charging in.**
+   `frigateAI` was running an orbit slot at the spec's `aiOrbit:
+   380`, which sat *inside* every capital's PD bubble (PD ranges 460-
+   560), and had no avoidance logic at all. Two fixes:
+   - **PD-aware orbit.** If the target's `spec.pdCannons.range > 0`,
+     orbit at `pdRange + 140` instead of the spec default. Default
+     stays for fighter/bomber targets.
+   - **Avoidance blend.** Frigates now apply `bigShipDanger`
+     (excluding the current target — same as fighters) with weight
+     0.95, plus the new `allyAvoidance` (weight 0.70) and the
+     existing `wallAvoidance`. The frigate's fastest-in-class speed
+     (maxSpeed 150) plus the danger push pulls it out of broadside
+     and heavy-laser arcs while the orbit slot keeps it strafing.
+
+3. **Large ships keep distance from each other.** New helper
+   `allyAvoidance(ship, ships)` returns a unit push vector pointing
+   away from the nearest same-side capital (frigate / cruiser / BB /
+   carrier) when the hull-to-hull gap is under `max(myR, otherR) *
+   1.5`, weighted by how close the two ships are. Wired into
+   `battleshipAI`, `cruiserAI`, `carrierAI` (blend 0.55–0.60) and
+   `frigateAI` (0.70). Fighters/bombers/stations are excluded — the
+   ones that ride a flexible swarm shouldn't repel each other, and
+   stations don't move. The `resolveHeavyOverlap` collision resolver
+   in `game.js` still catches anyone who slips past the AI push.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/classes.js` | Cruiser + BB cluster: `childSpacing` removed, `childSpread: Math.PI * 160/180` added (≈ 2.793 rad / 160°). |
+| `src/projectile.js` | `spawnClusterChildren` reverted to angular fan: each of the 6 children leaves from `parent.pos` at heading `baseAng + (i - 2.5) * (childSpread/5)`. Spark fan + shockwave growth scale with `childSpread / π`. |
+| `src/ai.js` | New `allyAvoidance` helper after `wallAvoidance`. `frigateAI` rewritten with PD-aware orbit + bigShipDanger + allyAvoidance + wallAvoidance blend. `battleshipAI`, `cruiserAI`, `carrierAI` each apply `allyAvoidance` to `c.aim`. |
+
+**Design decisions / gotchas**
+
+- **Wide cluster cone, same total damage.** 6 × 24 = 144 unchanged.
+  The wider spread invites more PD work (warheads come from more
+  angles, harder for one PD bubble to cover them all) but each
+  individual track is still 24 damage.
+- **`allyAvoidance` ignores fighters/bombers.** Swarming a cap with
+  10 escort fighters would otherwise have each fighter trigger a
+  separate push from every other fighter; the AI would never reach
+  the target. The avoidance is specifically about *capital* hulls
+  drifting through each other, which is what looked broken.
+- **`bigShipDanger` excludes the frigate's own target.** Without the
+  exclude the frigate would refuse to enter its own attack run on a
+  BB — the target's PD push would dominate the steering. With the
+  exclude, OTHER capitals still push, just not the one we're
+  currently attacking.
+- **Frigate's PD-aware orbit only kicks in vs capitals.** Fighter /
+  bomber targets keep the original 380 px orbit so frigates still
+  close on small craft for ring-cannon kills.
+- **Capital crowding push has a hard hull-gap activation threshold
+  (`1.5 * max(myR, otherR)`).** Without that, two cruisers 600 px
+  apart would still push slightly and never converge — the AI never
+  closes formation. The 1.5× ratio means the push only triggers
+  when ships are inside roughly one hull-radius of each other.
+- **Verified via Playwright** (admiral mode): cluster spec is
+  `{childCount: 6, childSpread: 2.793 (160°)}`. Closest live ally-
+  capital pair in a 6-cap admiral spawn is two cruisers with a 128
+  px hull gap (centre-to-centre 308, sum-of-radii 180) — sitting in
+  the avoidance push zone, not overlapping. No pageerrors.
+
 ### 2026-05-21 — Cruiser firing into empty space + cluster line-spread + escort range bump
 
 **What changed**
