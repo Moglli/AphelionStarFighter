@@ -31,7 +31,14 @@ export const customMode = {
     } else {
       game.hostileRace = randomRaceKey();
     }
-    const rosters = cr ? { blue: cr.blue, red: cr.red } : null;
+    // Forward both the multi-faction shape and the legacy single-race
+    // shape — spawnRoster prefers `blueTeams`/`redTeams` if present
+    // and falls back to `blue`/`red`.
+    const rosters = cr ? {
+      blue: cr.blue, red: cr.red,
+      blueTeams: cr.blueTeams,
+      redTeams: cr.redTeams,
+    } : null;
     spawnRoster(game, rosters);
     if (!game.spectating) promotePlayer(game);
   },

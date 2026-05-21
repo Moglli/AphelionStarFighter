@@ -540,28 +540,18 @@ export class MenuSystem {
       <div class="overlay-panel custom-panel">
         <div class="panel-accent-rule"></div>
         <h2>CUSTOM MATCH</h2>
-        <p class="custom-subtitle">PICK FACTION &middot; DRAG SLIDERS TO SET UNITS</p>
+        <p class="custom-subtitle">UP TO TWO FACTIONS PER TEAM &middot; PER-FACTION FLEET SIZE</p>
         <div class="custom-sides">
           <div class="custom-side" data-side="allied">
-            <div class="custom-side-header">
-              <span class="side-title">FRIENDLY</span>
-              <span class="side-race" id="custom-allied-race">Terran</span>
-              <span class="side-tagline" id="custom-allied-tagline"></span>
-            </div>
-            <div class="custom-race-chips" id="custom-allied-races"></div>
-            <div class="custom-divider"></div>
-            <div class="custom-sliders" id="custom-allied-sliders"></div>
+            <div class="custom-side-header"><span class="side-title">FRIENDLY</span></div>
+            <div class="custom-team-list" id="custom-allied-teams"></div>
+            <button class="menu-btn custom-add-btn" id="custom-allied-add">+ ADD ALLY</button>
             <div class="custom-side-total" id="custom-allied-total">0 units</div>
           </div>
           <div class="custom-side" data-side="hostile">
-            <div class="custom-side-header">
-              <span class="side-title">ENEMY</span>
-              <span class="side-race" id="custom-hostile-race">Terran</span>
-              <span class="side-tagline" id="custom-hostile-tagline"></span>
-            </div>
-            <div class="custom-race-chips" id="custom-hostile-races"></div>
-            <div class="custom-divider"></div>
-            <div class="custom-sliders" id="custom-hostile-sliders"></div>
+            <div class="custom-side-header"><span class="side-title">ENEMY</span></div>
+            <div class="custom-team-list" id="custom-hostile-teams"></div>
+            <button class="menu-btn custom-add-btn" id="custom-hostile-add">+ ADD ENEMY</button>
             <div class="custom-side-total" id="custom-hostile-total">0 units</div>
           </div>
         </div>
@@ -573,18 +563,23 @@ export class MenuSystem {
       </div>
     `;
 
-    this._customAlliedRaceName = screen.querySelector("#custom-allied-race");
-    this._customAlliedTagline = screen.querySelector("#custom-allied-tagline");
-    this._customHostileRaceName = screen.querySelector("#custom-hostile-race");
-    this._customHostileTagline = screen.querySelector("#custom-hostile-tagline");
-    this._customAlliedRaces = screen.querySelector("#custom-allied-races");
-    this._customHostileRaces = screen.querySelector("#custom-hostile-races");
-    this._customAlliedSliders = screen.querySelector("#custom-allied-sliders");
-    this._customHostileSliders = screen.querySelector("#custom-hostile-sliders");
+    this._customAlliedTeamsEl = screen.querySelector("#custom-allied-teams");
+    this._customHostileTeamsEl = screen.querySelector("#custom-hostile-teams");
+    this._customAlliedAddBtn = screen.querySelector("#custom-allied-add");
+    this._customHostileAddBtn = screen.querySelector("#custom-hostile-add");
     this._customAlliedTotal = screen.querySelector("#custom-allied-total");
     this._customHostileTotal = screen.querySelector("#custom-hostile-total");
     this._customGrandTotal = screen.querySelector("#custom-grand-total");
+    // Tracked team-block elements per side so _syncCustomMatch can do
+    // incremental updates instead of rebuilding the DOM tree each frame.
+    this._customTeamBlocks = { allied: [], hostile: [] };
 
+    this._addListener(this._customAlliedAddBtn, "click", () => {
+      if (this._callbacks.onCustomAddTeam) this._callbacks.onCustomAddTeam("allied");
+    });
+    this._addListener(this._customHostileAddBtn, "click", () => {
+      if (this._callbacks.onCustomAddTeam) this._callbacks.onCustomAddTeam("hostile");
+    });
     this._addListener(screen.querySelector("#custom-cancel"), "click", () => {
       if (this._callbacks.onCustomClose) this._callbacks.onCustomClose();
     });
@@ -986,88 +981,99 @@ export class MenuSystem {
 
   _syncCustomMatch(s) {
     const custom = s.custom;
-    if (!custom) return;
+    if (!custom || !s.raceKeys) return;
 
-    // Side color accents
-    const alliedAccent = "#5af";
-    const hostileAccent = "#f55";
+    const accents = { allied: "#5af", hostile: "#f55" };
+    const MAX_TEAMS_PER_SIDE = 2;
 
-    // Update race names and taglines
-    const aRace = s.races[custom.alliedRace];
-    const hRace = s.races[custom.hostileRace];
-    this._customAlliedRaceName.textContent = aRace ? aRace.name : custom.alliedRace;
-    this._customAlliedTagline.textContent = aRace ? aRace.tagline : "";
-    this._customHostileRaceName.textContent = hRace ? hRace.name : custom.hostileRace;
-    this._customHostileTagline.textContent = hRace ? hRace.tagline : "";
-
-    // Build race chips on first call
-    if (!this._customAlliedRaces.children.length && s.raceKeys) {
-      const items = s.raceKeys.map((k) => ({
-        key: k, label: s.races[k] ? s.races[k].name : k, sublabel: "",
-      }));
-      this._customAlliedRaces.innerHTML = "";
-      for (const item of items) {
-        const chip = document.createElement("button");
-        chip.className = "chip-item chip-sm";
-        chip.dataset.key = item.key;
-        chip.textContent = item.label;
-        this._addListener(chip, "click", () => {
-          if (this._callbacks.onCustomRaceSelect) this._callbacks.onCustomRaceSelect("allied", item.key);
-        });
-        this._customAlliedRaces.appendChild(chip);
+    const renderSide = (sideKey, teamsArr, listEl, addBtnEl, totalEl) => {
+      // Reconcile DOM blocks to match the team count for this side.
+      // Each block owns a race-chip row, a sliders block, and (for
+      // slots past the first) a REMOVE button.
+      const tracked = this._customTeamBlocks[sideKey];
+      // Tear down extras.
+      while (tracked.length > teamsArr.length) {
+        const blk = tracked.pop();
+        if (blk && blk.root && blk.root.parentNode) blk.root.parentNode.removeChild(blk.root);
       }
-    }
-    if (!this._customHostileRaces.children.length && s.raceKeys) {
-      const items = s.raceKeys.map((k) => ({
-        key: k, label: s.races[k] ? s.races[k].name : k, sublabel: "",
-      }));
-      this._customHostileRaces.innerHTML = "";
-      for (const item of items) {
-        const chip = document.createElement("button");
-        chip.className = "chip-item chip-sm";
-        chip.dataset.key = item.key;
-        chip.textContent = item.label;
-        this._addListener(chip, "click", () => {
-          if (this._callbacks.onCustomRaceSelect) this._callbacks.onCustomRaceSelect("hostile", item.key);
+      // Build missing.
+      while (tracked.length < teamsArr.length) {
+        const idx = tracked.length;
+        const block = document.createElement("div");
+        block.className = "custom-team-block";
+        block.innerHTML = `
+          <div class="custom-team-header">
+            <span class="custom-team-label">FACTION ${idx + 1}</span>
+            <span class="custom-team-name"></span>
+            <button class="custom-team-remove" type="button" aria-label="Remove this faction">&times;</button>
+          </div>
+          <div class="custom-team-races"></div>
+          <div class="custom-team-sliders"></div>
+        `;
+        const racesEl = block.querySelector(".custom-team-races");
+        const slidersEl = block.querySelector(".custom-team-sliders");
+        const removeBtn = block.querySelector(".custom-team-remove");
+        // Race chips for this slot.
+        for (const k of s.raceKeys) {
+          const chip = document.createElement("button");
+          chip.className = "chip-item chip-sm";
+          chip.dataset.key = k;
+          chip.textContent = s.races[k] ? s.races[k].name : k;
+          this._addListener(chip, "click", () => {
+            if (this._callbacks.onCustomRaceSelect) this._callbacks.onCustomRaceSelect(sideKey, k, idx);
+          });
+          racesEl.appendChild(chip);
+        }
+        // Sliders (one set per faction so per-faction fleet sizes work).
+        this._buildSliders(slidersEl, sideKey, accents[sideKey], custom, idx);
+        // Remove (slot 1 always present; UI hides its button via CSS).
+        this._addListener(removeBtn, "click", () => {
+          if (this._callbacks.onCustomRemoveTeam) this._callbacks.onCustomRemoveTeam(sideKey, idx);
         });
-        this._customHostileRaces.appendChild(chip);
+        listEl.appendChild(block);
+        tracked.push({ root: block, racesEl, slidersEl, removeBtn, nameEl: block.querySelector(".custom-team-name") });
       }
-    }
+      // Sync each block to its team data.
+      for (let i = 0; i < teamsArr.length; i++) {
+        const team = teamsArr[i];
+        const blk = tracked[i];
+        const race = s.races[team.race];
+        blk.nameEl.textContent = race ? race.name : team.race;
+        for (const chip of blk.racesEl.children) {
+          chip.classList.toggle("selected", chip.dataset.key === team.race);
+        }
+        this._updateSliders(blk.slidersEl, team.counts || {});
+        // Hide the X on the first slot \u2014 every side must keep one
+        // faction. CSS could do this with :first-child, but we toggle
+        // an attribute so future styles (e.g. dim it) stay easy.
+        blk.removeBtn.style.visibility = (i === 0) ? "hidden" : "";
+      }
+      // Side total + Add button gating.
+      const sideTotal = teamsArr.reduce(
+        (n, t) => n + Object.values(t.counts || {}).reduce((a, b) => a + (b || 0), 0),
+        0,
+      );
+      totalEl.textContent = `${sideTotal} ships`;
+      addBtnEl.style.display = teamsArr.length >= MAX_TEAMS_PER_SIDE ? "none" : "";
+    };
 
-    // Update race chip selections
-    for (const chip of this._customAlliedRaces.children) {
-      chip.classList.toggle("selected", chip.dataset.key === custom.alliedRace);
-    }
-    for (const chip of this._customHostileRaces.children) {
-      chip.classList.toggle("selected", chip.dataset.key === custom.hostileRace);
-    }
+    renderSide("allied",  custom.blueTeams  || [], this._customAlliedTeamsEl,  this._customAlliedAddBtn,  this._customAlliedTotal);
+    renderSide("hostile", custom.redTeams   || [], this._customHostileTeamsEl, this._customHostileAddBtn, this._customHostileTotal);
 
-    // Build sliders on first call
-    if (!this._customAlliedSliders.children.length) {
-      this._buildSliders(this._customAlliedSliders, "allied", alliedAccent, custom);
-    }
-    if (!this._customHostileSliders.children.length) {
-      this._buildSliders(this._customHostileSliders, "hostile", hostileAccent, custom);
-    }
-
-    // Update slider values
-    this._updateSliders(this._customAlliedSliders, custom.blueCounts || {});
-    this._updateSliders(this._customHostileSliders, custom.redCounts || {});
-
-    // Update totals
-    this._customAlliedTotal.textContent = `${custom.blueTotal || 0} ships`;
-    this._customHostileTotal.textContent = `${custom.redTotal || 0} ships`;
-
+    // Grand total + heat colour.
+    const blueTotal  = (custom.blueTeams  || []).reduce((n, t) => n + Object.values(t.counts || {}).reduce((a, b) => a + (b || 0), 0), 0);
+    const redTotal   = (custom.redTeams   || []).reduce((n, t) => n + Object.values(t.counts || {}).reduce((a, b) => a + (b || 0), 0), 0);
+    const grand = blueTotal + redTotal;
     let totalsColor = "#9bd";
-    const grand = custom.grandTotal || 0;
     if (grand > 400) totalsColor = "#f97";
     else if (grand > 200) totalsColor = "#fc8";
-    this._customGrandTotal.textContent = `Total fleet \u00b7 Friendly ${custom.blueTotal || 0}  \u00b7  Enemy ${custom.redTotal || 0}  \u00b7  ${grand} ships`;
+    this._customGrandTotal.textContent = `Total fleet \u00b7 Friendly ${blueTotal}  \u00b7  Enemy ${redTotal}  \u00b7  ${grand} ships`;
     this._customGrandTotal.style.color = totalsColor;
   }
 
-  _buildSliders(container, side, accent, custom) {
+  _buildSliders(container, side, accent, custom, teamIdx = 0) {
     container.innerHTML = "";
+    container.dataset.teamIdx = String(teamIdx);
     const classes = custom.classes || CUSTOM_CLASSES;
     for (const klass of classes) {
       const row = document.createElement("div");
@@ -1087,7 +1093,11 @@ export class MenuSystem {
         const countEl = row.querySelector(".slider-count");
         countEl.textContent = input.value;
         if (this._callbacks.onCustomSliderChange) {
-          this._callbacks.onCustomSliderChange(side, klass, parseInt(input.value, 10));
+          // teamIdx is the per-side faction slot (0 or 1). Slot is
+          // hung off the container so a callback fires for the right
+          // team even after re-renders.
+          const idx = container && container.dataset ? parseInt(container.dataset.teamIdx || "0", 10) : 0;
+          this._callbacks.onCustomSliderChange(side, klass, parseInt(input.value, 10), idx);
         }
       });
       container.appendChild(row);

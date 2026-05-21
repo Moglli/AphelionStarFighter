@@ -122,6 +122,105 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-21 — Custom Match supports multi-faction teams (all 4 factions, per-faction fleet sizes)
+
+**What changed**
+
+Map size and fleet size already flowed through `startGame` (the menu's
+size chip drives `setArenaSize(mapW, mapH)`; the fleet chip drives
+`game.fleetMul`, applied as `Math.round(count * mul)` for the
+race-default rosters). Custom mode honored map size but explicitly
+skipped `fleetMul` because the user-authored counts are the whole
+point. That part was already correct — the only missing piece was
+the inability to stage more than two factions on the same map.
+
+Custom Match now supports **up to 2 factions per side** for a 4-
+faction setup, each with its own per-class fleet counts.
+
+- The single race chip + single slider block per side is replaced by
+  a stack of "team blocks." Each block has its own race chip row
+  (Terran / Reavers / Hegemony / Voidsworn), its own per-class
+  sliders, and (for slot 2 onward) a remove button.
+- `+ ADD ALLY` / `+ ADD ENEMY` buttons add a second faction to the
+  side. The button auto-picks the first race not already on the side
+  so a 2-tap path goes from "1v1 Terran vs Terran" to "all 4
+  factions on the map."
+- The overlay caps each side at 2 factions and hides the add button
+  once it's full.
+- Side and grand totals re-sum across all factions on the side.
+
+**Data model.** `InputManager` now tracks `customBlueTeams` and
+`customRedTeams` — arrays of `{race, counts}`. The legacy single-race
+fields (`customAlliedRace`, `customHostileRace`, `customBlueCounts`,
+`customRedCounts`) are kept as mirrors of the *first* team so any
+code that still reads them (HUD chrome, debug paths) keeps working.
+
+`consumeCustomRoster()` emits both shapes:
+
+```js
+{
+  alliedRace, hostileRace,        // legacy: first team's race
+  blue, red,                      // legacy: first team's counts
+  blueTeams: [{race, counts}, ...],  // new
+  redTeams:  [{race, counts}, ...],  // new
+}
+```
+
+`game.js#spawnRoster` resolves in order:
+
+1. `rosterOverride.blueTeams` / `redTeams` — multi-faction Custom mode.
+2. `rosterOverride.blue` / `red` — legacy single-faction Custom, plus
+   Roguelite's per-node manifest.
+3. Race-default roster — every other mode.
+
+Cases 1 + 2 still skip `fleetMul` (counts are authored). The Defend-
+mode station uses the side's *primary* race (first team) for visual
+identity.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/input.js` | Replaced `customBlueCounts`/`customRedCounts` with `customBlueTeams`/`customRedTeams` (arrays of `{race, counts}`); kept the old single-race fields as mirrors of slot 0. `consumeCustomRoster` emits `blueTeams`/`redTeams` alongside the legacy `blue`/`red`. `_buildMenuState` exposes the team arrays under `custom.blueTeams` / `custom.redTeams`. Callbacks `onCustomRaceSelect` and `onCustomSliderChange` now take a `teamIdx`; new `onCustomAddTeam(side)` and `onCustomRemoveTeam(side, idx)` wire the +/× buttons. |
+| `src/menus.js` | Replaced the single-race custom overlay with a per-side team-list container + `+ ADD ALLY`/`+ ADD ENEMY` button. `_syncCustomMatch` reconciles the DOM team blocks to the team arrays each frame (tear extras, build missing, sync race-chip selection + sliders + totals). `_buildSliders` accepts a `teamIdx` and stamps it on the container so per-slider callbacks know which faction they're editing. |
+| `src/modes/custom.js` | Forwards `blueTeams`/`redTeams` alongside the legacy `blue`/`red` when calling `spawnRoster`. |
+| `src/game.js` | `spawnRoster` now iterates `blueTeams`/`redTeams` when present; each team contributes its race's counts via the existing per-class spawn paths (`spawnFighterPacks`, `spawnBomberPairs`, `spawnCapitalWithEscort`, default loop). Manifest matching for wounded Frontier capitals still draws from the blue side regardless of which team owns the cap. Defend-mode station uses the side's primary race. |
+| `style.css` | New `.custom-team-block` block style (padded card, 1 px border), `.custom-team-header` row with the slot label + race name + remove pill, `.custom-team-races` chip row (flex with `min-width:60px` chips), `.custom-team-sliders` stacked slider container, `.custom-add-btn` dashed "+ ADD" button. |
+
+**Design decisions / gotchas**
+
+- **Teams share the same side spawn zone.** Both factions on the
+  blue side spawn from `ARENA.spawn.blue` — they're allies. The AI
+  side check (`o.side === ship.side`) is unchanged, so an ally
+  faction never gets targeted by its own teammates. True 4-team
+  (4-corner FFA) would require a side architecture rewrite that's
+  out of scope.
+- **2-faction-per-side cap matches the 4 available races.** With
+  exactly 4 factions in the roster, "all 4 on the map" is 2-vs-2 at
+  the limit. Going above 2 per side would require splitting one
+  faction across teams, which doesn't make sense.
+- **Add-button default pick is "first unused race on this side."**
+  So `[Terran]` + `+ ADD ALLY` defaults the new slot to `Reavers`,
+  not another `Terran`. The user can re-pick after.
+- **Slot 0 can't be removed.** Each side must keep at least one
+  faction or the spawn loop drops the side entirely. The remove
+  pill is hidden (via `visibility: hidden`) on slot 0 so the
+  removeBtn still occupies its column in the header grid.
+- **`consumeCustomRoster` clones counts per team.** Without the
+  clone, the overlay's DOM-edits would mutate the live roster
+  passed into `startGame`, which is shared with the live game
+  object. Cheap defensive copy.
+- **Old `customBlueCounts`/`customRedCounts` still exist** because
+  several render paths (per-slider sync, totals, the old menu
+  layout's grand-total color band) still read them. Mirroring slot
+  0 keeps backward compatibility cheap.
+- **Verified via Playwright** (Galaxy S9+ UA): default Custom flow
+  spawns 230 ships (Terran vs Terran). After tapping `+ ADD ALLY`
+  and `+ ADD ENEMY` the same flow spawns 482 ships across `blue-
+  terran` (115), `blue-reavers` (126), `red-terran` (115), and `red-
+  reavers` (126) — all four factions on the map, per-faction fleet
+  sizes preserved. No pageerrors.
+
 ### 2026-05-21 — Tracking gun turrets + lasers bury into the hull
 
 **What changed**

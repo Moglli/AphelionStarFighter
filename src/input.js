@@ -582,10 +582,19 @@ export class StartMenu {
     // changing the side's race chip re-seeds that side's counts so the
     // player has a sensible starting point.
     this.showCustom = false;
+    // Per-side team slots. Each entry is one *faction* sharing that
+    // side (blue = allied / red = enemy) with its own per-class
+    // counts. We support up to 2 factions per side, i.e. up to all 4
+    // factions on a single map. The first entry's race is also
+    // mirrored to the legacy customAlliedRace / customHostileRace
+    // fields for any caller (game.js, modes/custom.js, the customRoster
+    // output shape) that still keys off a single primary race.
+    this.customBlueTeams = [{ race: "terran", counts: rosterForRace("terran") }];
+    this.customRedTeams = [{ race: "terran", counts: rosterForRace("terran") }];
     this.customAlliedRace = "terran";
     this.customHostileRace = "terran";
-    this.customBlueCounts = rosterForRace("terran");
-    this.customRedCounts = rosterForRace("terran");
+    this.customBlueCounts = this.customBlueTeams[0].counts;
+    this.customRedCounts = this.customRedTeams[0].counts;
     this.customRects = {
       panel: null,
       allied: { race: [], counters: [], header: null, panel: null },
@@ -960,8 +969,10 @@ export class StartMenu {
     }
 
     // Build custom match state
-    const blueTotal = totalShipCount(this.customBlueCounts);
-    const redTotal = totalShipCount(this.customRedCounts);
+    // Side totals now sum every faction on the side, not just the
+    // primary one.
+    const blueTotal = this.customBlueTeams.reduce((n, t) => n + totalShipCount(t.counts), 0);
+    const redTotal  = this.customRedTeams.reduce((n, t) => n + totalShipCount(t.counts), 0);
 
     // Build resupply state
     let resupplyState = null;
@@ -1042,6 +1053,10 @@ export class StartMenu {
         hostileRace: this.customHostileRace,
         blueCounts: { ...this.customBlueCounts },
         redCounts: { ...this.customRedCounts },
+        // Per-faction teams (new multi-faction model). Pass clones so
+        // the overlay can't mutate input state by reference.
+        blueTeams: this.customBlueTeams.map((t) => ({ race: t.race, counts: { ...t.counts } })),
+        redTeams: this.customRedTeams.map((t) => ({ race: t.race, counts: { ...t.counts } })),
         blueTotal,
         redTotal,
         grandTotal: blueTotal + redTotal,
@@ -1143,18 +1158,49 @@ export class StartMenu {
           this.showCustom = false;
         }
       },
-      onCustomRaceSelect: (side, raceKey) => {
-        if (side === "allied") {
-          this.customAlliedRace = raceKey;
-          this.customBlueCounts = rosterForRace(raceKey);
-        } else {
-          this.customHostileRace = raceKey;
-          this.customRedCounts = rosterForRace(raceKey);
+      onCustomRaceSelect: (side, raceKey, teamIdx = 0) => {
+        const teams = side === "allied" ? this.customBlueTeams : this.customRedTeams;
+        if (!teams[teamIdx]) return;
+        teams[teamIdx].race = raceKey;
+        // Re-seed this faction's counts to the picked race's default
+        // roster, matching the legacy behaviour ("change the side's
+        // race chip re-seeds that side's counts").
+        teams[teamIdx].counts = rosterForRace(raceKey);
+        // Mirror to the primary-race / primary-counts fields so any
+        // legacy reader that hasn't migrated to teams still works.
+        if (teamIdx === 0) {
+          if (side === "allied") {
+            this.customAlliedRace = raceKey;
+            this.customBlueCounts = teams[0].counts;
+          } else {
+            this.customHostileRace = raceKey;
+            this.customRedCounts = teams[0].counts;
+          }
         }
       },
-      onCustomSliderChange: (side, klass, count) => {
-        if (side === "allied") this.customBlueCounts[klass] = count;
-        else this.customRedCounts[klass] = count;
+      onCustomSliderChange: (side, klass, count, teamIdx = 0) => {
+        const teams = side === "allied" ? this.customBlueTeams : this.customRedTeams;
+        if (!teams[teamIdx]) return;
+        teams[teamIdx].counts[klass] = count;
+        if (teamIdx === 0) {
+          if (side === "allied") this.customBlueCounts[klass] = count;
+          else this.customRedCounts[klass] = count;
+        }
+      },
+      onCustomAddTeam: (side) => {
+        const teams = side === "allied" ? this.customBlueTeams : this.customRedTeams;
+        if (teams.length >= 2) return;
+        // Seed the new faction with the next race the side isn't
+        // already running, so the default 4-faction-on-the-map setup
+        // is one tap away from anywhere.
+        const taken = new Set(teams.map((t) => t.race));
+        const pick = ["terran", "reavers", "hegemony", "voidsworn"].find((k) => !taken.has(k)) || "terran";
+        teams.push({ race: pick, counts: rosterForRace(pick) });
+      },
+      onCustomRemoveTeam: (side, teamIdx) => {
+        const teams = side === "allied" ? this.customBlueTeams : this.customRedTeams;
+        if (teamIdx <= 0 || teamIdx >= teams.length) return;
+        teams.splice(teamIdx, 1);
       },
       onBattleFly: () => {
         this._launchBattle("fly");
@@ -1300,11 +1346,20 @@ export class StartMenu {
   // Returns a snapshot of the configured custom roster for startGame.
   // Shape matches what `modes/custom.js` expects.
   consumeCustomRoster() {
+    // Multi-faction shape: each side carries a list of factions sharing
+    // it. modes/custom.js + game.js#spawnRoster iterate `blueTeams` /
+    // `redTeams` when present and fall back to the legacy single-race
+    // shape otherwise.
+    const cloneTeams = (teams) => teams.map((t) => ({
+      race: t.race, counts: { ...t.counts },
+    }));
     return {
       alliedRace: this.customAlliedRace,
       hostileRace: this.customHostileRace,
       blue: { ...this.customBlueCounts },
       red: { ...this.customRedCounts },
+      blueTeams: cloneTeams(this.customBlueTeams),
+      redTeams: cloneTeams(this.customRedTeams),
     };
   }
 

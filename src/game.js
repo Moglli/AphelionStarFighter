@@ -221,60 +221,78 @@ function spawnRoster(game, rosterOverride = null) {
     : null;
 
   for (const side of ["blue", "red"]) {
-    const race = side === "blue" ? game.alliedRace : game.hostileRace;
-    // Resolution order: explicit override (custom + roguelite both pass
-    // their roster bundle as rosterOverride) > race-defined defaults.
-    // Roguelite + custom skip the fleet-size multiplier (counts are
-    // deliberate).
-    let roster;
-    if (rosterOverride && rosterOverride[side]) {
-      roster = rosterOverride[side];
-    } else {
-      roster = (RACES[race] && RACES[race].roster) || RACES.terran.roster;
-    }
+    // Resolution order:
+    //   1. Multi-faction list (`blueTeams`/`redTeams`) — Custom mode
+    //      with multiple factions sharing this side.
+    //   2. Single-faction override (`blue`/`red`) — legacy custom +
+    //      roguelite shape.
+    //   3. Default race roster — open / defend / admiral / etc.
+    // Cases 1+2 (i.e. ANY override) skip the fleet-size multiplier:
+    // counts are taken as authored.
+    const teamsKey = side + "Teams";
+    const teams = (rosterOverride && Array.isArray(rosterOverride[teamsKey]) && rosterOverride[teamsKey].length > 0)
+      ? rosterOverride[teamsKey]
+      : null;
+
     const zone = ARENA.spawn[side];
     const facing = side === "blue" ? 0 : Math.PI;
     const mul = rosterOverride ? 1 : (game.fleetMul || 1);
-    for (const [klass, count] of Object.entries(roster)) {
-      if (count <= 0) continue;
-      const scaled = Math.max(1, Math.round(count * mul));
-      if (klass === "fighter") {
-        spawnFighterPacks(game, side, race, zone, scaled, facing);
-      } else if (klass === "bomber") {
-        spawnBomberPairs(game, side, race, zone, scaled, facing);
-      } else if (ESCORT_SIZE[klass]) {
-        // Frigates, cruisers, battleships, and carriers each spawn with
-        // a class-sized fighter escort attached to them.
-        for (let i = 0; i < scaled; i++) {
-          // Pop the next blue capital of this klass from the manifest;
-          // red capitals always spawn fresh.
-          let wounded = null;
-          if (side === "blue" && manifest) {
-            const idx = manifest.findIndex((m) => m.klass === klass);
-            if (idx !== -1) {
-              wounded = manifest[idx];
-              manifest.splice(idx, 1);
+
+    const spawnOne = (race, roster) => {
+      for (const [klass, count] of Object.entries(roster)) {
+        if (count <= 0) continue;
+        const scaled = Math.max(1, Math.round(count * mul));
+        if (klass === "fighter") {
+          spawnFighterPacks(game, side, race, zone, scaled, facing);
+        } else if (klass === "bomber") {
+          spawnBomberPairs(game, side, race, zone, scaled, facing);
+        } else if (ESCORT_SIZE[klass]) {
+          for (let i = 0; i < scaled; i++) {
+            let wounded = null;
+            if (side === "blue" && manifest) {
+              const idx = manifest.findIndex((m) => m.klass === klass);
+              if (idx !== -1) {
+                wounded = manifest[idx];
+                manifest.splice(idx, 1);
+              }
             }
+            spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded);
           }
-          spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded);
-        }
-      } else {
-        for (let i = 0; i < scaled; i++) {
-          const pos = randomSpawnPos(zone);
-          const heading = facing + (Math.random() - 0.5) * 0.3;
-          const ship = createShip({
-            klass, race, side, pos, heading,
-            controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
-          });
-          game.ships.push(ship);
+        } else {
+          for (let i = 0; i < scaled; i++) {
+            const pos = randomSpawnPos(zone);
+            const heading = facing + (Math.random() - 0.5) * 0.3;
+            const ship = createShip({
+              klass, race, side, pos, heading,
+              controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+            });
+            game.ships.push(ship);
+          }
         }
       }
+    };
+
+    if (teams) {
+      for (const t of teams) {
+        if (!t || !t.race || !t.counts) continue;
+        spawnOne(t.race, t.counts);
+      }
+    } else {
+      const race = side === "blue" ? game.alliedRace : game.hostileRace;
+      const roster = (rosterOverride && rosterOverride[side])
+        ? rosterOverride[side]
+        : ((RACES[race] && RACES[race].roster) || RACES.terran.roster);
+      spawnOne(race, roster);
     }
+
     // Defend mode: one multi-node station per side, dropped at the
-    // centre of that side's spawn zone (so the fleet sits between
-    // the station and the contested middle of the map).
+    // centre of that side's spawn zone. Always uses the *primary*
+    // race for visual identity (first team or game.alliedRace/
+    // hostileRace).
     if (game.mode === "defend") {
-      spawnStation(game, side, race, zone, facing);
+      const stationRace = teams ? teams[0].race
+        : (side === "blue" ? game.alliedRace : game.hostileRace);
+      spawnStation(game, side, stationRace, zone, facing);
     }
   }
   if (!game.spectating) promotePlayer(game);
