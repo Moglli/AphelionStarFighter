@@ -751,15 +751,16 @@ function flybyAI(ship, target, dt, world) {
 }
 
 // ---------------------------------------------------------------------------
-// Bomber behaviour: flank the target instead of holding standoff dead
-// ahead. The bomber picks a side relative to the target's current facing
+// Bomber behaviour: missile-run from outside the target's PD envelope.
+// The bomber picks a side relative to the target's current facing
 // (ID-parity for consistency) and aims for a slot offset perpendicular
 // to the target's nose — so the strike comes in from the broadside, not
-// down the target's gun arc. Pods auto-fire on any target inside
-// acquireRange (see updateMissilePodFire in ship.js), so the flank
-// approach still delivers full payload. Once in the flank slot, the
-// bomber faces the target so its forward gun + pod launch geometry can
-// engage.
+// down the target's gun arc. Standoff is sized dynamically against the
+// target's PD range so a station-class target with longer PD pushes
+// the bomber further out than a frigate with a single PD turret.
+// Pods auto-fire on any target inside acquireRange (see
+// updateMissilePodFire in ship.js), so a bomber sitting at the flank
+// slot delivers its full payload from a safe distance.
 // ---------------------------------------------------------------------------
 function bomberFlankAI(ship, target, dt, world) {
   const c = ship.controller;
@@ -771,11 +772,21 @@ function bomberFlankAI(ship, target, dt, world) {
 
   const pods = s.missilePods;
   const podRange = pods ? pods.range : 1700;
-  // Stay just inside pod range so missiles can lock, but well inside
-  // the wider standoff of the old AI — bombers are supposed to PRESS
-  // in from the flank, not loiter at the back fence. With the bomber
-  // shield buff they can also commit closer than before.
-  const STANDOFF = Math.min(podRange * 0.75, 1200);
+  // Target's PD envelope drives the safe standoff. Without this, a
+  // bomber would happily flank inside the PD bubble — PD turrets would
+  // shred its missiles + nudge the hull. The 1.3× buffer matches the
+  // multiplier `bigShipDanger` uses to start nudging the heading
+  // outward; the +120 buffer means missiles spawn with clear air
+  // before they need to dodge PD rounds. If the target carries no PD
+  // (rare — e.g. a wreck or stripped capital), fall back to the old
+  // 1200u standoff.
+  const targetPdRange = (target.spec && target.spec.pdCannons && target.spec.pdCannons.range) || 0;
+  const pdSafe = targetPdRange > 0 ? targetPdRange * 1.3 + 120 : 0;
+  // Final standoff: at least clear of the PD ring, capped just inside
+  // pod range so missiles still acquire. We *prefer* to sit ~85% of
+  // pod range — close enough that missiles don't time out, far enough
+  // that PD rounds (which lead aim) miss more often.
+  const STANDOFF = Math.max(pdSafe, Math.min(podRange * 0.85, 1400));
 
   // Per-bomber consistent side. Use target heading when it has one;
   // small craft (fighters) can move erratically so fall back to the
@@ -816,17 +827,23 @@ function bomberFlankAI(ship, target, dt, world) {
     ship.inSlot = true;
   }
 
+  // Overshoot threshold: arc out as soon as we breach the PD safety
+  // ring (with a small buffer), not at a fixed fraction of STANDOFF.
+  // A bomber with a generous pod range (e.g. 1800) against a target
+  // with a tiny PD ring (400) would otherwise dive way too deep before
+  // peeling — `STANDOFF * 0.55` was 770, well inside the 500 PD ring.
+  const overshootThresh = pdSafe > 0 ? pdSafe * 0.95 : STANDOFF * 0.55;
+
   let aim;
   if (!ship.inSlot) {
     // Get to the flank slot first — heading-locked flight means aiming
     // there IS flying there.
     aim = { x: toSlotX, y: toSlotY };
-  } else if (dist < STANDOFF * 0.55) {
-    // Overshoot recovery: curve OUT along the flank tangent instead of
-    // doing a 180° turn back along the approach vector. A heading-
-    // locked craft would otherwise spend ~2s spinning around while
-    // sitting inside the PD bubble; the tangent escape arcs out in
-    // half the time.
+  } else if (dist < overshootThresh) {
+    // Inside the PD safety ring — curve OUT along the flank tangent
+    // instead of doing a 180° turn. A heading-locked craft would
+    // otherwise spend ~2s spinning around while sitting inside the PD
+    // bubble; the tangent escape arcs out in half the time.
     aim = { x: perpTx, y: perpTy };
   } else {
     // In the slot — face the target so forward gun + pod launch geometry
@@ -848,19 +865,27 @@ function bomberFlankAI(ship, target, dt, world) {
           && V.dot(fwd, dir) > 0.7;
   c.firingMissile = false;
 
-  // Threat avoidance — but the *target* is excluded from danger. Bombers
-  // were dialling themselves out of engagement on every capital they
-  // tried to attack; now they only flinch from OTHER capitals nearby.
+  // Threat avoidance — bombers (unlike fighters) DON'T get to ignore
+  // their attack target's PD ring. The whole point of the missile-run
+  // doctrine is to stay outside the target's defensive envelope; if
+  // we excluded the target the bomber would happily fly into PD range
+  // every approach. With the target included, the PD bubble shows up
+  // as a strong outward push on the heading once we're inside ~1.25×
+  // PD range (see bigShipDanger).
   const pack = world && world.packs ? world.packs.get(ship.packId) : null;
   const cohesion = packCohesion(ship, pack);
-  const danger = bigShipDanger(ship, world ? world.ships : [], target);
+  const danger = bigShipDanger(ship, world ? world.ships : [], null);
   const tail = tailDanger(ship, world ? world.ships : []);
   const wall = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
   if (cohesion || danger || tail || wall) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
     if (cohesion) { ax += cohesion.x * 0.30; ay += cohesion.y * 0.30; }
-    if (danger)   { ax += danger.x   * 0.85; ay += danger.y   * 0.85; }
+    // Danger weight bumped from 0.85 → 1.2: the bomber should
+    // PRIORITISE staying out of PD range over pressing the attack.
+    // Missiles continue to home from a safe distance via the pod auto-
+    // fire path (see updateMissilePodFire in ship.js).
+    if (danger)   { ax += danger.x   * 1.20; ay += danger.y   * 1.20; }
     if (tail)     { ax += tail.x     * 0.80; ay += tail.y     * 0.80; }
     if (wall)     {
       const w = 2.6 * wall.strength;
@@ -990,13 +1015,31 @@ function cruiserAI(ship, target, dt, world) {
   //     (NOT c.aim) — previously the alignment check used the slot-
   //     direction, which was off-axis by design.
   const lead = leadAim(ship, target, s.weapon.projectileSpeed);
-  const standoff = (s.aiOrbit || 880) * 0.7;
+  // Tell the cruiser hull where to *point its cannons* — the cannon
+  // slew in updateShip tracks this every tick. It's the lead intercept
+  // direction whether we're approaching, orbiting, or breaking off.
+  // Steering (c.aim below) drives the hull, which may differ from
+  // where the cannons want to shoot.
+  ship.cannonTargetDir = { x: lead.x, y: lead.y };
+  // Standoff is the closer of `aiOrbit * 0.7` and the hull/PD safety
+  // ring — whichever is FURTHER out. Vs a battleship (radius 156, PD
+  // ~560) the safety ring dominates: cruiser starts swinging out at
+  // ~880u instead of plowing in to 616u and eating the PD bubble.
+  const myR = (s && s.radius) || 60;
+  const targetR = (target.spec && target.spec.radius) || 60;
+  const targetPdRange = (target.spec && target.spec.pdCannons && target.spec.pdCannons.range) || 0;
+  const isCapTarget = target.klass !== "fighter" && target.klass !== "bomber";
+  const hullSafe = myR + targetR + 220;
+  const pdSafe = isCapTarget ? targetPdRange * 1.25 + 160 : 0;
+  const standoff = Math.max((s.aiOrbit || 880) * 0.7, hullSafe, pdSafe);
   if (dist > standoff) {
     c.aim = { x: lead.x, y: lead.y };
   } else {
     const sign = (ship.id % 2 === 0) ? 1 : -1;
     const perpX = -dir.y * sign, perpY = dir.x * sign;
-    const offset = 800;
+    // Perpendicular offset scales with the same safety ring so the
+    // cruiser swings AROUND the danger zone, not through it.
+    const offset = Math.max(800, hullSafe, pdSafe);
     c.aim = {
       x: target.pos.x + perpX * offset - ship.pos.x,
       y: target.pos.y + perpY * offset - ship.pos.y,
@@ -1004,19 +1047,39 @@ function cruiserAI(ship, target, dt, world) {
   }
 
   const leadN = V.norm(lead);
-  const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
-  const aligned = V.dot(fwd, leadN);
-  // Slightly looser tolerance (cos ≈ 0.88 → ±28°) so the salvo fires
-  // every time the bow sweeps across target during the strafe pass,
+  // Alignment is now checked against the *cannon* aim angle, not the
+  // ship's heading — the cruiser's forward cannons turret-track c.aim
+  // and may already point at the target before the hull has caught up.
+  // Falls back to ship.heading for any future cruiser-shaped class
+  // without a tracked cannon angle.
+  const cannonAngle = ship.cannonAimAngle != null ? ship.cannonAimAngle : ship.heading;
+  const cannonFwd = { x: Math.cos(cannonAngle), y: Math.sin(cannonAngle) };
+  const aligned = V.dot(cannonFwd, leadN);
+  // ~±28° tolerance so the salvo fires once the cannon is on target,
   // not only at perfect alignment.
   c.firing = dist <= s.weapon.range && aligned > 0.88;
   c.firingMissile = false;
 
-  // Capital crowding — don't barge into ally cruisers/BBs.
-  const crowd = allyAvoidance(ship, world ? world.ships : []);
-  if (crowd) {
+  // Threat + crowding overlay — previously cruisers only had a tiny
+  // ally-avoidance push (0.55) so they would happily nose-press into
+  // enemy capitals AND into same-side allies. Now they get the same
+  // four-component blend as frigates: bigShipDanger (target included),
+  // ally crowd push, enemy-hull personal-space push, wall avoidance.
+  const danger    = bigShipDanger(ship, world ? world.ships : [], null);
+  const wall      = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
+  const crowd     = allyAvoidance(ship, world ? world.ships : []);
+  const enemyHull = enemyHullProximity(ship, world ? world.ships : []);
+  if (danger || wall || crowd || enemyHull) {
     const aimN = V.norm(c.aim);
-    c.aim = { x: aimN.x + crowd.x * 0.55, y: aimN.y + crowd.y * 0.55 };
+    let ax = aimN.x, ay = aimN.y;
+    if (danger)    { ax += danger.x    * 0.85; ay += danger.y    * 0.85; }
+    if (crowd)     { ax += crowd.x     * 1.40; ay += crowd.y     * 1.40; }
+    if (enemyHull) { ax += enemyHull.x * 1.80; ay += enemyHull.y * 1.80; }
+    if (wall)      {
+      const w = 2.0 * wall.strength;
+      ax += wall.x * w; ay += wall.y * w;
+    }
+    c.aim = { x: ax, y: ay };
   }
 }
 
@@ -1036,12 +1099,22 @@ function frigateAI(ship, target, dt, world) {
   // PD-aware orbit. Vs capitals the frigate hugs the outside of the
   // target's PD bubble + slack so the ring cannons can chip without
   // the frigate eating PD rounds. Vs small craft we orbit tighter at
-  // the spec's `aiOrbit`.
+  // the spec's `aiOrbit`. The +200 (was +140) buffer keeps the orbit
+  // slot comfortably outside the bigShipDanger inner shell (1.25× PD)
+  // so the danger push doesn't oscillate the heading once we arrive.
   let orbitR = s.aiOrbit || 380;
   const targetPdRange = (target.spec && target.spec.pdCannons && target.spec.pdCannons.range) || 0;
   if (targetPdRange > 0 && target.klass !== "fighter" && target.klass !== "bomber") {
-    orbitR = Math.max(orbitR, targetPdRange + 140);
+    orbitR = Math.max(orbitR, targetPdRange + 200);
   }
+  // Also enforce a minimum slot distance based on hull radii, so a
+  // frigate vs another frigate (or any other ship with no PD) doesn't
+  // try to nose-press against the target. The +180 buffer is roughly
+  // one frigate length of breathing room.
+  const myR = (s && s.radius) || 30;
+  const targetR = (target.spec && target.spec.radius) || 30;
+  const hullSafe = myR + targetR + 180;
+  orbitR = Math.max(orbitR, hullSafe);
 
   const sign = (ship.id % 2 === 0) ? 1 : -1;
   const perpX = -dir.y * sign, perpY = dir.x * sign;
@@ -1053,20 +1126,40 @@ function frigateAI(ship, target, dt, world) {
 
   // Evasion blend. Frigates use their speed (maxSpeed 150 — fastest
   // non-fighter) to slide out of broadside / heavy-laser arcs and to
-  // skirt PD bubbles. bigShipDanger excludes the target so we still
-  // commit to the run; other capitals' PD + main guns still push.
-  // The `dangerWeight` is bigger than for fighters (0.55) because
-  // frigates can't tank PD the way a swarm of fighters can.
-  const danger = bigShipDanger(ship, world ? world.ships : [], target);
+  // skirt PD bubbles.
+  //
+  // Crucially, the target is NO LONGER excluded from `bigShipDanger`
+  // (was `bigShipDanger(ship, ships, target)`). Excluding the target
+  // meant the frigate would press its nose into a battleship's PD
+  // bubble — the orbit slot's perpendicular position made the straight-
+  // line path to it pass within ~orbitR/2 of the hull. With the target
+  // included, the PD radial push bends the heading outward when the
+  // frigate gets too close, and the frigate arcs around the PD ring
+  // to its orbit slot instead of plowing through.
+  const danger = bigShipDanger(ship, world ? world.ships : [], null);
   const wall   = wallAvoidance(ship, world && world.arena ? world.arena.bounds : null);
-  // Same-side avoidance: don't barge into ally capitals.
+  // Same-side avoidance: don't barge into ally capitals (or other
+  // frigates).
   const crowd  = allyAvoidance(ship, world ? world.ships : []);
-  if (danger || wall || crowd) {
+  // Enemy-hull avoidance: any non-strike-craft enemy within a one-hull
+  // buffer pushes the frigate outward, even if that ship is the target.
+  // Without this an enemy frigate (PD range 460 ≈ matching the orbit
+  // slot 660) could still get nose-pressed because the danger ring and
+  // the orbit slot are nearly co-located — the hull push gives a
+  // dedicated kick when geometry actually overlaps.
+  const enemyHull = enemyHullProximity(ship, world ? world.ships : []);
+  if (danger || wall || crowd || enemyHull) {
     const aimN = V.norm(c.aim);
     let ax = aimN.x, ay = aimN.y;
-    if (danger) { ax += danger.x * 0.95; ay += danger.y * 0.95; }
-    if (crowd)  { ax += crowd.x  * 0.70; ay += crowd.y  * 0.70; }
-    if (wall)   {
+    if (danger)    { ax += danger.x    * 0.95; ay += danger.y    * 0.95; }
+    // Crowd + enemyHull weights bumped — when same-side frigates pick
+    // the same orbit slot they used to nose-press through each other
+    // because crowd (0.70) was barely visible against the slot vector
+    // (unit) plus danger (0.95). At 1.6 it dominates and the slower
+    // of the pair breaks off cleanly.
+    if (crowd)     { ax += crowd.x     * 1.60; ay += crowd.y     * 1.60; }
+    if (enemyHull) { ax += enemyHull.x * 1.80; ay += enemyHull.y * 1.80; }
+    if (wall)      {
       const w = 2.2 * wall.strength;
       ax += wall.x * w; ay += wall.y * w;
     }
@@ -1075,6 +1168,39 @@ function frigateAI(ship, target, dt, world) {
 
   c.firing = false;
   c.firingMissile = false;
+}
+
+// Push the ship away from the nearest enemy non-strike-craft hull that
+// breaches the personal-space buffer (sum of hull radii + slack).
+// Frigates can otherwise still nose-press a target if the orbit slot
+// happens to put them close to the hull surface; this is the dedicated
+// "you're physically too close to that thing" safety net.
+function enemyHullProximity(ship, ships) {
+  if (!ships || ships.length === 0) return null;
+  const myR = (ship.spec && ship.spec.radius) || 30;
+  let nx = 0, ny = 0, any = false;
+  for (const o of ships) {
+    if (o === ship || o.dead || o.side === ship.side) continue;
+    if (o.klass === "fighter" || o.klass === "bomber") continue;
+    const otherR = (o.spec && o.spec.radius) || 30;
+    // Trigger when hull gap is under ~1.2× the larger radius — a
+    // generous buffer that fires well before the cell collision
+    // resolver kicks in.
+    const minGap = Math.max(myR, otherR) * 1.2;
+    const dx = ship.pos.x - o.pos.x;
+    const dy = ship.pos.y - o.pos.y;
+    const d = Math.hypot(dx, dy);
+    const gap = d - (myR + otherR);
+    if (gap > minGap || d < 1e-6) continue;
+    const t = 1 - Math.max(0, gap / minGap); // 0 (just at minGap) → 1 (touching)
+    nx += (dx / d) * t;
+    ny += (dy / d) * t;
+    any = true;
+  }
+  if (!any) return null;
+  const len = Math.hypot(nx, ny);
+  if (len < 0.05) return null;
+  return { x: nx / len, y: ny / len };
 }
 
 // ---------------------------------------------------------------------------

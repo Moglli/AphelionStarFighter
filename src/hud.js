@@ -6,8 +6,8 @@ import { RACES } from "./races.js";
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
 
 const CLASS_GLYPH = {
-  fighter: "Sw", bomber: "Ar", frigate: "Ca",
-  cruiser: "Kn", battleship: "Se", carrier: "Su", station: "Fo",
+  fighter: "F", bomber: "B", frigate: "Fr",
+  cruiser: "C", battleship: "BB", carrier: "CV", station: "St",
 };
 
 // Friendly labels for module names that appear in the target panel.
@@ -82,6 +82,12 @@ export class BattleHUD {
     spectateBtn.textContent = "SPECTATE";
     spectateBtn.style.pointerEvents = "auto";
     topRight.appendChild(spectateBtn);
+    // SETTINGS pill — opens the menu's settings overlay mid-match so
+    // the player can mute music / SFX without quitting.
+    const settingsBtn = this._createEl("button", "battle-pill", "battle-settings-btn");
+    settingsBtn.textContent = "SETTINGS";
+    settingsBtn.style.pointerEvents = "auto";
+    topRight.appendChild(settingsBtn);
     // QUIT pill — abandons the current match and returns to the main
     // menu. Always available so the player can bail out of a stuck or
     // unwinnable fight without waiting for the stall watchdog.
@@ -314,6 +320,17 @@ export class BattleHUD {
       });
     }
 
+    // ---- Wire SETTINGS button click ----
+    // Same shape as QUIT — set a flag the main.js loop drains. main.js
+    // calls `input.startMenu.openInBattleSettings()` which pops the
+    // menu's existing settings overlay on top of the battle canvas.
+    this._battleSettingsBtnEl = this._root.querySelector("#battle-settings-btn");
+    if (this._battleSettingsBtnEl) {
+      this._battleSettingsBtnEl.addEventListener("click", () => {
+        if (this._input) this._input.settingsRequested = true;
+      });
+    }
+
     // ---- Wire action-cluster buttons (FIRE / MISSILE / BOOST) ----
     // Each DOM .action-btn has `pointer-events: auto` (so the canvas
     // pointerdown below never sees these taps) but no handlers were
@@ -482,10 +499,11 @@ export class BattleHUD {
   }
 
   _syncSideStrips(game, viewW) {
-    const hide = viewW < 768;
-    this._sideLeft.style.display = hide ? "none" : "";
-    this._sideRight.style.display = hide ? "none" : "";
-    if (hide) return;
+    // Side strips stay visible on mobile now (used to be hidden via
+    // display:none) — the mobile CSS lays them out as two stacked
+    // horizontal rows at the top instead of the desktop column form.
+    this._sideLeft.style.display = "";
+    this._sideRight.style.display = "";
 
     const counts = countBySide(game.ships);
     const countKey = JSON.stringify(counts);

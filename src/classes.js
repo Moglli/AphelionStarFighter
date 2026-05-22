@@ -77,8 +77,10 @@ export const CLASSES = {
     color: "#cdf",
     firingMode: "forward",
     // Light defensive cannon — bombers don't dogfight, they alpha-strike.
+    // 20% nerf (3 → 2.4) so the autocannon stays a deterrent on a passing
+    // fighter but doesn't materially contribute to bomber DPS.
     weapon: {
-      damage: 3,
+      damage: 2.4,
       cooldown: 0.28,
       projectileSpeed: 580,
       range: 600,

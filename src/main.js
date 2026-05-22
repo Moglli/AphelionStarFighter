@@ -14,7 +14,7 @@ import { GameAudio } from "./audio.js";
 import {
   loadRun, loadMeta, startNewRun, abandonRun, discardRun,
   buildModeConfig, captureBattleOutcome, completeNode, enterNode,
-  isRunOver, recordRunEnd, clearPendingPromotion, endReasonFlavor,
+  isRunOver, recordRunEnd, clearPendingPromotion, selectPromotionTrait, endReasonFlavor,
   ACT_RANKS,
   buyRepair, buyRecruit, buyRefuel, applyBoon, applyEventChoice,
 } from "./roguelite.js";
@@ -145,13 +145,17 @@ function handleRunChoice(action, payload) {
     activeRun = startNewRun(
       payload.faction,
       payload.seed,
-      { callsign: payload.callsign },
+      { callsign: payload.callsign, perkKey: payload.perkKey },
     );
     refresh();
     return;
   }
   if (action === "dismiss-promotion") {
     if (activeRun) { clearPendingPromotion(activeRun); refresh(); }
+    return;
+  }
+  if (action === "select-trait") {
+    if (activeRun) { selectPromotionTrait(activeRun, payload.traitKey); refresh(); }
     return;
   }
   if (action === "abandon-run") {
@@ -424,8 +428,18 @@ function frame(now) {
       // arena. Re-lock happens when they cycle to a different ship via
       // Prev / Next. The right stick is unused in spectate.
       const camSpeed = 700; // world units per second at full deflection
-      const panX = ctrl.thrust.x * camSpeed * delta;
-      const panY = ctrl.thrust.y * camSpeed * delta;
+      let panX = ctrl.thrust.x * camSpeed * delta;
+      let panY = ctrl.thrust.y * camSpeed * delta;
+      // Click-and-drag pan: when a pointer-down on the canvas wanders
+      // past the tap threshold, InputManager promotes it to a pan drag
+      // and accumulates screen-pixel deltas. Drag direction matches
+      // map UX — grab the world and pull, so a rightward drag shifts
+      // the camera LEFT (subtract).
+      const dragPan = input.consumePanDelta();
+      if (dragPan) {
+        panX -= dragPan.x / zoom;
+        panY -= dragPan.y / zoom;
+      }
       if (panX !== 0 || panY !== 0) {
         if (game.spectateCamera.locked) {
           // First nudge — seed camera at the current target before
@@ -524,6 +538,14 @@ function frame(now) {
       input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
       input.startMenu.showRunMap = true;
     }
+  }
+
+  // In-match SETTINGS (HUD pill): pop the menu's settings overlay over
+  // the live battle so the player can toggle music/SFX without quitting.
+  // The overlay's CLOSE button tears itself down via onSettingsClose
+  // (see input.js); main.js doesn't need to know about close.
+  if (game.state === "playing" && input.consumeSettingsRequest()) {
+    input.startMenu.openInBattleSettings(viewW || 1200, viewH || 800);
   }
 
   // P toggles music mute (works regardless of state). Routes through

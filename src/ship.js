@@ -23,10 +23,27 @@ const HULLS = {
     bomber:     [[1.0, 0], [0.3, 0.55], [-0.4, 0.95], [-0.85, 0.55], [-0.6, 0],
                  [-0.85, -0.55], [-0.4, -0.95], [0.3, -0.55]],
     frigate:    [[1.0, 0], [0.3, 0.7], [-0.9, 0.6], [-0.9, -0.6], [0.3, -0.7]],
-    cruiser:    [[1.0, 0], [0.5, 0.8], [-0.6, 0.9], [-1.0, 0.4],
-                 [-1.0, -0.4], [-0.6, -0.9], [0.5, -0.8]],
-    battleship: [[1.0, 0], [0.7, 0.6], [-0.2, 0.7], [-0.4, 0.95], [-1.0, 0.7],
-                 [-1.0, -0.7], [-0.4, -0.95], [-0.2, -0.7], [0.7, -0.6]],
+    // Strike cruiser: stepped bow ram, broadside sponsons amidships,
+    // distinct engine block aft with a centerline thruster recess.
+    cruiser:    [[1.0,  0.00], [0.78, 0.18], [0.62, 0.15], [0.5, 0.42],
+                 [0.35, 0.55], [0.05, 0.60], [-0.05, 0.85], [-0.35, 0.95],
+                 [-0.55, 0.85], [-0.65, 0.55], [-0.9, 0.5], [-1.0, 0.32],
+                 [-0.9, 0.10], [-1.0, 0.00], [-0.9, -0.10], [-1.0, -0.32],
+                 [-0.9, -0.5], [-0.65, -0.55], [-0.55, -0.85], [-0.35, -0.95],
+                 [-0.05, -0.85], [0.05, -0.60], [0.35, -0.55], [0.5, -0.42],
+                 [0.62, -0.15], [0.78, -0.18]],
+    // Dreadnought-class battleship: terraced bow turret deck, tall
+    // central citadel, swept engine flare. Reads as a heavy gun
+    // platform — not a bigger hexagon.
+    battleship: [[1.0, 0.00], [0.92, 0.22], [0.76, 0.32], [0.68, 0.50],
+                 [0.58, 0.55], [0.45, 0.55], [0.40, 0.78], [0.20, 0.85],
+                 [0.05, 0.95], [-0.15, 0.92], [-0.30, 0.85], [-0.40, 0.95],
+                 [-0.55, 0.85], [-0.75, 0.70], [-0.95, 0.55], [-1.0, 0.35],
+                 [-0.92, 0.15], [-0.97, 0.00], [-0.92, -0.15], [-1.0, -0.35],
+                 [-0.95, -0.55], [-0.75, -0.70], [-0.55, -0.85], [-0.40, -0.95],
+                 [-0.30, -0.85], [-0.15, -0.92], [0.05, -0.95], [0.20, -0.85],
+                 [0.40, -0.78], [0.45, -0.55], [0.58, -0.55], [0.68, -0.50],
+                 [0.76, -0.32], [0.92, -0.22]],
     carrier:    [[1.0, 0.32], [0.55, 0.55], [-0.85, 0.6], [-1.0, 0.4],
                  [-1.0, -0.4], [-0.85, -0.6], [0.55, -0.55], [1.0, -0.32]],
     // Hexagonal modular bunker — reads as a starbase segment.
@@ -44,14 +61,25 @@ const HULLS = {
     frigate:    [[1.0, 0], [0.5, 0.5], [0.2, 0.85], [-0.3, 0.65], [-0.9, 0.55],
                  [-0.7, 0.2], [-0.55, 0], [-0.7, -0.2], [-0.9, -0.55],
                  [-0.3, -0.65], [0.2, -0.85], [0.5, -0.5]],
-    // Wedge with side blades.
-    cruiser:    [[1.0, 0], [0.7, 0.4], [0.2, 0.9], [-0.4, 0.95], [-0.85, 0.5],
-                 [-0.65, 0.18], [-1.0, 0], [-0.65, -0.18], [-0.85, -0.5],
-                 [-0.4, -0.95], [0.2, -0.9], [0.7, -0.4]],
-    // Spiked dreadnought — multiple swept facets.
-    battleship: [[1.0, 0], [0.85, 0.38], [0.5, 0.85], [0.0, 0.7], [-0.4, 0.95],
-                 [-0.8, 0.55], [-1.0, 0.2], [-0.85, 0], [-1.0, -0.2],
-                 [-0.8, -0.55], [-0.4, -0.95], [0.0, -0.7], [0.5, -0.85], [0.85, -0.38]],
+    // Predator cruiser: serrated bow notch, twin lateral hooks, and
+    // a barbed stern. Asymmetric-looking even though it's mirrored.
+    cruiser:    [[1.0,  0.00], [0.85, 0.18], [0.62, 0.15], [0.55, 0.40],
+                 [0.32, 0.42], [0.25, 0.70], [0.00, 0.78], [-0.25, 0.95],
+                 [-0.40, 0.70], [-0.55, 0.85], [-0.70, 0.55], [-0.55, 0.35],
+                 [-0.95, 0.25], [-0.75, 0.05], [-1.0, 0.00], [-0.75, -0.05],
+                 [-0.95, -0.25], [-0.55, -0.35], [-0.70, -0.55], [-0.55, -0.85],
+                 [-0.40, -0.70], [-0.25, -0.95], [0.00, -0.78], [0.25, -0.70],
+                 [0.32, -0.42], [0.55, -0.40], [0.62, -0.15], [0.85, -0.18]],
+    // Reaver flagship: tripled lateral barbs, recessed prow notch,
+    // forked stern with a re-entrant centerline. Visually it bristles.
+    battleship: [[1.0,  0.00], [0.92, 0.20], [0.70, 0.22], [0.65, 0.40],
+                 [0.55, 0.65], [0.40, 0.50], [0.30, 0.85], [0.05, 0.70],
+                 [-0.10, 0.95], [-0.30, 0.70], [-0.45, 0.95], [-0.60, 0.55],
+                 [-0.55, 0.30], [-0.95, 0.40], [-0.75, 0.15], [-1.0,  0.05],
+                 [-0.85, 0.00], [-1.0, -0.05], [-0.75, -0.15], [-0.95, -0.40],
+                 [-0.55, -0.30], [-0.60, -0.55], [-0.45, -0.95], [-0.30, -0.70],
+                 [-0.10, -0.95], [0.05, -0.70], [0.30, -0.85], [0.40, -0.50],
+                 [0.55, -0.65], [0.65, -0.40], [0.70, -0.22], [0.92, -0.20]],
     // Long predator hull with hangars.
     carrier:    [[1.0, 0.3], [0.6, 0.45], [0.1, 0.7], [-0.4, 0.65], [-0.9, 0.55],
                  [-1.0, 0.35], [-1.0, -0.35], [-0.9, -0.55], [-0.4, -0.65],
@@ -70,13 +98,24 @@ const HULLS = {
     // Rectangular hull with side turrets.
     frigate:    [[1.0, 0.3], [0.8, 0.6], [-0.85, 0.6], [-0.95, 0.3],
                  [-0.95, -0.3], [-0.85, -0.6], [0.8, -0.6], [1.0, -0.3]],
-    // Blocky wedge with thick aft.
-    cruiser:    [[1.0, 0], [0.85, 0.5], [0.4, 0.9], [-0.7, 0.9], [-1.0, 0.5],
-                 [-1.0, -0.5], [-0.7, -0.9], [0.4, -0.9], [0.85, -0.5]],
-    // Massive brick with deep ridges.
-    battleship: [[1.0, 0.4], [0.9, 0.7], [0.4, 0.9], [-0.5, 0.95], [-0.9, 0.7],
-                 [-1.0, 0.4], [-1.0, -0.4], [-0.9, -0.7], [-0.5, -0.95],
-                 [0.4, -0.9], [0.9, -0.7], [1.0, -0.4]],
+    // Armored slab cruiser: chamfered bow, forward citadel block,
+    // wider mid-armor, stepped aft. Reads as a moving wall.
+    cruiser:    [[1.0,  0.05], [0.85, 0.30], [0.65, 0.35], [0.60, 0.55],
+                 [0.40, 0.60], [0.35, 0.80], [0.10, 0.85], [-0.15, 0.95],
+                 [-0.45, 0.95], [-0.55, 0.80], [-0.75, 0.75], [-0.85, 0.55],
+                 [-1.0,  0.50], [-1.0, -0.50], [-0.85, -0.55], [-0.75, -0.75],
+                 [-0.55, -0.80], [-0.45, -0.95], [-0.15, -0.95], [0.10, -0.85],
+                 [0.35, -0.80], [0.40, -0.60], [0.60, -0.55], [0.65, -0.35],
+                 [0.85, -0.30], [1.0, -0.05]],
+    // Fortress dreadnought: stacked terraces from bow to amidships,
+    // peak mid-armor citadel, stepped armored aft. Heavy-as-hell read.
+    battleship: [[1.0,  0.10], [0.92, 0.30], [0.85, 0.50], [0.70, 0.55],
+                 [0.65, 0.75], [0.45, 0.80], [0.40, 0.95], [-0.20, 0.95],
+                 [-0.25, 0.85], [-0.50, 0.95], [-0.70, 0.85], [-0.80, 0.70],
+                 [-0.95, 0.60], [-1.0,  0.40], [-1.0, -0.40], [-0.95, -0.60],
+                 [-0.80, -0.70], [-0.70, -0.85], [-0.50, -0.95], [-0.25, -0.85],
+                 [-0.20, -0.95], [0.40, -0.95], [0.45, -0.80], [0.65, -0.75],
+                 [0.70, -0.55], [0.85, -0.50], [0.92, -0.30], [1.0, -0.10]],
     // Huge cube with internal hangars.
     carrier:    [[1.0, 0.35], [0.9, 0.55], [0.3, 0.6], [-0.9, 0.6], [-1.0, 0.4],
                  [-1.0, -0.4], [-0.9, -0.6], [0.3, -0.6], [0.9, -0.55], [1.0, -0.35]],
@@ -94,12 +133,24 @@ const HULLS = {
     // Elegant arrowhead.
     frigate:    [[1.0, 0], [0.5, 0.55], [-0.6, 0.7], [-0.95, 0.4], [-0.7, 0],
                  [-0.95, -0.4], [-0.6, -0.7], [0.5, -0.55]],
-    // Graceful curve.
-    cruiser:    [[1.0, 0], [0.6, 0.7], [-0.3, 0.95], [-0.9, 0.65], [-0.95, 0.3],
-                 [-0.7, 0], [-0.95, -0.3], [-0.9, -0.65], [-0.3, -0.95], [0.6, -0.7]],
-    // Swept-wing dreadnought.
-    battleship: [[1.0, 0], [0.85, 0.4], [0.3, 0.85], [-0.6, 0.95], [-0.95, 0.5],
-                 [-1.0, 0], [-0.95, -0.5], [-0.6, -0.95], [0.3, -0.85], [0.85, -0.4]],
+    // Crescent cruiser: needle prow, sleek swept body, central spine
+    // recess at the stern. The narrow-waist + dorsal sweep reads as a
+    // graceful predator.
+    cruiser:    [[1.0,  0.00], [0.85, 0.12], [0.65, 0.30], [0.45, 0.55],
+                 [0.15, 0.78], [-0.15, 0.95], [-0.45, 0.95], [-0.70, 0.80],
+                 [-0.85, 0.55], [-0.95, 0.30], [-0.75, 0.15], [-0.95, 0.00],
+                 [-0.75, -0.15], [-0.95, -0.30], [-0.85, -0.55], [-0.70, -0.80],
+                 [-0.45, -0.95], [-0.15, -0.95], [0.15, -0.78], [0.45, -0.55],
+                 [0.65, -0.30], [0.85, -0.12]],
+    // Swept-wing battleship: extreme wing sweep, central spine
+    // forks aft, needle prow. Looks alien-elegant and large.
+    battleship: [[1.0,  0.00], [0.90, 0.18], [0.72, 0.30], [0.50, 0.55],
+                 [0.30, 0.75], [0.00, 0.95], [-0.30, 0.95], [-0.55, 0.85],
+                 [-0.75, 0.65], [-0.95, 0.45], [-1.0,  0.25], [-0.70, 0.20],
+                 [-0.85, 0.05], [-1.0,  0.00], [-0.85, -0.05], [-0.70, -0.20],
+                 [-1.0, -0.25], [-0.95, -0.45], [-0.75, -0.65], [-0.55, -0.85],
+                 [-0.30, -0.95], [0.00, -0.95], [0.30, -0.75], [0.50, -0.55],
+                 [0.72, -0.30], [0.90, -0.18]],
     // Long crescent with central spine.
     carrier:    [[1.0, 0.25], [0.7, 0.55], [-0.4, 0.7], [-0.95, 0.55], [-1.0, 0.3],
                  [-0.8, 0], [-1.0, -0.3], [-0.95, -0.55], [-0.4, -0.7], [0.7, -0.55],
@@ -185,6 +236,13 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     weaponAmmo: spec.weapon && spec.weapon.capacity ? spec.weapon.capacity : 0,
     weaponReloading: false,
     weaponReloadTimer: 0,
+    // Cruiser forward cannons turret-track instead of being nailed to
+    // the bow. World-space angle, slewed each frame in updateShip
+    // toward the controller's c.aim direction (capped at
+    // spec.cannonTurnRate). drawShip rotates the visible barrels onto
+    // this angle, fireForward fires projectiles along it. Defaults to
+    // the spawn heading so the first frame doesn't look weird.
+    cannonAimAngle: (klass === "cruiser" && spec.firingMode === "forward") ? heading : null,
     // Carrier replenishment cadence — counts down to the next launch.
     fighterLaunchCd: spec.replenish ? spec.replenish.fighter : 0,
     bomberLaunchCd: spec.replenish ? spec.replenish.bomber : 0,
@@ -366,6 +424,13 @@ export function updateShip(ship, dt, world) {
     // too. No primary-weapon work here.
   } else if (s.firingMode === "forward") {
     ship.cooldown -= dt;
+    // Cruiser cannons turret-track the AI's aim direction slowly.
+    // Other forward-fire ships (fighter, fighter-derivatives) keep
+    // their nose-locked aim. Tracking is clamped to a forward arc so
+    // the cannons can't whip 180° onto something behind the ship.
+    if (ship.klass === "cruiser" && ship.cannonAimAngle != null) {
+      slewCannonAim(ship, dt);
+    }
     // Magazine reload: when empty, the timer ticks down and then refills.
     if (s.weapon.capacity != null && ship.weaponReloading) {
       ship.weaponReloadTimer -= dt;
@@ -502,23 +567,60 @@ function launchReplacement(carrier, world, klass) {
 }
 
 // ---------------------------------------------------------------------------
-// Forward fire (fighters, frigates, cruisers).
+// Forward fire (fighters, frigates, cruisers). Cruiser cannons fire along
+// `ship.cannonAimAngle` (a turret-tracked angle) rather than the ship's
+// heading — the muzzle origin pivots about a bow turret base and extends
+// along the cannon's aim, so the projectiles emerge from the visible
+// barrel tips. Fighters/frigates keep the bow-locked path.
 // ---------------------------------------------------------------------------
+const CANNON_TURRET = {
+  // Where the turret base sits on the hull (ship-local +x is forward).
+  // Slightly back from the nose so the barrels have room to swing
+  // without appearing detached at extreme aim angles.
+  pivotR: 0.35,
+  // Barrel length as a fraction of ship.radius — the projectile spawns
+  // at the muzzle tip = pivot + aimDir * barrelLen.
+  barrelLen: 0.72,
+};
+
 function fireForward(ship, world) {
   const w = ship.spec.weapon;
   const muzzles = w.muzzles || 1;
   const muzzleSpread = w.muzzleSpread || 0;
-  const fwd = V.fromAngle(ship.heading);
-  const side = { x: -fwd.y, y: fwd.x };
+  const isTracking = ship.klass === "cruiser" && ship.cannonAimAngle != null;
+  const aimAngle = isTracking ? ship.cannonAimAngle : ship.heading;
+  const aimDir = V.fromAngle(aimAngle);
+  const aimSide = { x: -aimDir.y, y: aimDir.x };
+
+  // Turret-tracked classes spawn projectiles at the swung muzzle tip,
+  // not the static bow. The pivot base sits on the hull in ship-local
+  // frame; the barrels extend along the current aim.
+  let baseX, baseY;
+  if (isTracking) {
+    const shipFwd = V.fromAngle(ship.heading);
+    const pR = ship.spec.radius * CANNON_TURRET.pivotR;
+    baseX = ship.pos.x + shipFwd.x * pR;
+    baseY = ship.pos.y + shipFwd.y * pR;
+  }
 
   for (let i = 0; i < muzzles; i++) {
     const lateral = muzzles === 1 ? 0 : ((i - (muzzles - 1) / 2) * muzzleSpread);
-    const origin = {
-      x: ship.pos.x + fwd.x * (ship.spec.radius + 4) + side.x * lateral,
-      y: ship.pos.y + fwd.y * (ship.spec.radius + 4) + side.y * lateral,
-    };
+    let origin;
+    if (isTracking) {
+      const barrel = ship.spec.radius * CANNON_TURRET.barrelLen;
+      origin = {
+        x: baseX + aimDir.x * barrel + aimSide.x * lateral,
+        y: baseY + aimDir.y * barrel + aimSide.y * lateral,
+      };
+    } else {
+      // Bow-locked (fighters, etc.) — original behaviour.
+      origin = {
+        x: ship.pos.x + aimDir.x * (ship.spec.radius + 4) + aimSide.x * lateral,
+        y: ship.pos.y + aimDir.y * (ship.spec.radius + 4) + aimSide.y * lateral,
+      };
+    }
     const spread = (Math.random() - 0.5) * 2 * w.spread;
-    const dir = V.fromAngle(ship.heading + spread);
+    const dir = V.fromAngle(aimAngle + spread);
     const vel = {
       x: dir.x * w.projectileSpeed + ship.vel.x * 0.3,
       y: dir.y * w.projectileSpeed + ship.vel.y * 0.3,
@@ -540,6 +642,44 @@ function fireForward(ship, world) {
     x: ship.pos.x, y: ship.pos.y,
     kind: ship.klass, isPlayer: ship.isPlayer,
   });
+}
+
+// Slew the cruiser's cannon turret toward its commanded fire direction,
+// capped at cannonTurnRate per second and clamped to the forward
+// firing arc so the cannons can't aim behind the hull.
+//
+// Target direction priority:
+//   1. `ship.cannonTargetDir` — the AI's lead-intercept vector. This
+//      is set by cruiserAI every tick the cruiser has a target and
+//      may differ wildly from c.aim (which steers the hull around
+//      the target). Without this the turret would track the
+//      perpendicular orbit slot instead of the target.
+//   2. `c.aim` — fallback for any future cruiser-shaped class that
+//      doesn't write cannonTargetDir.
+function slewCannonAim(ship, dt) {
+  const c = ship.controller;
+  const s = ship.spec;
+  const aimVec = (ship.cannonTargetDir && (ship.cannonTargetDir.x !== 0 || ship.cannonTargetDir.y !== 0))
+    ? ship.cannonTargetDir
+    : c.aim;
+  if (!aimVec || (aimVec.x === 0 && aimVec.y === 0)) return;
+  const desired = Math.atan2(aimVec.y, aimVec.x);
+  let delta = desired - ship.cannonAimAngle;
+  while (delta >  Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  const rate = s.cannonTurnRate || 0.7;          // rad/s — slow turret
+  const step = Math.sign(delta) * Math.min(Math.abs(delta), rate * dt);
+  ship.cannonAimAngle += step;
+  // Clamp to a forward arc relative to the ship's heading. Cruisers
+  // turn slowly (turnRate 0.4 rad/s); a ±60° arc lets the cannons
+  // engage off-axis targets while the hull catches up.
+  let local = ship.cannonAimAngle - ship.heading;
+  while (local >  Math.PI) local -= Math.PI * 2;
+  while (local < -Math.PI) local += Math.PI * 2;
+  const arc = s.cannonArc || (Math.PI / 3); // ±60°
+  if      (local >  arc) local =  arc;
+  else if (local < -arc) local = -arc;
+  ship.cannonAimAngle = ship.heading + local;
 }
 
 // ---------------------------------------------------------------------------
@@ -1537,6 +1677,50 @@ export function drawShip(ctx, ship, zoom = 1) {
         cell.flash -= 0.08;
       }
       ctx.globalAlpha = 1;
+    }
+  }
+
+  // Cruiser forward cannons: turret-style base on the bow + barrels
+  // that rotate onto ship.cannonAimAngle. Drawn here (inside the
+  // rotated ship frame) so the local-aim subtraction puts the barrels
+  // where the projectiles spawn in fireForward. Mirrors the PD-turret
+  // rendering pattern below.
+  if (ship.spec.firingMode === "forward" && ship.cannonAimAngle != null) {
+    const w = ship.spec.weapon;
+    const muzzles = w.muzzles || 1;
+    const muzzleSpread = w.muzzleSpread || 0;
+    const pivotR = s.radius * CANNON_TURRET.pivotR;
+    const barrelLen = s.radius * CANNON_TURRET.barrelLen;
+    const baseR = Math.max(3, s.radius * 0.10);
+    const barrelW = Math.max(2.5, s.radius * 0.07);
+    const aimLocal = ship.cannonAimAngle - ship.heading;
+    // Lateral perpendicular to the *aim* direction in ship-local frame.
+    const aimSideX = -Math.sin(aimLocal);
+    const aimSideY =  Math.cos(aimLocal);
+    // Base disc sits on the bow regardless of aim.
+    ctx.fillStyle = "#bcd";
+    ctx.beginPath();
+    ctx.arc(pivotR, 0, baseR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(40, 60, 80, 0.85)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // Barrels — one per muzzle, all parallel along the aim direction
+    // with the same lateral spacing fireForward uses.
+    for (let i = 0; i < muzzles; i++) {
+      const lateral = muzzles === 1 ? 0 : ((i - (muzzles - 1) / 2) * muzzleSpread);
+      const bx = pivotR + aimSideX * lateral;
+      const by = aimSideY * lateral;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(aimLocal);
+      ctx.fillStyle = "#dde";
+      ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
+      ctx.fillStyle = "rgba(255, 235, 180, 0.9)";
+      ctx.beginPath();
+      ctx.arc(barrelLen, 0, barrelW * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
   }
 

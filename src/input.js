@@ -8,7 +8,7 @@ import { SIDES } from "./classes.js";
 import {
   ACTS_PER_RUN, COLS_PER_ACT, ROWS_PER_ACT,
   STARTER_FUEL, FUEL_PER_EDGE,
-  repairCostFor, eventCardById, PERKS, BOON_TABLE,
+  repairCostFor, eventCardById, PERKS, TRAITS, BOON_TABLE, BOSSES,
 } from "./roguelite.js";
 import {
   createStarmap, updateStarmap, destroyStarmap,
@@ -894,6 +894,21 @@ export class StartMenu {
     // to 'main' (the PLAY mode-picker) or 'about' from there. Overlays
     // (settings/refill/custom/etc.) and the run-map overlays (battle
     // choice / resupply / event) take precedence over the base.
+    // Auto-open the promotion overlay when run.pendingPromotion is set
+    // and the run-map is up. Has to run BEFORE the sync gate below —
+    // _buildMenuState used to handle this, but _buildMenuState only
+    // runs when sync runs, and sync is gated on showPromotion being
+    // true. Chicken-and-egg: putting the auto-open above the gate
+    // breaks the loop so a pending promotion can actually flip
+    // showPromotion=true on the first frame after returning to the
+    // run map.
+    const run = this.runState && this.runState.run;
+    if (run && run.pendingPromotion && !this.showPromotion && this.showRunMap) {
+      this.showPromotion = true;
+    } else if ((!run || !run.pendingPromotion) && this.showPromotion) {
+      this.showPromotion = false;
+    }
+
     let screenName = this._baseScreen || 'home';
     if (this.showSettings) screenName = 'settings';
     else if (this.showRefill) screenName = 'refill';
@@ -912,9 +927,10 @@ export class StartMenu {
     const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice || this.showPromotion;
     if (!this.showRunMap || hasSubOverlay) {
       this._menuSystem.showScreen(screenName);
-      // Dim the canvas behind any base screen (home / main / about) so
-      // the menu chrome reads clearly against the starfield.
-      if (screenName === 'home' || screenName === 'main' || screenName === 'about') {
+      // Dim the canvas behind any base screen (home / main / about /
+      // memorial) so the menu chrome reads clearly against the
+      // starfield.
+      if (screenName === 'home' || screenName === 'main' || screenName === 'about' || screenName === 'memorial') {
         ctx.fillStyle = "rgba(2,8,18,0.78)";
         ctx.fillRect(0, 0, viewW, viewH);
       }
@@ -951,9 +967,45 @@ export class StartMenu {
   // calls during the same battle are no-ops because the menu is already
   // hidden.
   hide() {
-    if (this._menuSystem && this._menuSystem._currentScreen !== null) {
+    if (!this._menuSystem) return;
+    // When the in-battle SETTINGS pill has popped the settings overlay
+    // on top of the live battle, don't tear it down here — the player
+    // explicitly opened it and will close it via the CLOSE button.
+    if (this._inBattleSettings && this._menuSystem._currentScreen === "settings") return;
+    if (this._menuSystem._currentScreen !== null) {
       this._menuSystem.hideAll();
     }
+  }
+
+  // Pops the menu's settings overlay on top of the live battle. Wired
+  // from main.js when the HUD's SETTINGS pill is pressed. The overlay's
+  // CLOSE button calls onSettingsClose which clears the
+  // `_inBattleSettings` flag and tears the overlay down explicitly,
+  // since the menu draw loop isn't running during gameplay.
+  openInBattleSettings(viewW, viewH) {
+    if (!this._menuSystem) return;
+    this._lastViewW = viewW;
+    this._lastViewH = viewH;
+    this._inBattleSettings = true;
+    this._refreshSettingsOverlay();
+    this._menuSystem.showScreen("settings");
+    // Bump menu-root above .battle-root (z-index 20) so the action
+    // cluster + side strips don't poke through the settings overlay,
+    // and force-activate the scrim (the CSS :has() rule that normally
+    // toggles it depends on a .menu-root.active class that the JS
+    // never adds, so dim the battle background explicitly here).
+    if (this._menuSystem._root) this._menuSystem._root.classList.add("over-battle");
+    if (this._menuSystem._scrim) this._menuSystem._scrim.classList.add("active");
+  }
+
+  // Re-runs the menu sync once so the settings overlay's ON/OFF text
+  // reflects the current music/SFX mute state. Used both when opening
+  // the overlay mid-battle and after every toggle, because the per-
+  // frame draw loop that normally drives sync() is dormant.
+  _refreshSettingsOverlay() {
+    if (!this._menuSystem) return;
+    const state = this._buildMenuState(this._lastViewW || 1200, this._lastViewH || 800);
+    this._menuSystem.sync(state);
   }
 
   _buildMenuState(viewW, viewH) {
@@ -1025,24 +1077,49 @@ export class StartMenu {
         title: node.type === "boss" ? "BOSS BATTLE" : node.type === "elite" ? "ELITE HUNT" : "PATROL ENCOUNTER",
         faction: node.faction || "",
         tier: node.tier || 1,
+        nodeType: node.type,
       };
+      // Boss briefing: look up the named-boss entry for the current
+      // act and surface name + description so the battle-choice screen
+      // reads as a CO calling out the threat by callsign before the
+      // player commits to the jump.
+      if (node.type === "boss" && run && BOSSES[run.act]) {
+        const b = BOSSES[run.act];
+        battleState.bossName = b.name;
+        battleState.bossDescription = b.description;
+        battleState.bossFaction = b.faction;
+      }
     }
 
     // Build promotion state — auto-detected from the run's
     // pendingPromotion field. main.js stamps this when a boss-clear
     // promotes the player; the overlay opens automatically here and
     // dismissing it routes through onRunChoice("dismiss-promotion").
+    //
+    // Enrich the traitDraw with name + desc for the overlay (raw run
+    // state only holds keys). Owned traits are passed alongside so
+    // the overlay can show "you currently have X, Y" if we ever want
+    // a recap line.
+    // Promotion overlay state. The show/hide of the overlay itself is
+    // handled in draw() above this; here we just enrich pendingPromotion
+    // with name/desc for each trait in the draw so the chip row can
+    // render without re-reading TRAITS from menus.js.
     let promotionState = null;
     if (run && run.pendingPromotion) {
-      promotionState = run.pendingPromotion;
-      // First-frame auto-open. If the overlay is already visible we
-      // leave it; if the user already dismissed we won't re-open
-      // because dismiss clears the run field via the callback.
-      if (!this.showPromotion && this.showRunMap) {
-        this.showPromotion = true;
-      }
-    } else if (this.showPromotion) {
-      this.showPromotion = false;
+      const draw = (run.pendingPromotion.traitDraw || []).map((k) => ({
+        key: k,
+        name: TRAITS[k] ? TRAITS[k].name : k,
+        desc: TRAITS[k] ? TRAITS[k].desc : "",
+      }));
+      const owned = (run.traits || []).map((k) => ({
+        key: k,
+        name: TRAITS[k] ? TRAITS[k].name : k,
+      }));
+      promotionState = {
+        ...run.pendingPromotion,
+        traitDraw: draw,
+        ownedTraits: owned,
+      };
     }
 
     // Build energy regen info
@@ -1052,6 +1129,19 @@ export class StartMenu {
         next: formatDuration(timeUntilNext(this.energy)),
         label: "until +1",
       };
+    }
+
+    // Run-setup state — unlocked starter perks for the BEGIN CAREER
+    // screen. Empty for fresh saves (no runs completed yet); grows as
+    // the player meets perk unlockCondition checks in recordRunEnd.
+    let runSetupState = null;
+    if (this.showRunSetup) {
+      const m = this.runState && this.runState.meta;
+      const unlocked = (m && m.unlockedPerks) || [];
+      const perks = unlocked
+        .filter((k) => PERKS[k])
+        .map((k) => ({ key: k, name: PERKS[k].name, desc: PERKS[k].desc }));
+      runSetupState = { perks };
     }
 
     return {
@@ -1096,6 +1186,8 @@ export class StartMenu {
       resupply: resupplyState,
       event: eventState,
       promotion: promotionState,
+      runSetup: runSetupState,
+      memorial: (meta && meta.memorial) || [],
       factions: RACE_KEYS,
       factionMeta: meta ? Object.fromEntries(RACE_KEYS.map(k => [k, { wins: meta.runsWon }])) : {},
       frontierStatus,
@@ -1160,14 +1252,31 @@ export class StartMenu {
         this._layoutSettingsOverlay(this._lastViewW || 1200, this._lastViewH || 800);
         this.showSettings = true;
       },
-      onSettingsClose: () => { this.showSettings = false; },
+      onSettingsClose: () => {
+        this.showSettings = false;
+        // If the settings overlay was opened mid-battle by the HUD pill,
+        // the menu draw loop isn't running to react to `showSettings =
+        // false`. Tear down the overlay directly so the close button
+        // works in either context. (`this` here is the StartMenu —
+        // _wireMenuCallbacks lives on StartMenu, not InputManager.)
+        if (this._inBattleSettings) {
+          this._inBattleSettings = false;
+          if (this._menuSystem._root) this._menuSystem._root.classList.remove("over-battle");
+          if (this._menuSystem._scrim) this._menuSystem._scrim.classList.remove("active");
+          this._menuSystem.hideAll();
+        }
+      },
       onMusicToggle: () => {
         const cur = this._settingsGet();
         this._settingsApply({ musicMuted: !cur.musicMuted });
+        // In-battle: draw loop isn't running, so manually refresh
+        // the overlay's ON/OFF text. In-menu: harmless extra sync.
+        if (this._inBattleSettings) this._refreshSettingsOverlay();
       },
       onSfxToggle: () => {
         const cur = this._settingsGet();
         this._settingsApply({ sfxMuted: !cur.sfxMuted });
+        if (this._inBattleSettings) this._refreshSettingsOverlay();
       },
       onCustomClose: () => { this.showCustom = false; this._customDrag = null; },
       onCustomStart: () => {
@@ -1263,8 +1372,9 @@ export class StartMenu {
       onEventClose: () => { this.showEvent = false; },
       onRunSetupSelect: (factionKey, opts) => {
         const callsign = (opts && opts.callsign) ? opts.callsign : "";
+        const perkKey = (opts && opts.perkKey !== undefined) ? opts.perkKey : null;
         if (this.onRunChoice) {
-          this.onRunChoice("new-run", { faction: factionKey, callsign });
+          this.onRunChoice("new-run", { faction: factionKey, callsign, perkKey });
         }
         this.showRunSetup = false;
         // Auto-open the run map so the player lands in their first act.
@@ -1278,11 +1388,20 @@ export class StartMenu {
         if (this.onRunChoice) this.onRunChoice("dismiss-promotion", {});
         this.showPromotion = false;
       },
+      onPromotionTraitSelect: (traitKey) => {
+        // Player tapped a trait chip on the promotion overlay. The
+        // run-state controller stamps it onto pendingPromotion;
+        // dismiss commits it into run.traits. Routed through
+        // onRunChoice so main.js can persist via saveStore.
+        if (this.onRunChoice) this.onRunChoice("select-trait", { traitKey });
+      },
       // Top-level nav: home → play → about
-      onHomePlay:  () => { this._baseScreen = 'main'; },
-      onHomeAbout: () => { this._baseScreen = 'about'; },
-      onMainBack:  () => { this._baseScreen = 'home'; },
-      onAboutBack: () => { this._baseScreen = 'home'; },
+      onHomePlay:     () => { this._baseScreen = 'main'; },
+      onHomeAbout:    () => { this._baseScreen = 'about'; },
+      onHomeMemorial: () => { this._baseScreen = 'memorial'; },
+      onMainBack:     () => { this._baseScreen = 'home'; },
+      onAboutBack:    () => { this._baseScreen = 'home'; },
+      onMemorialBack: () => { this._baseScreen = 'home'; },
     });
   }
 
@@ -2695,6 +2814,15 @@ export class InputManager {
         this._tapCandidate = { id: e.pointerId, x, y, t: performance.now() };
       }
     }
+    // In spectate / admiral, ANY pointer-down that didn't claim a HUD
+    // button or vstick is also a potential pan-drag origin. If the
+    // pointer wanders past the tap threshold, onMove will promote it
+    // from "tap" to "pan" and start accumulating per-move deltas that
+    // main.js drains via consumePanDelta() to slide the camera.
+    if (this.selectActive && this._tapCandidate && this._tapCandidate.id === e.pointerId) {
+      this._tapCandidate.lastX = x;
+      this._tapCandidate.lastY = y;
+    }
   }
   onMove(e) {
     const { x, y } = this.pos(e);
@@ -2723,12 +2851,27 @@ export class InputManager {
     }
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
-    // Cancel tap candidate once the pointer wanders past a small
-    // threshold — anything past that is a drag, not a select.
-    if (this._tapCandidate && this._tapCandidate.id === e.pointerId) {
+    // Pan-drag promotion: when in spectate / admiral and the pointer
+    // wanders past the tap threshold, switch the gesture from "tap to
+    // select" to "drag to pan". Per-move screen-pixel deltas accumulate
+    // into `_pendingPanDelta` for main.js to consume next frame.
+    if (this._panDrag && this._panDrag.id === e.pointerId) {
+      this._pendingPanDelta = this._pendingPanDelta || { x: 0, y: 0 };
+      this._pendingPanDelta.x += x - this._panDrag.lastX;
+      this._pendingPanDelta.y += y - this._panDrag.lastY;
+      this._panDrag.lastX = x;
+      this._panDrag.lastY = y;
+    } else if (this._tapCandidate && this._tapCandidate.id === e.pointerId) {
       const dx = x - this._tapCandidate.x;
       const dy = y - this._tapCandidate.y;
-      if (dx * dx + dy * dy > 64) this._tapCandidate = null;
+      if (dx * dx + dy * dy > 64) {
+        // Threshold breached. In spectate / admiral, promote to pan
+        // drag instead of just dropping the tap.
+        if (this.selectActive) {
+          this._panDrag = { id: e.pointerId, lastX: x, lastY: y };
+        }
+        this._tapCandidate = null;
+      }
     }
   }
   onUp(e) {
@@ -2762,6 +2905,21 @@ export class InputManager {
       }
       this._tapCandidate = null;
     }
+    // Release the pan-drag — pointer-up always ends a drag regardless
+    // of whether more deltas are pending. Any unconsumed deltas drain
+    // on the next consumePanDelta() call from main.js.
+    if (this._panDrag && this._panDrag.id === e.pointerId) {
+      this._panDrag = null;
+    }
+  }
+
+  // Drain accumulated pan-drag delta (canvas screen pixels) and reset.
+  // Returns null when no pan is pending. main.js converts to world
+  // units via the current zoom and applies to the spectate camera.
+  consumePanDelta() {
+    const out = this._pendingPanDelta;
+    this._pendingPanDelta = null;
+    return out;
   }
 
   consumeTap() {
@@ -2787,6 +2945,15 @@ export class InputManager {
     const btnEdge = !!this.quitRequested;
     this.quitRequested = false;
     return keyEdge || btnEdge;
+  }
+
+  // In-match SETTINGS button (HUD top-right) sets `settingsRequested`;
+  // main.js drains it and pops the menu's settings overlay over the
+  // battle canvas. Edge-triggered like quit.
+  consumeSettingsRequest() {
+    const btnEdge = !!this.settingsRequested;
+    this.settingsRequested = false;
+    return btnEdge;
   }
 
   // Edge-triggered key press, latched until released.

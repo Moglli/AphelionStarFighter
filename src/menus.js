@@ -227,6 +227,9 @@ export class MenuSystem {
     // 3. About screen
     this._buildAbout(root);
 
+    // 3b. Memorial screen — Frontier career roll
+    this._buildMemorial(root);
+
     // 4. Energy Bar
     this._buildEnergyBar(root);
 
@@ -302,6 +305,15 @@ export class MenuSystem {
     });
     nav.appendChild(settingsBtn);
 
+    const memorialBtn = document.createElement("button");
+    memorialBtn.className = "menu-btn menu-home-secondary";
+    memorialBtn.id = "home-memorial-btn";
+    memorialBtn.textContent = "MEMORIAL";
+    this._addListener(memorialBtn, "click", () => {
+      if (this._callbacks.onHomeMemorial) this._callbacks.onHomeMemorial();
+    });
+    nav.appendChild(memorialBtn);
+
     const aboutBtn = document.createElement("button");
     aboutBtn.className = "menu-btn menu-home-secondary";
     aboutBtn.id = "home-about-btn";
@@ -356,6 +368,46 @@ export class MenuSystem {
 
     root.appendChild(screen);
     this._screens.about = screen;
+  }
+
+  // ---- Memorial screen ----------------------------------------------------
+  // Title-screen view that lists the player's completed Frontier
+  // careers from meta.memorial. Each entry shows rank + callsign + a
+  // one-line epitaph; the list grows up to 10 entries (oldest entries
+  // shift out as new wins are recorded — see recordRunEnd).
+
+  _buildMemorial(root) {
+    const screen = document.createElement("div");
+    screen.className = "menu-screen menu-memorial";
+    screen.dataset.screen = "memorial";
+
+    const back = document.createElement("button");
+    back.className = "menu-back-btn";
+    back.id = "memorial-back-btn";
+    back.textContent = "← BACK";
+    this._addListener(back, "click", () => {
+      if (this._callbacks.onMemorialBack) this._callbacks.onMemorialBack();
+    });
+    screen.appendChild(back);
+
+    const header = document.createElement("header");
+    header.className = "menu-title";
+    header.innerHTML = `
+      <h1>MEMORIAL</h1>
+      <div class="menu-title-accent"></div>
+      <p class="menu-subtitle">FRONTIER SERVICE · CAREER ROLL</p>
+    `;
+    screen.appendChild(header);
+
+    const list = document.createElement("div");
+    list.className = "memorial-list";
+    list.id = "memorial-list";
+    screen.appendChild(list);
+
+    root.appendChild(screen);
+    this._screens.memorial = screen;
+    this._memorialList = list;
+    this._memorialSig = null;
   }
 
   // ---- Main Menu (PLAY screen) --------------------------------------------
@@ -861,6 +913,12 @@ export class MenuSystem {
           <div class="faction-tagline">Citizens, soldiers, pilots.</div>
         </div>
 
+        <div class="runsetup-perk-section">
+          <div class="runsetup-label">STARTER PERK</div>
+          <div class="runsetup-perk-chips" id="runsetup-perk-chips"></div>
+          <div class="runsetup-perk-desc" id="runsetup-perk-desc">No perk — earn one by surviving a career.</div>
+        </div>
+
         <div class="runsetup-footer">
           <button class="menu-btn cancel-btn" id="runsetup-cancel">CANCEL</button>
           <button class="menu-btn start-btn" id="runsetup-begin">REPORT FOR DUTY</button>
@@ -873,6 +931,12 @@ export class MenuSystem {
     // uses the begin button.
     this._factionGrid = null;
     this._runsetupCallsignInput = screen.querySelector("#runsetup-callsign");
+    this._runsetupPerkChips = screen.querySelector("#runsetup-perk-chips");
+    this._runsetupPerkDesc = screen.querySelector("#runsetup-perk-desc");
+    // Selected perk for this career. `null` is the explicit "no perk"
+    // option; that's also the default when meta.unlockedPerks is empty
+    // (fresh saves, before the first run-completed unlock).
+    this._runsetupSelectedPerk = null;
     this._addListener(screen.querySelector("#runsetup-cancel"), "click", () => {
       if (this._callbacks.onRunSetupCancel) this._callbacks.onRunSetupCancel();
     });
@@ -881,7 +945,10 @@ export class MenuSystem {
         ? this._runsetupCallsignInput.value.trim().toUpperCase()
         : "";
       if (this._callbacks.onRunSetupSelect) {
-        this._callbacks.onRunSetupSelect("terran", { callsign });
+        this._callbacks.onRunSetupSelect("terran", {
+          callsign,
+          perkKey: this._runsetupSelectedPerk,
+        });
       }
     });
 
@@ -1020,9 +1087,18 @@ export class MenuSystem {
         <h2 id="promotion-rank">LIEUTENANT</h2>
         <div class="promotion-title" id="promotion-title">Flight Leader</div>
         <p class="promotion-blurb" id="promotion-blurb"></p>
+        <div class="promotion-bulletin" id="promotion-bulletin-section">
+          <div class="promotion-additions-label">WAR BULLETIN</div>
+          <ul class="promotion-bulletin-list" id="promotion-bulletin-list"></ul>
+        </div>
         <div class="promotion-additions">
           <div class="promotion-additions-label">JOINING YOUR LINE</div>
           <div class="promotion-additions-list" id="promotion-additions"></div>
+        </div>
+        <div class="promotion-traits" id="promotion-traits-section">
+          <div class="promotion-additions-label">OFFICER TRAIT</div>
+          <div class="promotion-trait-hint" id="promotion-trait-hint">Choose one — it carries to the end of your career.</div>
+          <div class="promotion-trait-chips" id="promotion-trait-chips"></div>
         </div>
         <div class="overlay-footer">
           <button class="menu-btn start-btn" id="promotion-proceed">PROCEED</button>
@@ -1034,8 +1110,16 @@ export class MenuSystem {
     this._promotionTitle = screen.querySelector("#promotion-title");
     this._promotionBlurb = screen.querySelector("#promotion-blurb");
     this._promotionAdditions = screen.querySelector("#promotion-additions");
+    this._promotionBulletinSection = screen.querySelector("#promotion-bulletin-section");
+    this._promotionBulletinList = screen.querySelector("#promotion-bulletin-list");
+    this._promotionTraitsSection = screen.querySelector("#promotion-traits-section");
+    this._promotionTraitChips = screen.querySelector("#promotion-trait-chips");
+    this._promotionTraitHint = screen.querySelector("#promotion-trait-hint");
+    this._promotionProceedBtn = screen.querySelector("#promotion-proceed");
+    this._promotionTraitSig = null;
+    this._promotionBulletinSig = null;
 
-    this._addListener(screen.querySelector("#promotion-proceed"), "click", () => {
+    this._addListener(this._promotionProceedBtn, "click", () => {
       if (this._callbacks.onPromotionDismiss) this._callbacks.onPromotionDismiss();
     });
 
@@ -1126,6 +1210,35 @@ export class MenuSystem {
 
     // --- Promotion ---
     this._syncPromotion(menuState);
+
+    // --- Memorial wall ---
+    this._syncMemorial(menuState);
+  }
+
+  _syncMemorial(s) {
+    if (!this._memorialList) return;
+    const entries = (s && s.memorial) || [];
+    const sig = entries.map((e) => `${e.callsign}|${e.rank}|${e.epitaph || ""}`).join("\n");
+    if (sig === this._memorialSig) return;
+    this._memorialSig = sig;
+    if (entries.length === 0) {
+      this._memorialList.innerHTML = `<div class="memorial-empty">No careers complete. Be the first.</div>`;
+      return;
+    }
+    const rows = entries.map((e) => {
+      const rank = (e.rank || "Officer").toUpperCase();
+      const callsign = (e.callsign || "UNKNOWN").toUpperCase();
+      const epitaph = e.epitaph || "Career closed.";
+      const cls = e.result === "lost" ? "memorial-row lost" : "memorial-row";
+      return `
+        <div class="${cls}">
+          <div class="memorial-row-rank">${rank}</div>
+          <div class="memorial-row-callsign">${callsign}</div>
+          <div class="memorial-row-epitaph">${epitaph}</div>
+        </div>
+      `;
+    });
+    this._memorialList.innerHTML = rows.join("");
   }
 
   // ---- sync: Main Menu Chips ----------------------------------------------
@@ -1471,10 +1584,67 @@ export class MenuSystem {
 
   // ---- sync: Run Setup ----------------------------------------------------
 
-  _syncRunSetup(_s) {
-    // Static screen: built once in _buildRunSetup, no per-frame sync
-    // needed. Career is locked to Terran; the only player input is the
-    // callsign textbox + REPORT FOR DUTY button.
+  _syncRunSetup(s) {
+    // Faction + callsign are static — career is Terran-locked and the
+    // textbox holds its own value. The only dynamic block is the
+    // starter-perk row, which depends on which perks the player has
+    // unlocked. We rebuild the chip strip whenever the unlocked set
+    // changes (cheap; ≤4 chips), and reset the selected perk if it
+    // no longer matches a valid option.
+    if (!this._runsetupPerkChips) return;
+    const runSetup = (s && s.runSetup) || { perks: [] };
+    const perks = runSetup.perks || [];
+
+    // Build the option list: always include "NONE" at the front, then
+    // each unlocked perk.
+    const options = [{ key: null, name: "(NONE)", desc: "No perk — earn one by surviving a career." }];
+    for (const p of perks) options.push(p);
+
+    // Reset selection if it no longer maps to an available option —
+    // protects against a stale perk key after a save migration.
+    if (this._runsetupSelectedPerk !== null &&
+        !options.some((o) => o.key === this._runsetupSelectedPerk)) {
+      this._runsetupSelectedPerk = null;
+    }
+
+    // Cheap rebuild: drop a hash so we only re-render when the set
+    // actually changed.
+    const sig = options.map((o) => o.key || "_none").join("|");
+    if (this._runsetupPerkSig !== sig) {
+      this._runsetupPerkSig = sig;
+      this._runsetupPerkChips.innerHTML = "";
+      for (const opt of options) {
+        const btn = document.createElement("button");
+        btn.className = "runsetup-perk-chip";
+        btn.dataset.perkKey = opt.key || "";
+        btn.dataset.perkDesc = opt.desc || "";
+        btn.textContent = opt.name;
+        this._addListener(btn, "click", () => {
+          this._runsetupSelectedPerk = opt.key;
+          this._syncRunSetupChipState(options);
+        });
+        this._runsetupPerkChips.appendChild(btn);
+      }
+    }
+    this._syncRunSetupChipState(options);
+  }
+
+  _syncRunSetupChipState(options) {
+    if (!this._runsetupPerkChips) return;
+    const chips = this._runsetupPerkChips.querySelectorAll(".runsetup-perk-chip");
+    let activeDesc = "";
+    for (const btn of chips) {
+      const key = btn.dataset.perkKey || null;
+      const active = key === this._runsetupSelectedPerk;
+      btn.classList.toggle("active", active);
+      if (active) activeDesc = btn.dataset.perkDesc || "";
+    }
+    if (this._runsetupPerkDesc) {
+      this._runsetupPerkDesc.textContent = activeDesc ||
+        (options.length <= 1
+          ? "No perk — earn one by surviving a career."
+          : "Pick a starter perk.");
+    }
   }
 
   // ---- sync: Battle Choice ------------------------------------------------
@@ -1482,15 +1652,34 @@ export class MenuSystem {
   _syncBattleChoice(s) {
     const node = s.battleNode;
     if (!node) return;
-    const race = s.races ? s.races[node.faction] : null;
+    const race = s.races ? s.races[node.bossFaction || node.faction] : null;
     const raceName = race ? race.name : (node.faction || "Unknown");
     const tier = node.tier || 1;
     const tierLabel = tier === 1 ? "Standard" : tier === 2 ? "Elite" : "Boss";
-    this._battleTitle.textContent = "ENEMY SPOTTED";
-    this._battleInfo.innerHTML = `
-      <span class="battle-faction" style="color:${race ? race.accent : '#cef'};">${raceName.toUpperCase()}</span>
-      <span class="battle-tier">${tierLabel} (Tier ${tier})</span>
-    `;
+
+    // Boss briefing: when the node is a named-boss encounter we swap
+    // the generic "ENEMY SPOTTED" + faction/tier strip for the named
+    // commander's profile + their description from the BOSSES table.
+    // Reads like the CO calling out the threat before the player
+    // commits — sets the tone for the act-finale fight.
+    if (node.bossName) {
+      this._battleTitle.textContent = "TARGET BRIEFING";
+      const accent = race ? race.accent : "#f55";
+      this._battleInfo.innerHTML = `
+        <div class="boss-briefing">
+          <div class="boss-briefing-eyebrow" style="color:${accent};">FRONTIER INTEL · TARGET DOSSIER</div>
+          <div class="boss-briefing-name" style="color:${accent};">${node.bossName}</div>
+          <div class="boss-briefing-faction">${raceName.toUpperCase()}</div>
+          <div class="boss-briefing-body">${node.bossDescription || ""}</div>
+        </div>
+      `;
+    } else {
+      this._battleTitle.textContent = "ENEMY SPOTTED";
+      this._battleInfo.innerHTML = `
+        <span class="battle-faction" style="color:${race ? race.accent : '#cef'};">${raceName.toUpperCase()}</span>
+        <span class="battle-tier">${tierLabel} (Tier ${tier})</span>
+      `;
+    }
   }
 
   // ---- sync: Resupply -----------------------------------------------------
@@ -1622,5 +1811,72 @@ export class MenuSystem {
     if (parts.length === 0) parts.push(`<div class="promotion-addition-row promotion-addition-empty">No new units</div>`);
 
     this._promotionAdditions.innerHTML = parts.join("");
+
+    // ---- War bulletin ----
+    // 3-line news ticker stamped onto pendingPromotion at boss-clear
+    // time. Rebuild the <li> list on a hash change so each act-break
+    // shows its own headlines without thrashing the DOM.
+    const bulletin = promo.bulletin || [];
+    if (this._promotionBulletinSection) {
+      this._promotionBulletinSection.style.display = bulletin.length > 0 ? "" : "none";
+    }
+    const bsig = bulletin.join("|");
+    if (this._promotionBulletinList && bsig !== this._promotionBulletinSig) {
+      this._promotionBulletinSig = bsig;
+      this._promotionBulletinList.innerHTML = bulletin
+        .map((line) => `<li class="promotion-bulletin-line">${line}</li>`)
+        .join("");
+    }
+
+    // ---- Trait picker ----
+    const draw = promo.traitDraw || [];
+    const selectedKey = promo.selectedTraitKey || null;
+    if (this._promotionTraitsSection) {
+      this._promotionTraitsSection.style.display = draw.length > 0 ? "" : "none";
+    }
+    // Cheap rebuild on key-set change (each promotion has a unique
+    // traitDraw so this fires exactly once per overlay open).
+    const sig = draw.map((t) => t.key).join("|");
+    if (sig !== this._promotionTraitSig) {
+      this._promotionTraitSig = sig;
+      if (this._promotionTraitChips) {
+        this._promotionTraitChips.innerHTML = "";
+        for (const t of draw) {
+          const btn = document.createElement("button");
+          btn.className = "promotion-trait-chip";
+          btn.dataset.traitKey = t.key;
+          btn.innerHTML = `<div class="trait-name">${t.name}</div><div class="trait-desc">${t.desc}</div>`;
+          this._addListener(btn, "click", () => {
+            if (this._callbacks.onPromotionTraitSelect) {
+              this._callbacks.onPromotionTraitSelect(t.key);
+            }
+          });
+          this._promotionTraitChips.appendChild(btn);
+        }
+      }
+    }
+    // Highlight the picked chip + gate PROCEED.
+    if (this._promotionTraitChips) {
+      const chips = this._promotionTraitChips.querySelectorAll(".promotion-trait-chip");
+      for (const c of chips) {
+        c.classList.toggle("active", c.dataset.traitKey === selectedKey);
+      }
+    }
+    // PROCEED is enabled when (a) no traits to pick (degenerate case),
+    // or (b) the player has picked one. Disabled state is visual
+    // only — the dismiss callback still fires either way, but the
+    // styling tells the player to make their choice first.
+    if (this._promotionProceedBtn) {
+      const needsPick = draw.length > 0 && !selectedKey;
+      this._promotionProceedBtn.disabled = needsPick;
+      this._promotionProceedBtn.classList.toggle("disabled", needsPick);
+    }
+    if (this._promotionTraitHint) {
+      this._promotionTraitHint.textContent = selectedKey
+        ? "Trait locked in. Promotion ready."
+        : (draw.length > 0
+            ? "Choose one — it carries to the end of your career."
+            : "No traits available — career too short.");
+    }
   }
 }

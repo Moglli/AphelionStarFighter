@@ -21,27 +21,32 @@ import {
   pushWreck, pushDebris,
 } from "./wreckage.js";
 import { events } from "./events.js";
-import { PERKS } from "./roguelite.js";
+import { PERKS, TRAITS } from "./roguelite.js";
+import { deepMerge } from "./races.js";
 
 const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
 const BOMBER_PACK_SIZE = 2;
 const PACK_CLUSTER_RADIUS = 130;
 
-// Every escortable ship spawns with a tight fighter escort. Escorts
-// share a packId so the pack AI engages them as a wing centred on their
-// charge, and the pack target picker prioritises bombers so any bomber
-// threatening the charge gets swatted before it can deliver its payload.
-// Bombers also rate an escort (small but enough to ward off lone
-// interceptors) — they're the second-most-valuable strike asset after
-// the capitals and were getting picked off solo before.
+// Per-charge escort *demand* (in fighters). Used at battle start by
+// `assignEscortPacks` to claim fighter packs out of the free pool and
+// stamp them with `escortOf = charge.id`. Ships no longer spawn with
+// escorts attached — they spawn solo, and the assignment step pairs
+// them with the nearest fighters. When the fighter pool can't cover
+// every demand, charges are filled in `ESCORT_PRIORITY` order:
+//   battleship → cruiser → carrier → bomber → frigate
+// so the rare heavy capitals get their full screen first, bombers
+// still pick up their pair (small but anti-interceptor screen), and
+// frigates fly naked when fighters run out.
 const ESCORT_SIZE = {
+  battleship: 10,
+  cruiser: 10,
+  carrier: 15,
   bomber: 2,
   frigate: 5,
-  cruiser: 10,
-  battleship: 10,
-  carrier: 15,
 };
+const ESCORT_PRIORITY = ["battleship", "cruiser", "carrier", "bomber", "frigate"];
 
 const PACK_ROLES = [
   "hunt-fighter",
@@ -178,7 +183,7 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   // payload OR any future mode's per-match config bundle.
   game.modeConfig = modeConfig || null;
   // rogueliteContext is the spawn-time scratch space: capitalsManifest
-  // and current pop pointers used by spawnCapitalWithEscort. Mode setup
+  // and current pop pointers used by spawnCapital. Mode setup
   // hook stashes here.
   game.rogueliteContext = null;
   game.playerSpecOverride = (modeConfig && modeConfig.playerSpecOverride) || null;
@@ -206,6 +211,31 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
     // +20% HP. Resolved against base since we don't have spec here yet;
     // createShip honours the patch via deepMerge.
     game.playerSpecOverride.hp = Math.round(35 * 1.20);
+  }
+
+  // Officer traits — buildModeConfig stamps `_traitKeys: [...]` on the
+  // override. Each trait's `playerOverride(effectiveSpec)` reads the
+  // CURRENT effective fighter spec (base + prior traits) and returns a
+  // partial deep-merged onto the working spec. Reading the effective
+  // spec — not the base — means traits stack multiplicatively when
+  // they touch the same field: Steady Hand (+10% damage) then
+  // Defensive Driver (-5%) lands at base × 1.10 × 0.95 instead of one
+  // overwriting the other.
+  if (game.playerSpecOverride && Array.isArray(game.playerSpecOverride._traitKeys)) {
+    const keys = game.playerSpecOverride._traitKeys;
+    delete game.playerSpecOverride._traitKeys;
+    const baseSpec = (RACES[game.alliedRace] || RACES.terran).fighter || {};
+    let effective = baseSpec;
+    for (const k of keys) {
+      const trait = TRAITS[k];
+      if (!trait || !trait.playerOverride) continue;
+      const patch = trait.playerOverride(effective);
+      effective = deepMerge(effective, patch);
+    }
+    // Bake the chained effective spec onto the override. createShip
+    // re-resolves the race spec then deep-merges this, so any field
+    // we DIDN'T touch stays at the resolved base.
+    game.playerSpecOverride = deepMerge(game.playerSpecOverride, effective);
   }
   game.customRoster = customRoster || null;
   game.kills = 0;
@@ -255,11 +285,25 @@ function spawnRoster(game, rosterOverride = null) {
     const mul = rosterOverride ? 1 : (game.fleetMul || 1);
 
     const spawnOne = (race, roster) => {
+      // Compute total escort *demand* from the capitals in this roster.
+      // Capitals no longer spawn with escorts attached — those fighters
+      // are now part of the open fighter pool — so for the default
+      // rosters we bump the fighter count by the escort demand to keep
+      // total fighter-density similar to the pre-assignment behaviour.
+      // Custom Match + Frontier (anything that passes `rosterOverride`)
+      // honours its authored counts verbatim, so the bump is skipped
+      // there.
+      let escortDemand = 0;
+      if (!rosterOverride) {
+        for (const [k, c] of Object.entries(roster)) {
+          if (ESCORT_SIZE[k] && c > 0) escortDemand += ESCORT_SIZE[k] * c;
+        }
+      }
       for (const [klass, count] of Object.entries(roster)) {
         if (count <= 0) continue;
         const scaled = Math.max(1, Math.round(count * mul));
         if (klass === "fighter") {
-          spawnFighterPacks(game, side, race, zone, scaled, facing);
+          spawnFighterPacks(game, side, race, zone, scaled + escortDemand, facing);
         } else if (klass === "bomber") {
           spawnBomberPairs(game, side, race, zone, scaled, facing);
         } else if (ESCORT_SIZE[klass]) {
@@ -272,7 +316,7 @@ function spawnRoster(game, rosterOverride = null) {
                 manifest.splice(idx, 1);
               }
             }
-            spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded);
+            spawnCapital(game, klass, side, race, zone, facing, wounded);
           }
         } else {
           for (let i = 0; i < scaled; i++) {
@@ -311,6 +355,12 @@ function spawnRoster(game, rosterOverride = null) {
       spawnStation(game, side, stationRace, zone, facing);
     }
   }
+  // Now that every ship is on the board, walk both sides and assign
+  // fighter packs to capitals as escorts. Capitals no longer spawn
+  // with escorts attached — they spawn solo and the assignment step
+  // pairs them with the nearest unclaimed packs (largest capitals
+  // get first pick).
+  assignEscortPacks(game);
   if (!game.spectating) promotePlayer(game);
 }
 
@@ -374,9 +424,10 @@ function spawnFighterPacks(game, side, race, zone, count, facing) {
 
 // Bombers spawn in tight pairs. They don't share the fighter pack system —
 // their AI targets capitals directly, and they're meant to be the "loud"
-// threat that pulls fighter attention.
+// threat that pulls fighter attention. They spawn solo (no escorts) —
+// fighter packs are assigned to *capital* charges post-spawn by
+// `assignEscortPacks`; bombers fend for themselves.
 function spawnBomberPairs(game, side, race, zone, count, facing) {
-  const escortSize = ESCORT_SIZE.bomber || 0;
   let remaining = count;
   while (remaining > 0) {
     const pairSize = Math.min(BOMBER_PACK_SIZE, remaining);
@@ -398,44 +449,16 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
       });
       game.ships.push(bomber);
-
-      // Each bomber gets its own escort wing so the pack AI keeps them
-      // glued to that specific bomber instead of drifting across the
-      // pair. Same pack-role as capital escorts — hunt-fighter — so the
-      // existing target picker upgrades them to an enemy fighter
-      // threatening their charge.
-      if (escortSize > 0) {
-        const packId = nextPackId++;
-        const ringR = bomber.spec.radius + Math.max(40, escortSize * 8);
-        for (let j = 0; j < escortSize; j++) {
-          const eang = (j / escortSize) * Math.PI * 2 + Math.PI / 2;
-          const epos = {
-            x: pos.x + Math.cos(eang) * ringR,
-            y: pos.y + Math.sin(eang) * ringR,
-          };
-          const eheading = facing + (Math.random() - 0.5) * 0.3;
-          const escort = createShip({
-            klass: "fighter", race, side, pos: epos, heading: eheading,
-            controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
-          });
-          escort.packId = packId;
-          escort.packRole = "hunt-fighter";
-          escort.escortOf = bomber.id;
-          game.ships.push(escort);
-        }
-      }
     }
     remaining -= pairSize;
   }
 }
 
-// Capital + fighter escort squadron. Spawns one capital of `klass` and
-// ESCORT_SIZE[klass] fighter escorts in a tight ring around it. Escorts
-// share a packId so the pack AI engages them as a wing centred on the
-// capital. Pack role is "hunt-fighter" — they screen against enemy
-// small craft; the pack target picker still upgrades them to a bomber
-// if one shows up. The first escort wears `escortOf` for HUD / debug.
-function spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded = null) {
+// Spawns one capital of `klass`, no escorts. The escort pairing
+// happens later via `assignEscortPacks` once every ship is on the
+// board — fighter packs spawned by `spawnFighterPacks` get their
+// `escortOf` stamped to the nearest unclaimed capital.
+function spawnCapital(game, klass, side, race, zone, facing, wounded = null) {
   const pos = randomSpawnPos(zone);
   const capital = createShip({
     klass, race, side, pos, heading: facing,
@@ -448,38 +471,111 @@ function spawnCapitalWithEscort(game, klass, side, race, zone, facing, wounded =
   // this live ship back to its slot in run.capitals when the match ends.
   if (wounded) capital.runtimeInstanceId = wounded.instanceId;
   game.ships.push(capital);
+}
 
-  const escortSize = ESCORT_SIZE[klass] || 0;
-  if (escortSize <= 0) return;
-  // Spread ring slightly so larger groups around a battleship don't
-  // overlap each other at spawn.
-  const ringR = capital.spec.radius + Math.max(70, escortSize * 6);
-  // Split escorts into squads of FIGHTER_PACK_SIZE (=5). A battleship's
-  // 10 escorts become two squads of 5 with separate packIds, so each
-  // squad's cohesion / target pick is independent — matches the free
-  // fighter spawn logic in `spawnFighterPacks`.
-  let packId = nextPackId++;
-  let inThisSquad = 0;
-  for (let i = 0; i < escortSize; i++) {
-    if (inThisSquad >= FIGHTER_PACK_SIZE) {
-      packId = nextPackId++;
-      inThisSquad = 0;
+// Post-spawn escort assignment. Runs once at the end of spawnRoster,
+// after every ship is on the board. Walks each side's charges in the
+// fixed `ESCORT_PRIORITY` order (BB → cruiser → carrier → bomber →
+// frigate) and stamps `escortOf = charge.id` on the nearest available
+// fighters. Capitals claim whole fighter packs at a time so pack
+// cohesion stays consistent; bombers claim 2 individual fighters
+// apiece — those two share a fresh packId so they cohere as their own
+// small wing instead of pulling cohesion against the leftover pack
+// they were plucked from. When the pool runs out, lower-priority
+// charges fly with reduced screens or none at all.
+function assignEscortPacks(game) {
+  for (const side of ["blue", "red"]) {
+    // Build a per-pack map of unclaimed fighters on this side. A "pack"
+    // is any group of fighters sharing a packId. Free fighters with no
+    // packId aren't included — they stay as solo screen units.
+    const packs = new Map();
+    for (const s of game.ships) {
+      if (s.dead || s.side !== side || s.klass !== "fighter") continue;
+      if (s.packId == null || s.escortOf != null) continue;
+      let entry = packs.get(s.packId);
+      if (!entry) {
+        entry = { fighters: [], sumX: 0, sumY: 0, claimed: false };
+        packs.set(s.packId, entry);
+      }
+      entry.fighters.push(s);
+      entry.sumX += s.pos.x;
+      entry.sumY += s.pos.y;
     }
-    const ang = (i / escortSize) * Math.PI * 2;
-    const epos = {
-      x: pos.x + Math.cos(ang) * ringR,
-      y: pos.y + Math.sin(ang) * ringR,
-    };
-    const heading = facing + (Math.random() - 0.5) * 0.3;
-    const escort = createShip({
-      klass: "fighter", race, side, pos: epos, heading,
-      controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
-    });
-    escort.packId = packId;
-    escort.packRole = "hunt-fighter";
-    escort.escortOf = capital.id;
-    game.ships.push(escort);
-    inThisSquad++;
+    for (const entry of packs.values()) {
+      const n = entry.fighters.length;
+      entry.cx = entry.sumX / n;
+      entry.cy = entry.sumY / n;
+    }
+
+    for (const klass of ESCORT_PRIORITY) {
+      const need = ESCORT_SIZE[klass] || 0;
+      if (need <= 0) continue;
+      const charges = game.ships.filter(
+        (s) => s.side === side && s.klass === klass && !s.dead,
+      );
+
+      if (klass === "bomber") {
+        // Bombers claim individual fighters (2 each) rather than whole
+        // packs — picking the closest free fighter from any unclaimed
+        // pack, then dropping it out of that pack so subsequent claims
+        // don't double-pick. The two claimed fighters share a fresh
+        // packId so they cohere as the bomber's wing without tugging
+        // the leftover free fighters in their original pack.
+        for (const bomber of charges) {
+          const claimed = [];
+          while (claimed.length < need) {
+            let bestF = null, bestEntry = null, bestD2 = Infinity;
+            for (const entry of packs.values()) {
+              if (entry.claimed || entry.fighters.length === 0) continue;
+              for (const f of entry.fighters) {
+                const dx = f.pos.x - bomber.pos.x;
+                const dy = f.pos.y - bomber.pos.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) { bestD2 = d2; bestF = f; bestEntry = entry; }
+              }
+            }
+            if (!bestF) break; // pool exhausted
+            const idx = bestEntry.fighters.indexOf(bestF);
+            bestEntry.fighters.splice(idx, 1);
+            claimed.push(bestF);
+          }
+          if (claimed.length > 0) {
+            const escortPackId = nextPackId++;
+            for (const f of claimed) {
+              f.escortOf = bomber.id;
+              f.packRole = "hunt-fighter";
+              f.packId = escortPackId;
+            }
+          }
+        }
+        continue;
+      }
+
+      // Capital: whole-pack claims.
+      for (const cap of charges) {
+        let remaining = need;
+        while (remaining > 0) {
+          let bestPack = null, bestD2 = Infinity;
+          for (const entry of packs.values()) {
+            if (entry.claimed || entry.fighters.length === 0) continue;
+            const dx = entry.cx - cap.pos.x;
+            const dy = entry.cy - cap.pos.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) { bestD2 = d2; bestPack = entry; }
+          }
+          if (!bestPack) break;
+          bestPack.claimed = true;
+          for (const f of bestPack.fighters) {
+            f.escortOf = cap.id;
+            // Cap-relative target picker in ai.js drives escort behaviour
+            // via `escortOf`; packRole stays for the pack target-fallback
+            // when no threat is inside the engage bubble.
+            f.packRole = "hunt-fighter";
+          }
+          remaining -= bestPack.fighters.length;
+        }
+      }
+    }
   }
 }
 

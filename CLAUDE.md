@@ -122,6 +122,206 @@ narrative.**
 Newest entries first. When you make changes, add a section with date,
 a one-line summary, file pointers, and any non-obvious decisions.
 
+### 2026-05-22 — Frontier content expansion: traits, event cards, boss briefings, memorial wall, perks
+
+Six-tier content padding pass for the Frontier campaign. Each tier
+was scoped + verified via Playwright probes (`/tmp/aphel-tier*.mjs`)
+before the next started. Net additions:
+
+- **Tier 1 — Officer traits at promotion.** Every rank-up rolls a
+  3-trait random draw (4 with Decorated Pilot perk, +1 with the Act 1
+  drill-officer event card). Traits stack across the run; max 4 by
+  end of Act 5. Six starter traits ship: Steady Hand, Trauma Surgeon,
+  Reckless, Defensive Driver, Eagle Eyes, Iron Hull — all patch the
+  player fighter spec via `playerOverride(effectiveSpec)`. Trait
+  effects chain through the effective spec at startGame time so two
+  traits touching the same field (Steady Hand + Defensive Driver on
+  weapon.damage) stack multiplicatively instead of overwriting.
+- **Tier 2 — 7 new Act 1+2 event cards** with flag-setting choices.
+  Cards: wingman-down, pilots-lounge, drill-officer, voss-briefing,
+  junior-defector, captured-pirate, plus the Voss thread (Captain
+  Mara Voss of the *Sparrowhawk* — named NPC reused across acts).
+  `flags.bonusTraitNext` from drill-officer bumps the next promotion's
+  trait draw size +1; consumed at the next applyPromotion. Other
+  flags (voss, geneva, hegDefector, warCriminalStart, etc.) feed
+  Tier 3/6 callbacks.
+- **Tier 3 — Boss briefing + war bulletin.** Battle-choice screen
+  rebuilt for boss nodes: named-boss dossier (name + description +
+  faction-tinted accent) replaces the generic "ENEMY SPOTTED" strip.
+  Promotion overlay grew a 3-line WAR BULLETIN section keyed on the
+  act + run.flags — third line is flag-conditional, so Voss/wingman/
+  wounded-warlord choices show up as wire pickups at the next rank-up.
+  Exposes `BOSSES` from roguelite.js.
+- **Tier 4 — Memorial wall** on the home screen. Lists the last 10
+  completed careers (wins + losses) from `meta.memorial` with rank +
+  callsign + a `writeEpitaph(run, won)`-generated one-liner that
+  reads from the same flags. Won careers show a gold border; lost
+  careers show red. NPC roster panel deferred to a follow-up (the
+  NPCs already accumulate in `run.flags` — just needs a sidebar UI
+  in starmap.js).
+- **Tier 5 — 3 new starter perks.** Wealthy Family (+100 credits,
+  needs runsCompleted ≥ 2), Decorated Pilot (+1 trait choice each
+  promotion, runsCompleted ≥ 5), War College Top of Class (start at
+  Act 2 with Pilot Officer's promotion fleet pre-attached, runsWon
+  ≥ 2). New PERKS hooks: `creditsBonus`, `traitDrawBonus`,
+  `startAct`. Boon refactor deferred — wiring boons into per-class
+  ship specs needs its own pass (createShip → modeConfig → spec
+  patches).
+- **Tier 6 — 8 new Act 3-5 event cards** with `precondition(run)`
+  gating. Act 3: black-auriga-sighting, defector-carrier,
+  memorial-service. Act 4: voidsworn-manifesto, hegemony-coalition
+  (precondition: voss === "served-under"). Act 5: voss-cameo
+  (precondition: voss flag), wounded-warlord-returns (precondition:
+  executed/sparedWoundedCapital flag — branches reward/punish in
+  the apply), the-last-letter (pure narrative beat). `generateAct`
+  now filters the event pool through both actTags + precondition.
+
+Plus a pre-existing bug surfaced + fixed during Tier 1: the
+promotion overlay's auto-open was chicken-and-egg gated — sync only
+ran when `showPromotion=true`, but `showPromotion=true` was set
+inside `_syncPromotion`. Moved the auto-open above the gate in
+`input.js#draw` so the overlay reliably appears the frame after a
+boss clear.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/roguelite.js` | `TRAITS` table + `rollTraitDraw` + `selectPromotionTrait`. `BOSSES` exported. 15 new EVENT_CARDS. `generateBulletin` + `writeEpitaph`. `applyPromotion` enriched with traitDraw + bulletin. `recordRunEnd` records losses too. `startNewRun` accepts perk hooks (creditsBonus, startAct). `rollTraitDraw` stacks traitDrawBonus perk + bonusTraitNext flag. `isRunOver` added `isStranded`. 3 new PERKS. `generateAct` filters by precondition. |
+| `src/game.js` | Imports TRAITS + deepMerge. `startGame` resolves `_traitKeys` by chaining each trait's `playerOverride(effectiveSpec)` for multiplicative stacking. |
+| `src/modes/roguelite.js` | Act 5 boss carrier marked at setup. `tick` hook edge-detects 66%/33% hull and spawns reinforcement waves (frigates+fighters at p1, cruiser+fighters+bombers at p2). |
+| `src/input.js` | TRAITS + BOSSES imported. `_buildMenuState` enriches promotion.traitDraw + builds boss-briefing battleState + supplies memorial entries. Promotion auto-open moved above sync gate. `onPromotionTraitSelect` + `onHomeMemorial`/`onMemorialBack` callbacks. `runSetup.perks` for the starter-perk picker. |
+| `src/main.js` | `handleRunChoice("select-trait", ...)` routes to selectPromotionTrait. Forwards `perkKey` to startNewRun. |
+| `src/menus.js` | Promotion overlay extended with `.promotion-bulletin` + `.promotion-traits` sections. `_syncPromotion` populates trait chips, gates PROCEED on selection, renders bulletin. `_buildRunSetup` perk picker. `_syncBattleChoice` swaps to boss-briefing block when `node.bossName` is set. `_buildMemorial` + `_syncMemorial`. New `onHomeMemorial` callback wired. |
+| `style.css` | `.promotion-bulletin`, `.promotion-traits`, `.promotion-trait-chip`, `.runsetup-perk-section/chips/desc`, `.boss-briefing`, `.menu-memorial` + `.memorial-row` styles. Disabled-state styling for `.menu-btn.start-btn:disabled`. |
+| `src/classes.js` | (Pre-existing change kept — bomber autocannon nerf 3 → 2.4 from earlier today.) |
+| `src/ai.js` | (Earlier today's changes — cruiser cannon turret, frigate hull-clearance, bomber PD avoidance.) |
+| `src/ship.js` | (Earlier today's changes — cruiser cannon visual + slewCannonAim, trait `cannonAimAngle` state on createShip.) |
+| `src/hud.js` | (Earlier today's changes — fleet status strips on mobile, clearer class glyphs.) |
+
+**Design decisions / gotchas**
+
+- **Trait stacking via chained effective spec.** Each trait's
+  `playerOverride(effectiveSpec)` reads the CURRENT effective spec
+  (base + prior traits applied via deepMerge), not the base. So
+  Steady Hand → Defensive Driver leaves weapon.damage at
+  `base × 1.10 × 0.95`, not `base × 0.95` (last-write-wins). If a
+  future trait wants to read the base instead, it needs to be added
+  before this chain or use additive multipliers.
+- **`bonusTraitNext` consumed inline, `traitDrawBonus` permanent.**
+  Drill-officer's flag is a one-shot bump cleared the moment
+  rollTraitDraw reads it; Decorated Pilot's perk is checked every
+  call from `loadMeta()`. Both stack additively with the default
+  TRAIT_DRAW_SIZE = 3.
+- **Precondition is a filter, not a guarantee.** A card with a
+  precondition still rolls only when the precondition is true at
+  generateAct time — if the player rerolls the act graph (e.g. via
+  a future feature), the same precondition is re-evaluated. Flag-
+  setting choices in Act 2 fix the gate's state for Act 5 cards.
+- **Memorial entries cap at 10.** `recordRunEnd` unshifts (newest
+  first) and slices to 10. Both wins and losses count — the wall
+  reads as a full career roll, not just honor.
+- **Boss-phase reinforcements spawn at the red zone, not adjacent
+  to the boss.** Visual "warp-in from the edge" reads cleaner than
+  ships appearing on top of the moving carrier.
+- **Auto-open gate fix is load-bearing.** The chicken-and-egg I
+  hit during Tier 1 was a pre-existing latent bug — it only became
+  visible because my Playwright tests force a fresh save with a
+  pending promotion. In organic play the bug also exists but is
+  masked by the first frame's `showRunMap=false` (sync runs, auto-
+  open fires) before the run-map transitions in. Don't revert the
+  auto-open lift.
+- **War College Top of Class folds Act 2's promotion fleet into the
+  starter inventory.** Player gets the frigate + 4 fighters + 1
+  bomber that would normally arrive at the Lieutenant rank-up, but
+  doesn't get the trait pick (no choice was made — no promotion
+  overlay fired). First trait pick is the Act 2→3 rank-up.
+
+**Verified via Playwright (Galaxy S9+ UA)**: All six tiers passed
+their per-tier probes. Trait pick persists across save+reload + builds
+modeConfig.\_traitKeys correctly. New event cards present in
+EVENT_CARDS pool with right actTags. Bulletin generates 3 lines with
+flag-conditional third line. Memorial screen renders 3 rows from
+seeded memorial entries. Perk hooks (Wealthy Family +100 credits,
+War College act=2 + frigate, Decorated Pilot 4-card draw) all fire.
+Precondition filter excludes voss-cameo from the pool when the voss
+flag isn't "served-under".
+
+### 2026-05-22 — Frontier mechanical-depth pass: starter perks, fuel-stranded, phased Apheliotrope
+
+Three follow-ups from the 2026-05-22 story pass that the previous
+session deferred. Each is small, independent, and verified via direct
+Playwright probes (`/tmp/aphel-frontier2.mjs`).
+
+- **Starter perk pick on BEGIN CAREER.** The screen now has a
+  `STARTER PERK` row with "(NONE)" + one chip per unlocked perk in
+  `meta.unlockedPerks`. Selection is stamped onto `meta.activePerkKey`
+  by `startNewRun`, so the existing perk-apply chain
+  (`applyToFleet`, `playerOverride`, `creditMultiplier`) picks it up
+  unchanged. Verified: selecting Aggressive Engineer → run starts
+  with 6 fighters (4 starter + 2 from perk).
+- **Fuel-stranded detection.** `isRunOver` now calls a new
+  `isStranded(run)` helper that returns true when fuel is 0, every
+  outgoing edge is unaffordable, and the current node can't sell a
+  refuel. Stamps `run.endReason = "stranded"` so the existing flavor
+  branch fires ("…stranded between jumps. Search-and-rescue found
+  nothing."). Verified: fuel=0+credits=0 → isRunOver true,
+  endReason "stranded".
+- **Phased Apheliotrope (Act 5 boss).** `modes/roguelite.js` now
+  identifies the boss carrier at setup time (run.act === 5 + node.type
+  === "boss"), stamps `ship.isBoss = true`, and runs a tick hook that
+  spawns reinforcement waves when the boss hull crosses 66% and 33%.
+  Phase 1 = 2 frigates + 4 fighters; phase 2 = 1 cruiser + 6 fighters
+  + 2 bombers. Edge-detected (`phasedAt.p1` / `.p2`) so each wave
+  fires exactly once. Verified synthetic: hp 60% → +6 ships; hp 30%
+  → +9 more.
+
+**Files touched**
+
+| File | What |
+|---|---|
+| `src/roguelite.js` | `startNewRun` accepts `opts.perkKey` and writes through to `meta.activePerkKey`. `isRunOver` calls new `isStranded`. |
+| `src/modes/roguelite.js` | `setup` marks the Act 5 boss carrier; `tick(game, dt)` edge-detects 66%/33% thresholds and spawns reinforcement waves at the red spawn zone via `createShip`. |
+| `src/menus.js` | `_buildRunSetup` adds a `.runsetup-perk-section` block (chip row + desc); `_syncRunSetup` populates chips from `menuState.runSetup.perks` and tracks the selected key on `this._runsetupSelectedPerk`. |
+| `src/input.js` | `_buildMenuState` builds `runSetup.perks` from `meta.unlockedPerks`. `onRunSetupSelect` forwards `perkKey` through `onRunChoice("new-run", ...)`. |
+| `src/main.js` | `handleRunChoice("new-run", ...)` forwards `perkKey` into `startNewRun`. |
+| `style.css` | `.runsetup-perk-section/chips/chip/desc` styles. Active state uses the same accent blue as the carousel chips. |
+
+**Design decisions / gotchas**
+
+- **Starter perks reuse the existing `meta.activePerkKey` slot** —
+  there's already a perk-apply chain (applyToFleet / playerOverride /
+  creditMultiplier) that reads from this single field. Adding a new
+  "perPerk per run" field would have split the contract. The down-
+  side: the picker overwrites the meta-persistent active perk, so
+  cross-run "remember my last pick" is implicit (the previous run's
+  pick is the default for the next run).
+- **`(NONE)` is always the first chip**, even when no perks are
+  unlocked. Fresh saves see one chip + "No perk — earn one by
+  surviving a career." in the desc line, so the UI doesn't look
+  empty / broken.
+- **Stranded check guards against false positives at boss/end-of-act
+  nodes** — those have `reachableEdges.length === 0` because the
+  graph ends there. The early return for 0-edge nodes means a
+  0-fuel boss-win doesn't trip stranded; the existing win-path
+  (`run.endReason = "war-won"`) still fires from `completeNode`.
+  Also handles refuel-at-resupply: 30 credits buys 1 fuel, so the
+  check skips when the player can self-rescue.
+- **Apheliotrope boss-ship pick prefers carrier → battleship → biggest**
+  — the named flagship is a carrier per the BOSSES table, but if a
+  future tuning pass changes that class, the fallback chain keeps
+  the phase tracking working without a code change.
+- **Reinforcement waves spawn at the red zone**, not adjacent to the
+  boss. Visually they "warp in from the edge" rather than appearing
+  on top of a moving ship — much less jarring. Each ship gets a
+  small random scatter (80-220u from the zone centre) so the wave
+  reads as a fleet arrival, not a stack.
+- **Phase reinforcements bypass `escortOf` assignment** — they don't
+  go through `spawnRoster`/`assignEscortPacks`, so they're free
+  small-craft / capitals with their default AI. Carrier-pulling
+  fighters as wingmen would be nice but isn't worth the spawn
+  routing complexity for two waves.
+
 ### 2026-05-22 — Frontier campaign story pass: career arc, 5 acts, promotions, run-end flavor
 
 **What changed**

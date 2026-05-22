@@ -1206,6 +1206,15 @@ html, body {
   visibility: visible;
 }
 
+/* When the settings overlay has been popped on top of a live battle
+   via the HUD pill, the menu-root needs to sit above .battle-root
+   (z-index 20) so the action-cluster + side strips + minimap don't
+   poke through the overlay or its scrim. Toggled by
+   StartMenu.openInBattleSettings / onSettingsClose. */
+.menu-root.over-battle {
+  z-index: 30;
+}
+
 .menu-screen {
   pointer-events: auto;
 }
@@ -1297,6 +1306,58 @@ html, body {
 
 .menu-about-body p {
   margin: 0 0 14px;
+}
+
+/* Memorial screen — title-screen view of the player's completed
+   Frontier careers. Same chrome as About, with a vertical list of
+   rows. Each row: rank · callsign · epitaph. Result colour-codes
+   the row border (gold for wins, dim red for losses). */
+.menu-memorial {
+  align-items: center;
+}
+.memorial-list {
+  width: 100%;
+  max-width: 640px;
+  padding: 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.memorial-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 24px 0;
+}
+.memorial-row {
+  display: grid;
+  grid-template-columns: 96px 96px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.35);
+  border-left: 3px solid rgba(255, 214, 128, 0.6);
+}
+.memorial-row.lost {
+  border-left-color: rgba(200, 90, 90, 0.6);
+}
+.memorial-row-rank {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+.memorial-row-callsign {
+  font-size: 14px;
+  font-weight: bold;
+  letter-spacing: 1.2px;
+  color: var(--text-primary);
+}
+.memorial-row-epitaph {
+  font-size: 11px;
+  color: #ccd5e2;
+  font-style: italic;
+  line-height: 1.4;
 }
 
 .menu-about-body strong {
@@ -3780,6 +3841,49 @@ html, body {
   margin: 4px 0;
 }
 
+/* Starter-perk picker on BEGIN CAREER. A row of compact chips above
+   the description line. "(NONE)" is always present; the unlocked
+   perks (driven by meta.unlockedPerks) follow. */
+.runsetup-perk-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.runsetup-perk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.runsetup-perk-chip {
+  background: rgba(20, 26, 36, 0.85);
+  border: 1.5px solid rgba(120, 180, 220, 0.3);
+  color: #a89878;
+  padding: 6px 12px;
+  font: bold 10px/1 inherit;
+  letter-spacing: 0.5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.runsetup-perk-chip:hover {
+  border-color: rgba(180, 220, 255, 0.7);
+  filter: brightness(1.1);
+}
+.runsetup-perk-chip.active {
+  background: rgba(60, 110, 160, 0.7);
+  border-color: #5cf;
+  color: #fff;
+}
+.runsetup-perk-desc {
+  font-size: 10px;
+  color: #8a7a5a;
+  text-align: center;
+  min-height: 14px;
+}
+
 /* -----------------------------------------------------------
    12b. Promotion Overlay (between acts)
    ----------------------------------------------------------- */
@@ -3856,6 +3960,95 @@ html, body {
   font-style: italic;
 }
 
+/* Inter-act war bulletin — 3 news-ticker headlines shown on the
+   promotion overlay. The flag-conditional third line is the
+   payoff for choices the player made earlier in the run (Voss
+   briefing, wingman rescue, wounded warlord, etc.). */
+.promotion-bulletin {
+  width: 100%;
+  margin-top: 6px;
+  padding: 12px 18px;
+  background: rgba(0, 0, 0, 0.45);
+  border-left: 3px solid rgba(255, 214, 128, 0.8);
+}
+.promotion-bulletin-list {
+  list-style: none;
+  margin: 6px 0 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.promotion-bulletin-line {
+  font-size: 11px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  font-style: italic;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 214, 128, 0.35);
+}
+
+/* Trait picker on the promotion overlay. Three chips per draw,
+   stacked vertically with name + desc lines. Active state mirrors
+   the starter-perk picker on BEGIN CAREER. */
+.promotion-traits {
+  width: 100%;
+  margin-top: 6px;
+  padding: 14px 20px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(120, 180, 220, 0.4);
+}
+.promotion-trait-hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: center;
+  margin-bottom: 8px;
+  font-style: italic;
+}
+.promotion-trait-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.promotion-trait-chip {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  gap: 2px;
+  padding: 8px 12px;
+  background: rgba(20, 26, 36, 0.85);
+  border: 1.5px solid rgba(120, 180, 220, 0.3);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.promotion-trait-chip:hover {
+  border-color: rgba(180, 220, 255, 0.7);
+  filter: brightness(1.1);
+}
+.promotion-trait-chip.active {
+  background: rgba(60, 110, 160, 0.7);
+  border-color: #5cf;
+}
+.promotion-trait-chip .trait-name {
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+.promotion-trait-chip .trait-desc {
+  font-size: 10px;
+  color: #a89878;
+}
+.promotion-trait-chip.active .trait-desc { color: #d9e7f3; }
+.menu-btn.start-btn.disabled,
+.menu-btn.start-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
 /* -----------------------------------------------------------
    13. Battle Choice Overlay
    ----------------------------------------------------------- */
@@ -3879,6 +4072,46 @@ html, body {
 .battle-tier {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* Boss briefing — shown on the battle-choice screen when the node
+   is a named act-finale encounter (Crimson Talon, Black Auriga, etc.).
+   Replaces the generic faction+tier strip with the boss dossier. */
+.boss-briefing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 20px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 90, 90, 0.45);
+  margin: 4px 0;
+  max-width: 100%;
+}
+.boss-briefing-eyebrow {
+  font-size: 9px;
+  letter-spacing: 2.4px;
+  font-weight: bold;
+}
+.boss-briefing-name {
+  font-size: 22px;
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  text-shadow: 0 0 12px currentColor;
+}
+.boss-briefing-faction {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 1.5px;
+}
+.boss-briefing-body {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-style: italic;
+  line-height: 1.4;
+  max-width: 360px;
+  text-align: center;
+  margin-top: 4px;
 }
 
 .battle-actions {
@@ -5225,9 +5458,42 @@ html, body {
 
 /* Mobile (< 768px) */
 @media (max-width: 767px) {
+  /* Mobile fleet roster: the desktop two-column side strips switch to
+     a pair of compact horizontal rows pinned to the top-centre of the
+     viewport — BLUE on top, RED below it. The per-side title stays as
+     a colour-coded label; the race name is dropped to save width. The
+     target panel + minimap shift down so they don't collide. */
   .side-strip {
-    display: none;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    top: 6px;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    padding: 2px 6px;
+    gap: 4px;
+    border-width: 1px;
+    z-index: 1;
   }
+  .side-left  { /* override desktop `left: 12px` */ left: 50%; }
+  .side-right { /* override desktop `right: 12px` */ right: auto; top: 34px; }
+  .side-strip .side-title {
+    font-size: 9px;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .side-strip .side-race { display: none; }
+  .roster-grid {
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+  .roster-cell {
+    min-width: 26px;
+    padding: 1px 2px;
+  }
+  .roster-cell .cell-glyph { font-size: 6px; line-height: 1; }
+  .roster-cell .cell-count { font-size: 10px; line-height: 1; }
 
   .vitals-bar {
     width: 95%;
@@ -5289,10 +5555,11 @@ html, body {
 
   /* Move the minimap to the top-right on mobile so it stops fighting
      the action-cluster + right stick for the bottom-right corner.
-     Sits flush against the right edge under the SPECTATE pill. */
+     Bumped from top:56 to top:64 so the mobile fleet strips (top:6 +
+     top:34, each ~24px tall) clear the minimap header. */
   .minimap {
     width: 130px;
-    top: 56px;
+    top: 64px;
     right: 8px;
     bottom: auto;
   }
@@ -5340,7 +5607,9 @@ html, body {
      the top-right SPECTATE button. */
   .target-panel {
     width: 140px;
-    top: 12px;
+    /* Bumped from top:12 to top:64 so the new mobile fleet strips
+       (~58px tall at top-centre) don't overlap the target panel. */
+    top: 64px;
     left: 8px;
     bottom: auto;
     padding: 6px 8px;

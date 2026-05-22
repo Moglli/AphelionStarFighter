@@ -145,7 +145,7 @@ export const ACT_RANKS = {
 // faction — those still roll random per node). roster is hand-tuned
 // at a 1x multiplier; the scaling factor in scaleRoster is bypassed
 // for boss nodes so these numbers are what the player actually faces.
-const BOSSES = {
+export const BOSSES = {
   1: {
     name: "Crimson Talon",
     faction: "reavers",
@@ -370,6 +370,85 @@ export const EVENT_CARDS = [
       },
     ],
   },
+  {
+    id: "wingman-down",
+    title: "Wingman Down",
+    body: "Your wingmate punched out over hostile space and is broadcasting on a dying transponder. The window to recover them is short.",
+    actTags: [1],
+    options: [
+      {
+        label: "Divert to recover (-1 fuel — earns a debt for later)",
+        apply: (run) => {
+          if (run.resources.fuel < 1) return "No fuel to divert. Note them KIA.";
+          run.resources.fuel -= 1;
+          // Stamp the callsign of the rescued pilot — Act 5 cameo
+          // reads this flag and brings them back as a relief wing.
+          const names = ["TIGER", "FOX", "RAVEN", "HOUND", "SABRE"];
+          const cs = names[Math.floor(run.rng() * names.length)];
+          run.flags.wingmanRescued = cs;
+          return `${cs} owes you their life. They'll remember.`;
+        },
+      },
+      {
+        label: "Hire a privateer to recover (-30 credits)",
+        apply: (run) => {
+          if (run.resources.credits < 30) return "Insufficient credits — no contractor will move.";
+          run.resources.credits -= 30;
+          const names = ["TIGER", "FOX", "RAVEN", "HOUND", "SABRE"];
+          const cs = names[Math.floor(run.rng() * names.length)];
+          run.flags.wingmanRescued = cs;
+          return `${cs} owes you their life. They'll remember.`;
+        },
+      },
+      {
+        label: "Note them KIA — keep the schedule",
+        apply: () => "You jump on time. Their family will be told.",
+      },
+    ],
+  },
+  {
+    id: "pilots-lounge",
+    title: "Pilot's Lounge",
+    body: "Off-duty, you overhear a senior pilot telling a war story you're not cleared to hear. The intel could be useful — or get you written up.",
+    actTags: [1],
+    options: [
+      {
+        label: "Listen carefully (flag: veteran intel for Act 3+)",
+        apply: (run) => {
+          run.flags.veteranIntel = true;
+          return "You file every detail away.";
+        },
+      },
+      {
+        label: "Stand a round of drinks (+15 credits in tips)",
+        apply: (run) => { run.resources.credits += 15; return "You make friends. They make change."; },
+      },
+      {
+        label: "Slip out quietly",
+        apply: () => "No one notices you leave. Smart.",
+      },
+    ],
+  },
+  {
+    id: "drill-officer",
+    title: "Drill Officer's Evaluation",
+    body: "Wing Commander Sato pulls you aside. 'Your scores are good. Take the harder course — or skate.'",
+    actTags: [1],
+    options: [
+      {
+        label: "Take the harder course (+1 trait choice next promotion)",
+        apply: (run) => {
+          // Consumed by rollTraitDraw at the next applyPromotion.
+          run.flags.bonusTraitNext = true;
+          return "Sato nods. \"Don't disappoint me.\"";
+        },
+      },
+      {
+        label: "Coast through (+30 credits hazard pay)",
+        apply: (run) => { run.resources.credits += 30; return "Easy money. Easy reputation."; },
+      },
+    ],
+  },
 
   // ---- Act 2: frigate-captain / border-defense flavor --------------------
   {
@@ -418,8 +497,150 @@ export const EVENT_CARDS = [
       },
     ],
   },
+  {
+    id: "voss-briefing",
+    title: "Captain Voss's Briefing",
+    body: "Captain Mara Voss of the *Sparrowhawk* calls you aboard. 'You'll be flying screen for me this op. I run a tight ship — don't be late.'",
+    actTags: [2],
+    options: [
+      {
+        label: "Accept the role gladly",
+        apply: (run) => {
+          // Act 5 cameo card reads this flag — Voss returns with extra
+          // frigates if the player served under her cleanly.
+          run.flags.voss = "served-under";
+          return "Voss runs a tight ship. You'll fly screen for her.";
+        },
+      },
+      {
+        label: "Push back — 'I'm a fighter pilot, not a guard dog'",
+        apply: (run) => {
+          run.flags.voss = "antagonized";
+          return "Voss's eyes narrow. \"We'll see how that attitude survives.\"";
+        },
+      },
+      {
+        label: "Defer the decision (no flag set)",
+        apply: () => "You sleep on it. Voss notices.",
+      },
+    ],
+  },
+  {
+    id: "junior-defector",
+    title: "Hegemony Junior Defector",
+    body: "A Hegemony pilot, barely older than you, surrenders mid-engagement. He's young, scared, and wants out of the war.",
+    actTags: [2],
+    options: [
+      {
+        label: "Recruit him (+1 fighter, intel for Act 3)",
+        apply: (run) => {
+          run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + 1);
+          run.flags.hegDefector = true;
+          return "He joins your wing. Quiet kid. Fast hands.";
+        },
+      },
+      {
+        label: "Send him to interrogation (+25 credits intel bounty)",
+        apply: (run) => { run.resources.credits += 25; return "Fleet command takes him from there."; },
+      },
+      {
+        label: "Let him eject and drift",
+        apply: () => "He gives a small salute as he tumbles away.",
+      },
+    ],
+  },
+  {
+    id: "captured-pirate",
+    title: "Captured Reaver Ace",
+    body: "You disabled a Reaver corvette. Its captain — a brutal pirate ace called Cinder — is now your prisoner. The next call is on your record.",
+    actTags: [2, 3],
+    options: [
+      {
+        label: "Interrogate by the book (+1 fuel intel route)",
+        apply: (run) => {
+          run.resources.fuel += 1;
+          run.flags.geneva = true;
+          return "She gives up a smuggler's lane in exchange for a deal.";
+        },
+      },
+      {
+        label: "Hand to military police (+25 credits bounty)",
+        apply: (run) => { run.resources.credits += 25; return "They cuff her and walk her off."; },
+      },
+      {
+        label: "Execute on the spot (+40 credits, marks your record)",
+        apply: (run) => {
+          run.resources.credits += 40;
+          run.flags.warCriminalStart = true;
+          return "She doesn't make it to trial. Someone took video.";
+        },
+      },
+    ],
+  },
 
   // ---- Act 3: warlord hunt / hard-choices flavor -------------------------
+  {
+    id: "black-auriga-sighting",
+    title: "Black Auriga Sighted",
+    body: "Scouts confirm the Black Auriga at the next anchor. Your intel officer can leak a feint to draw her shields down — but it'll cost a wingman to sell.",
+    actTags: [3],
+    options: [
+      {
+        label: "Order the feint (boss -20% HP, -1 fighter)",
+        apply: (run) => {
+          if (run.smallCraft.fighter < 1) return "No fighter to spare. Order rescinded.";
+          run.smallCraft.fighter -= 1;
+          run.flags.bossWeakened = true;
+          return "The feint lands. Your wingman doesn't.";
+        },
+      },
+      {
+        label: "Refuse — fight her hot",
+        apply: () => "No tricks. Just guns.",
+      },
+    ],
+  },
+  {
+    id: "defector-carrier",
+    title: "Carrier Defects",
+    body: "A wounded Hegemony carrier sends an encrypted defection signal. They'll fly under your colors for one battle — if you cover the hull-patch bill.",
+    actTags: [3],
+    options: [
+      {
+        label: "Accept (-30 credits, coalition carrier flag set)",
+        apply: (run) => {
+          if (run.resources.credits < 30) return "Insufficient credits — no deal.";
+          run.resources.credits -= 30;
+          run.flags.coalitionCarrier = true;
+          return "Carrier alongside. They'll fight when called.";
+        },
+      },
+      {
+        label: "Decline — fleet stays Terran",
+        apply: () => "You watch them limp into the dark.",
+      },
+    ],
+  },
+  {
+    id: "memorial-service",
+    title: "Memorial Service",
+    body: "Frontier Command holds a memorial for crew lost since you took command. You're expected on the dais.",
+    actTags: [3],
+    options: [
+      {
+        label: "Speak stoic and brief (+25 credits in goodwill)",
+        apply: (run) => { run.resources.credits += 25; return "The brass approve. The fleet salutes."; },
+      },
+      {
+        label: "Show grief — let your fleet see the cost",
+        apply: (run) => { run.flags.griefShown = true; return "Your pilots remember you broke the line."; },
+      },
+      {
+        label: "Skip the service — you have work to do",
+        apply: (run) => { run.flags.skippedMemorial = true; return "The dais waits without you."; },
+      },
+    ],
+  },
   {
     id: "wounded-warlord",
     title: "Wounded Capital",
@@ -469,6 +690,52 @@ export const EVENT_CARDS = [
 
   // ---- Act 4: fleet-command / Voidsworn-reveal flavor --------------------
   {
+    id: "voidsworn-manifesto",
+    title: "The Voidsworn Manifesto",
+    body: "An intercepted Voidsworn broadcast frames the Frontier Wars as a trap your government walked you into. Your intel officer thinks it's propaganda. Your gut is less sure.",
+    actTags: [4],
+    options: [
+      {
+        label: "Disregard it — focus on the fight",
+        apply: () => "You file it under Voidsworn psy-ops.",
+      },
+      {
+        label: "Study it carefully (intel for Act 5)",
+        apply: (run) => {
+          run.flags.knowsVoidsworn = true;
+          return "You map the Voidsworn supply chain. Act 5 will know what to hit.";
+        },
+      },
+    ],
+  },
+  {
+    // Coalition rallying card — only fires if the player served under
+    // Voss in Act 2. Calls back to the early choice with a hard
+    // reinforcement reward, making the Voss flag a long-term payoff.
+    id: "hegemony-coalition",
+    title: "Hegemony Coalition",
+    body: "Word from the Hegemony admiralty: Captain Voss vouches for you. A coalition task force is offering one-time fire support for the Eclipse engagement.",
+    actTags: [4],
+    precondition: (run) => run.flags && run.flags.voss === "served-under",
+    options: [
+      {
+        label: "Accept the alliance (+1 frigate, +1 cruiser)",
+        apply: (run) => {
+          // Pre-Act-5 capitals are folded into the persistent fleet so
+          // the next battle's roster includes them.
+          run.capitals.push({ klass: "frigate", hpFrac: 1.0, instanceId: run.nextInstanceId++ });
+          run.capitals.push({ klass: "cruiser", hpFrac: 1.0, instanceId: run.nextInstanceId++ });
+          run.flags.coalitionFleet = true;
+          return "Voss's word held weight. Coalition holds.";
+        },
+      },
+      {
+        label: "Decline — the Frontier Service stands alone",
+        apply: () => "The Hegemony respects the refusal. Quietly.",
+      },
+    ],
+  },
+  {
     id: "coalition-flagship",
     title: "Coalition Signal",
     body: "A Hegemony task force, formerly your enemy, wants to fold under your command for the next jump.",
@@ -516,6 +783,81 @@ export const EVENT_CARDS = [
 
   // ---- Act 5: war-finale flavor ------------------------------------------
   {
+    // Voss-cameo — Voss returns to fly the final engagement with you
+    // if you served under her in Act 2. The reward is two frigates
+    // attached to the run's persistent fleet.
+    id: "voss-cameo",
+    title: "Voss Returns",
+    body: "A signal lights from the Sparrowhawk: \"Heard you needed an old friend on your wing. Mara out.\"",
+    actTags: [5],
+    precondition: (run) => run.flags && run.flags.voss === "served-under",
+    options: [
+      {
+        label: "Welcome her in (+2 frigates)",
+        apply: (run) => {
+          run.capitals.push({ klass: "frigate", hpFrac: 1.0, instanceId: run.nextInstanceId++ });
+          run.capitals.push({ klass: "frigate", hpFrac: 1.0, instanceId: run.nextInstanceId++ });
+          return "The Sparrowhawk slots into formation. The line tightens.";
+        },
+      },
+      {
+        label: "Tell her to sit this one out",
+        apply: () => "Voss respects the call. She watches from the dark.",
+      },
+    ],
+  },
+  {
+    // Wounded-warlord callback — fires only if the Act 3 wounded-
+    // warlord choice flagged executed/spared. Different consequence
+    // depending on which flag was set; the player has no choice here,
+    // they're reaping what they sowed.
+    id: "wounded-warlord-returns",
+    title: "The Warlord's Reckoning",
+    body: "Black Auriga's lieutenant has resurfaced — and they remember what you did to their captain.",
+    actTags: [5],
+    precondition: (run) => run.flags && (run.flags.executedWoundedCapital || run.flags.sparedWoundedCapital),
+    options: [
+      {
+        label: "Face it",
+        apply: (run) => {
+          if (run.flags.executedWoundedCapital) {
+            if (run.capitals.length === 0) return "No fleet to retaliate against — fleet already broken.";
+            const idx = Math.floor(run.rng() * run.capitals.length);
+            run.capitals[idx].hpFrac = Math.max(0.05, run.capitals[idx].hpFrac - 0.25);
+            return `Charges detonate on the ${run.capitals[idx].klass}. They got the last laugh.`;
+          } else {
+            run.capitals.push({ klass: "cruiser", hpFrac: 1.0, instanceId: run.nextInstanceId++ });
+            run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + 3);
+            return "Auriga's lieutenant pledges to you. Old debts, paid.";
+          }
+        },
+      },
+    ],
+  },
+  {
+    // The last letter — narrative beat before the final boss. Pure
+    // flavor, no mechanical effect. Sometimes the right call is to
+    // give the player a quiet moment.
+    id: "the-last-letter",
+    title: "The Last Letter",
+    body: "Frontier Command opens a private channel: write home before the final engagement. Most officers do.",
+    actTags: [5],
+    options: [
+      {
+        label: "Write to family",
+        apply: () => "You compose a careful letter. The signal goes out.",
+      },
+      {
+        label: "Write to a fallen wingmate's family",
+        apply: () => "You write the harder letter. It will mean something to someone.",
+      },
+      {
+        label: "Skip it — there's still work",
+        apply: () => "You close the channel. The fleet still flies.",
+      },
+    ],
+  },
+  {
     id: "rally-the-fleet",
     title: "Rally the Fleet",
     body: "The entire Frontier Service waits on your speech. The next jump is the last one.",
@@ -549,7 +891,81 @@ export const BOON_TABLE = [
   { key: "fortified-bridge",   desc: "Player ship: +20% HP" },
 ];
 
+// Officer traits — per-run choice earned at each promotion. The
+// promotion overlay rolls a 3-trait draw from this pool (minus
+// already-owned traits) and the player picks one. Traits stack: by
+// Act 5 a successful career holds 4 (one per promotion).
+//
+// All Tier-1 traits patch the player fighter spec via
+// `playerOverride(baseSpec)` returning a partial that game.js's
+// `_traitKeys` resolver deep-merges onto playerSpecOverride. Future
+// tiers add fleet-flag and credit-multiplier traits.
+export const TRAITS = {
+  "steady-hand": {
+    name: "Steady Hand",
+    desc: "+10% player projectile damage",
+    playerOverride: (base) => ({
+      weapon: { damage: (base.weapon && base.weapon.damage || 9) * 1.10 },
+    }),
+  },
+  "trauma-surgeon": {
+    name: "Trauma Surgeon",
+    desc: "+25% player shield regen",
+    playerOverride: (base) => ({
+      shield: { regen: (base.shield && base.shield.regen || 9) * 1.25 },
+    }),
+  },
+  "reckless": {
+    name: "Reckless",
+    desc: "+15% turn rate, -10% shield max",
+    playerOverride: (base) => ({
+      turnRate: (base.turnRate || 3.2) * 1.15,
+      shield: { max: Math.round((base.shield && base.shield.max || 30) * 0.90) },
+    }),
+  },
+  "defensive-driver": {
+    name: "Defensive Driver",
+    desc: "+20% shield max, -5% damage",
+    playerOverride: (base) => ({
+      shield: { max: Math.round((base.shield && base.shield.max || 30) * 1.20) },
+      weapon: { damage: (base.weapon && base.weapon.damage || 9) * 0.95 },
+    }),
+  },
+  "eagle-eyes": {
+    name: "Eagle Eyes",
+    desc: "+20% weapon range, tighter spread",
+    playerOverride: (base) => ({
+      weapon: {
+        range:  (base.weapon && base.weapon.range  || 560) * 1.20,
+        spread: (base.weapon && base.weapon.spread || 0.05) * 0.85,
+      },
+    }),
+  },
+  "iron-hull": {
+    name: "Iron Hull",
+    desc: "+15% player hull HP",
+    playerOverride: (base) => ({
+      hp: Math.round((base.hp || 35) * 1.15),
+    }),
+  },
+};
+
+// Trait draw size for promotion overlay. 3 by default; trait-related
+// perks (a future tier) may bump this so high-skill players see more
+// options per pick.
+const TRAIT_DRAW_SIZE = 3;
+
 // Captain perks unlocked between runs. activePerkKey can hold one at a time.
+//
+// Hook patterns each perk can carry:
+//   applyToFleet(fleet)      — patch starter-fleet counts.
+//   playerOverride(base)     — patch the player ship spec.
+//   creditMultiplier         — number scaling credit gains.
+//   creditsBonus             — flat credit grant at run start.
+//   traitDrawBonus           — +N trait choices at every promotion.
+//   startAct                 — start the career partway up the rank ladder.
+//   unlockCondition(meta)    — gate for whether the perk shows on the
+//                              BEGIN CAREER chip row.
 export const PERKS = {
   "aggressive-engineer": {
     name: "Aggressive Engineer",
@@ -568,6 +984,31 @@ export const PERKS = {
     desc: "Player ship: +15% turn rate",
     unlockCondition: (meta) => meta.runsWon >= 1,
     playerOverride: (base) => ({ turnRate: base.turnRate * 1.15 }),
+  },
+  // Resource bonus — straightforward starter-credits grant.
+  "wealthy-family": {
+    name: "Wealthy Family",
+    desc: "Start with +100 credits",
+    unlockCondition: (meta) => meta.runsCompleted >= 2,
+    creditsBonus: 100,
+  },
+  // Trait-system bonus — every promotion's trait draw gets one extra
+  // option, so a 4-act career sees +4 choices total instead of just
+  // bumping a single promotion (drill-officer event card does that).
+  "decorated-pilot": {
+    name: "Decorated Pilot",
+    desc: "+1 trait choice at every promotion",
+    unlockCondition: (meta) => meta.runsCompleted >= 5,
+    traitDrawBonus: 1,
+  },
+  // Structural bonus — skip the Pilot Officer act, start as a Lieutenant
+  // with Act 2's promotion fleet already attached. Saves ~10 minutes
+  // of opening grind for veteran players.
+  "war-college-top": {
+    name: "War College, Top of Class",
+    desc: "Start at Lieutenant (Act 2) with a frigate command",
+    unlockCondition: (meta) => meta.runsWon >= 2,
+    startAct: 2,
   },
 };
 
@@ -635,11 +1076,23 @@ export function startNewRun(faction, seed = null, opts = {}) {
   const meta = loadMeta();
   const rng = mulberry32(s);
 
+  // BEGIN CAREER screen picks the starter perk via `opts.perkKey` (or
+  // `null` for no perk). Persist it onto meta so buildModeConfig +
+  // promotePlayer pull from the same source. Validate against PERKS
+  // so a stale key from an old save can't poison the apply chain.
+  if (opts && opts.perkKey !== undefined) {
+    const validKey = (opts.perkKey && PERKS[opts.perkKey]) ? opts.perkKey : null;
+    meta.activePerkKey = validKey;
+    saveStore.update((d) => { d.roguelite.meta.activePerkKey = validKey; });
+  }
+
   // Starter fleet — fixed by design (option locked in: fresh per run).
   // Active perk may patch counts (e.g. aggressive-engineer +2 fighters).
   const fleet = { fighter: STARTER_FLEET.fighter, bomber: STARTER_FLEET.bomber };
   const perk = meta.activePerkKey ? PERKS[meta.activePerkKey] : null;
   if (perk && perk.applyToFleet) perk.applyToFleet(fleet);
+  // Wealthy Family + similar — flat credits at run start.
+  const startingCredits = (perk && perk.creditsBonus) ? perk.creditsBonus : 0;
 
   let nextInstanceId = 1;
   const capitals = STARTER_FLEET.capitals.map((c) => ({
@@ -664,8 +1117,13 @@ export function startNewRun(faction, seed = null, opts = {}) {
     nextInstanceId,
     smallCraft: { fighter: fleet.fighter, bomber: fleet.bomber },
     replenishBuffer: { fighter: 0, bomber: 0 },
-    resources: { credits: 0, fuel: STARTER_FUEL },
+    resources: { credits: startingCredits, fuel: STARTER_FUEL },
     boons: [],
+    // Per-run trait picks earned at each promotion. Acts 1→2, 2→3,
+    // 3→4, 4→5 each grant one; max 4 across a successful career.
+    // Trait effects (player-spec patches, fleet flags, credit
+    // multipliers) come from the TRAITS table — see buildModeConfig.
+    traits: [],
     battleMode: "fly",
     pendingNode: null,
     pendingPromotion: null,
@@ -679,6 +1137,33 @@ export function startNewRun(faction, seed = null, opts = {}) {
   // to draw on first open.
   run.graphs.push(generateAct(run, 1));
   run.nodePos = run.graphs[0].startNode;
+
+  // War College, Top of Class — perk lets veteran players skip the
+  // Pilot Officer opening. Apply Act 2's promotion fleet
+  // synchronously and advance the run to Act 2's graph. The Act 1
+  // graph is left in place for the memorial / history view but the
+  // player never walks it. Trait pick is intentionally NOT triggered
+  // here (no choice yet) — first promotion is normally Act 2→3.
+  if (perk && perk.startAct && perk.startAct > 1) {
+    const targetAct = Math.min(perk.startAct, ACTS_PER_RUN);
+    for (let a = 2; a <= targetAct; a++) {
+      const fleet = PROMOTION_FLEET[a];
+      if (fleet) {
+        for (const c of fleet.capitals || []) {
+          run.capitals.push({ klass: c.klass, hpFrac: 1.0, instanceId: run.nextInstanceId++ });
+        }
+        run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + (fleet.fighter || 0));
+        run.smallCraft.bomber  = Math.min(MAX_BOMBERS,  run.smallCraft.bomber  + (fleet.bomber  || 0));
+      }
+      // Generate the act graph and step the run pointer onto its
+      // start node.
+      run.act = a;
+      const g = generateAct(run, a);
+      run.graphs.push(g);
+      run.nodePos = g.startNode;
+      run.visitedNodeIds = [g.startNode];
+    }
+  }
 
   saveRun(run);
   events.emit("runStarted", { faction, seed: s });
@@ -755,10 +1240,13 @@ function generateAct(run, actIndex) {
         node.roster = scaleRoster(base, diffFor(actIndex, col));
       } else if (type === "event") {
         // Filter the event pool to cards tagged for this act (or
-        // untagged — those are universal). Fall back to the full
-        // pool if no acted-tagged cards roll.
+        // untagged — those are universal). Cards may also declare a
+        // `precondition(run)` callback — flag-gated callbacks like
+        // "Voss returns" only roll when run.flags satisfies them.
+        // Fall back to the full untagged pool if nothing rolls.
         const pool = EVENT_CARDS.filter(
-          (c) => !c.actTags || c.actTags.includes(actIndex),
+          (c) => (!c.actTags || c.actTags.includes(actIndex))
+              && (!c.precondition || c.precondition(run)),
         );
         const chosen = pool.length > 0
           ? pool[Math.floor(rng() * pool.length)]
@@ -946,6 +1434,14 @@ export function buildModeConfig(run, node, battleMode) {
     playerSpecOverride._fortifiedBridge = true;
   }
 
+  // Officer traits earned at promotions — stamp the key list onto
+  // playerSpecOverride. startGame walks `_traitKeys` and applies each
+  // TRAITS[k].playerOverride patch against the resolved fighter spec.
+  if (run.traits && run.traits.length > 0) {
+    playerSpecOverride = playerSpecOverride || {};
+    playerSpecOverride._traitKeys = [...run.traits];
+  }
+
   return {
     blue: blueRoster,
     red: node.roster,
@@ -1053,10 +1549,14 @@ export function completeNode(run, nodeId) {
 
 // Append the new act's PROMOTION_FLEET to the run's persistent fleet
 // and return a snapshot describing what was added (used by the
-// promotion screen).
+// promotion screen). Also rolls a trait draw — 3 random unowned
+// traits the player picks from before dismissing the overlay — and
+// generates a 3-line war-news bulletin for the inter-act story beat.
 function applyPromotion(run, newAct) {
   const fleet = PROMOTION_FLEET[newAct];
   const rankInfo = ACT_RANKS[newAct] || {};
+  const traitDraw = rollTraitDraw(run);
+  const bulletin = generateBulletin(run, newAct);
   if (!fleet) {
     return {
       newAct,
@@ -1064,6 +1564,9 @@ function applyPromotion(run, newAct) {
       title: rankInfo.title || "",
       blurb: rankInfo.promotionBlurb || "",
       added: { fighter: 0, bomber: 0, capitals: [] },
+      traitDraw,
+      selectedTraitKey: null,
+      bulletin,
     };
   }
   const addedCapitals = [];
@@ -1082,12 +1585,163 @@ function applyPromotion(run, newAct) {
     title: rankInfo.title || "",
     blurb: rankInfo.promotionBlurb || "",
     added: { fighter: addF, bomber: addB, capitals: addedCapitals },
+    // Trait draw: the player picks one chip in the overlay; the
+    // selected key is stamped here, and clearPendingPromotion adds it
+    // to run.traits.
+    traitDraw,
+    selectedTraitKey: null,
+    bulletin,
   };
 }
 
-// UI hook: dismissing the promotion modal calls this.
+// One-line epitaph stamped on a memorial entry. Calls back to the
+// player's choices via run.flags + endReason so completed careers
+// read distinctly on the title-screen wall. Win epitaphs honor the
+// rank; loss epitaphs lean into the reason ("KIA on the Apheliotrope
+// approach", "Court-martialed after Black Auriga", etc.).
+function writeEpitaph(run, won) {
+  const callsign = run.callsign || "OFFICER";
+  if (won) {
+    if (run.flags && run.flags.warCriminalStart) {
+      return `Won the war. Tribunal pending — ${callsign}'s record is sealed.`;
+    }
+    if (run.flags && run.flags.wingmanRescued) {
+      return `Ended the war with ${run.flags.wingmanRescued} on her wing.`;
+    }
+    if (run.flags && run.flags.voss === "served-under") {
+      return `Voss's protégé. Hung the Apheliotrope's banner from the Sparrowhawk's mast.`;
+    }
+    return `Closed the Frontier Wars. The Apheliotrope fell.`;
+  }
+  // Loss epitaphs keyed on endReason.
+  switch (run.endReason) {
+    case "kia":
+      return `KIA, Act ${run.act}. Failed to return from the jump.`;
+    case "fleet-lost":
+      return `Lost the fleet in Act ${run.act}. Court-martial deferred.`;
+    case "stranded":
+      return `Stranded between jumps. Search-and-rescue found nothing.`;
+    case "defeat":
+      return `Cashiered after Act ${run.act}. The Service does not forgive.`;
+    default:
+      return `Career closed, Act ${run.act}. Reason undocumented.`;
+  }
+}
+
+// 3-line war-status news bulletin shown at the top of the promotion
+// overlay. Mixes a generic per-act headline, a personalised line
+// using the player's callsign + new rank, and a flag-conditional
+// flourish that calls back to choices the player has made (Voss
+// briefing, wingman rescue, wounded warlord, etc.). Each line is
+// stamped onto the promotion record at boss-clear time so the
+// overlay can render without re-reading run state.
+function generateBulletin(run, newAct) {
+  const callsign = run.callsign || "OFFICER";
+  const newRank = (ACT_RANKS[newAct] || {}).rank || "Officer";
+  const prevBoss = BOSSES[newAct - 1];
+  const lines = [];
+  // Line 1: per-act war headline. Different for each rank-up.
+  const HEAD = {
+    2: `Frontier wire: Reaver raids down 18% along the Outer Reach after the ${prevBoss ? prevBoss.name : "first"} sortie.`,
+    3: "Frontier wire: Hegemony forces probing the Mid-Reach. Two convoys lost this cycle.",
+    4: "Frontier wire: Voidsworn ships sighted spinward. Threat assessment escalated to Tier 1.",
+    5: "Frontier wire: War council convened. Total Mobilization Order signed at dawn.",
+  };
+  lines.push(HEAD[newAct] || "Frontier wire: hostilities continue along the border.");
+  // Line 2: personalised citation by rank.
+  const CITATION = {
+    2: `Service bulletin: ${newRank} ${callsign} cited for valor in single-pilot engagement.`,
+    3: `Service bulletin: ${newRank} ${callsign} assigned to special operations.`,
+    4: `Service bulletin: ${newRank} ${callsign} given task-force command. Fleet assembling at Outer Anchor.`,
+    5: `Service bulletin: ${newRank} ${callsign} confirmed for the Apheliotrope engagement.`,
+  };
+  lines.push(CITATION[newAct] || `Service bulletin: ${newRank} ${callsign} continues frontier duty.`);
+  // Line 3: flag-conditional. Reads the run's recorded choices and
+  // calls them back so the news feels responsive. Falls back to a
+  // generic line when no flags are set.
+  const f = run.flags || {};
+  if (newAct === 3 && f.voss === "served-under") {
+    lines.push("Wire pickup: Capt. Voss aboard the Sparrowhawk confirms two kills along the same line, credits 'a quick learner from her old wing.'");
+  } else if (newAct === 4 && f.executedWoundedCapital) {
+    lines.push("Wire pickup: Black Auriga's hull recovered. Tribunal opens next cycle.");
+  } else if (newAct === 4 && f.sparedWoundedCapital) {
+    lines.push("Wire pickup: Black Auriga reportedly resurfaced spinward. Coalition watching.");
+  } else if (newAct === 5 && f.wingmanRescued) {
+    lines.push(`Wire pickup: ${f.wingmanRescued}'s wing reports to ${callsign} for final engagement. Repayment in kind.`);
+  } else if (newAct === 5 && f.warCriminalStart) {
+    lines.push("Wire pickup: Officer review board has flagged your file. War-crimes tribunal pending.");
+  } else if (newAct === 5 && f.hegDefector) {
+    lines.push("Wire pickup: Hegemony defector now flies under coalition colors. Light squadron attached.");
+  } else if (newAct === 3 && f.geneva) {
+    lines.push("Wire pickup: Reaver smuggler's lane mapped — Mid-Reach jumps shaved by one parsec.");
+  } else if (newAct === 3 && f.veteranIntel) {
+    lines.push("Wire pickup: Anonymous source provides tactical breakdown of Hegemony cruiser doctrine.");
+  } else {
+    lines.push("Wire pickup: Frontier Service maintains operational readiness.");
+  }
+  return lines;
+}
+
+// Roll N random trait keys from the TRAITS pool, excluding traits the
+// player already owns. When the unowned pool is smaller than the draw
+// size we return as many as exist.
+//
+// Two bonus sources stack:
+//   - `flags.bonusTraitNext` (Act 1 drill-officer event card) — single-
+//     use, consumed on the next promotion.
+//   - Active perk's `traitDrawBonus` (e.g. Decorated Pilot +1) —
+//     permanent for the career.
+function rollTraitDraw(run) {
+  const owned = new Set(run.traits || []);
+  const available = Object.keys(TRAITS).filter((k) => !owned.has(k));
+  let size = TRAIT_DRAW_SIZE;
+  if (run.flags && run.flags.bonusTraitNext) {
+    size += 1;
+    run.flags.bonusTraitNext = false;
+  }
+  // Stack the active perk's permanent draw bonus.
+  const meta = loadMeta();
+  const perk = meta && meta.activePerkKey ? PERKS[meta.activePerkKey] : null;
+  if (perk && perk.traitDrawBonus) size += perk.traitDrawBonus;
+  // Fisher-Yates partial shuffle — only need first N.
+  const picks = [];
+  const pool = [...available];
+  const n = Math.min(size, pool.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(run.rng() * (pool.length - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+    picks.push(pool[i]);
+  }
+  return picks;
+}
+
+// UI hook: player clicked a trait chip on the promotion overlay.
+// Stores the selection on the pendingPromotion record; the actual
+// run.traits append happens at dismissal so re-picks are allowed
+// while the overlay is open.
+export function selectPromotionTrait(run, traitKey) {
+  if (!run || !run.pendingPromotion) return;
+  if (!TRAITS[traitKey]) return;
+  // Must be in the rolled draw — guards against tampered save / stale
+  // chip click.
+  if (!run.pendingPromotion.traitDraw.includes(traitKey)) return;
+  run.pendingPromotion.selectedTraitKey = traitKey;
+  saveRun(run);
+}
+
+// UI hook: dismissing the promotion modal calls this. If a trait was
+// picked, append it to the run's permanent trait list. Acts with no
+// available traits (e.g. when the pool runs dry) dismiss without
+// requiring a pick.
 export function clearPendingPromotion(run) {
   if (!run) return;
+  const promo = run.pendingPromotion;
+  if (promo && promo.selectedTraitKey && TRAITS[promo.selectedTraitKey]) {
+    run.traits = run.traits || [];
+    if (!run.traits.includes(promo.selectedTraitKey)) {
+      run.traits.push(promo.selectedTraitKey);
+    }
+  }
   run.pendingPromotion = null;
   saveRun(run);
 }
@@ -1232,11 +1886,36 @@ export function isRunOver(run) {
   //  - All capitals destroyed (Acts 2+).
   //  - Player KIA (signalled by main.js setting run.endReason = "kia").
   //  - Battle lost (signalled by main.js setting run.endReason = "defeat").
+  //  - Fuel-stranded: no fuel, no affordable refuel — career ends in
+  //    the void between jumps. Stamps `endReason = "stranded"` so the
+  //    summary panel pulls the matching flavor text.
   //  - Act 1 special case: no capitals exist, so a wiped fighter wing
   //    with the player ship gone is "stranded" — treat as KIA.
   if (run.endReason) return true;
   if (run.capitals.length === 0 && run.act >= 2) return true;
+  if (isStranded(run)) {
+    run.endReason = "stranded";
+    return true;
+  }
   return false;
+}
+
+// Stranded check: 0 fuel + every outgoing edge unaffordable + can't
+// buy fuel at the current node. Boss/end-of-act nodes have no
+// outgoing edges (handled by the early return so a 0-fuel boss-win
+// state doesn't trip the check). Refuel at a resupply node needs
+// at least one fuel unit's worth of credits.
+function isStranded(run) {
+  if (run.resources.fuel > 0) return false;
+  const edges = reachableEdges(run);
+  if (edges.length === 0) return false; // boss / end-of-act terminal
+  if (edges.some((e) => run.resources.fuel >= e.fuelCost)) return false;
+  // Last chance: refuel at a resupply node.
+  const g = currentGraph(run);
+  const node = g && g.nodes.find((n) => n.id === run.nodePos);
+  const refuelCost = 30; // resupply UI's fuel package; mirrors the menu price
+  if (node && node.type === "resupply" && run.resources.credits >= refuelCost) return false;
+  return true;
 }
 
 // Death-flavor text for the run-summary screen. Keyed on the
@@ -1267,18 +1946,22 @@ export function recordRunEnd(run, won, reason = null) {
   if (reason && !run.endReason) run.endReason = reason;
   saveStore.update((d) => {
     d.roguelite.meta.runsCompleted += 1;
+    // Memorial entry — both wins AND losses are recorded so the
+    // title-screen wall reads as a full career roll, not just an
+    // honor roll. Cap at 10 entries; oldest shifts out on overflow.
+    const memorial = d.roguelite.meta.memorial || [];
+    memorial.unshift({
+      callsign: run.callsign || "",
+      rank: won
+        ? (ACT_RANKS[ACTS_PER_RUN] || {}).rank || "Admiral"
+        : (ACT_RANKS[run.act] || {}).rank || "Officer",
+      result: won ? "won" : "lost",
+      timestamp: Date.now(),
+      epitaph: writeEpitaph(run, won),
+    });
+    d.roguelite.meta.memorial = memorial.slice(0, 10);
     if (won) {
       d.roguelite.meta.runsWon += 1;
-      // Stamp a memorial entry — the player's career is remembered
-      // on the title-screen wall. Cap the list at 10 so the wall
-      // doesn't grow without bound on a hot-streak save.
-      const memorial = d.roguelite.meta.memorial || [];
-      memorial.unshift({
-        callsign: run.callsign || "",
-        rank: (ACT_RANKS[ACTS_PER_RUN] || {}).rank || "Admiral",
-        wonOn: Date.now(),
-      });
-      d.roguelite.meta.memorial = memorial.slice(0, 10);
       const g = run.graphs[run.act - 1];
       if (g && g.bossFaction) {
         d.roguelite.meta.warProgress[g.bossFaction] =
