@@ -854,6 +854,7 @@ function updatePDFire(ship, world) {
       color: pd.projectileColors[ship.side],
       side: ship.side,
       ownerId: ship.id,
+      ownerKlass: ship.klass,
       kind: "cannon",
       fromKlass: "pd",
     }));
@@ -862,15 +863,25 @@ function updatePDFire(ship, world) {
 }
 
 // ---------------------------------------------------------------------------
-// Missile pods (capitals): each pod cycles independently.
-// Picks the largest enemy in range; falls back to nearest.
+// Missile pods (capitals + bombers): each pod cycles independently.
+// Picks the largest enemy in range. Small craft (fighter / bomber) are
+// excluded — capital pods are anti-capital weapons, the same way the
+// heavy laser's target picker already filters them out. The PD ring +
+// frigate ring cannons handle small-craft screening. Without this
+// filter, bombers + frigates were dumping their entire pod cycle on
+// the closest fighter wing and one-shotting whole escort packs (each
+// pod fires the same tick on the same `pickPodTarget` result; the
+// follow-on missiles then re-acquired to other fighters in the wing
+// via projectile.js::acquireMissileTarget). End result: 5-6 escort
+// fighters vanishing in under a second with only a small puff each.
 // ---------------------------------------------------------------------------
 function pickPodTarget(ship, world, acquireRange) {
-  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2, fighter: 1 };
+  const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2 };
   const r2Max = acquireRange * acquireRange;
   let bestRank = -1, bestD2 = Infinity, best = null;
   for (const o of world.ships) {
     if (o.dead || o.side === ship.side) continue;
+    if (o.klass === "fighter" || o.klass === "bomber") continue;
     const dx = o.pos.x - ship.pos.x;
     const dy = o.pos.y - ship.pos.y;
     const d2 = dx * dx + dy * dy;

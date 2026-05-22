@@ -53,6 +53,21 @@ export function drawArena(ctx, starfield, camera, viewW, viewH, zoom = 1) {
   ctx.fillStyle = "#02030a";
   ctx.fillRect(0, 0, viewW, viewH);
 
+  // Zoom-based starfield fade. When the player pinches out to observe
+  // the whole battle, the parallax stars sat right on top of the
+  // ships and made the action hard to read against the busy field.
+  // Linear fade from full brightness at zoom ≥ FADE_HIGH down to 0
+  // at zoom ≤ FADE_LOW so the zoomed-out view is on clean black.
+  // Tuned with DEFAULT_ZOOM (0.5) and MIN_ZOOM (0.15) in mind — the
+  // fade starts as soon as the player pulls below the default and is
+  // gone entirely a little before the min.
+  const FADE_HIGH = 0.50;
+  const FADE_LOW  = 0.22;
+  let starAlpha = 1;
+  if (zoom <= FADE_LOW) starAlpha = 0;
+  else if (zoom < FADE_HIGH) starAlpha = (zoom - FADE_LOW) / (FADE_HIGH - FADE_LOW);
+  if (starAlpha <= 0) return;
+
   // Stars with parallax. Each star drawn at world pos scaled by parallax,
   // then by zoom so the starfield matches the zoomed-out world view.
   for (const layer of starfield) {
@@ -61,7 +76,7 @@ export function drawArena(ctx, starfield, camera, viewW, viewH, zoom = 1) {
       const sx = (s.x - camera.x * layer.parallax) * zoom + viewW / 2;
       const sy = (s.y - camera.y * layer.parallax) * zoom + viewH / 2;
       if (sx < -2 || sx > viewW + 2 || sy < -2 || sy > viewH + 2) continue;
-      ctx.globalAlpha = s.b;
+      ctx.globalAlpha = s.b * starAlpha;
       ctx.beginPath();
       ctx.arc(sx, sy, s.r, 0, Math.PI * 2);
       ctx.fill();

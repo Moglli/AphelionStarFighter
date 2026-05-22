@@ -10,7 +10,7 @@
 import { createShockwave, createSpark } from "./particles.js";
 
 export function createProjectile({
-  pos, vel, damage, ttl, radius, color, side, ownerId,
+  pos, vel, damage, ttl, radius, color, side, ownerId, ownerKlass = null,
   kind = "cannon", fromKlass = null,
 }) {
   return {
@@ -22,6 +22,7 @@ export function createProjectile({
     color,
     side,
     ownerId,
+    ownerKlass,
     kind,
     fromKlass,
     dead: false,
@@ -292,9 +293,18 @@ function hexToRgba(hex, alpha) {
 }
 
 function acquireMissileTarget(m, ships) {
+  // Missiles fired from capitals (or cluster children inheriting that
+  // owner class) should never re-acquire onto small craft when their
+  // original target dies — a 70-110 dmg pod missile bypasses shields
+  // and one-shots fighters, which is precisely the bulk-disappearance
+  // bug we're fixing. Fighter missiles (fromKlass === "fighter") keep
+  // the open re-acquire so a dogfight missile can switch onto a new
+  // enemy fighter mid-flight.
+  const ownerIsCapital = m.fromKlass && m.fromKlass !== "fighter";
   let best = null, bestD2 = m.acquireRange * m.acquireRange;
   for (const s of ships) {
     if (s.dead || s.side === m.side) continue;
+    if (ownerIsCapital && (s.klass === "fighter" || s.klass === "bomber")) continue;
     const dx = s.pos.x - m.pos.x;
     const dy = s.pos.y - m.pos.y;
     const d2 = dx * dx + dy * dy;

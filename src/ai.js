@@ -94,16 +94,39 @@ export function updateAI(ship, world, dt) {
 
   const c = ship.controller;
 
+  // Admiral focus-fire override. When the player has tapped an enemy
+  // ship in admiral mode, every blue-side ship prefers that target
+  // before any of the per-class priority tables run. Bombers and
+  // escorts can still peel off to their own role-specific picks if
+  // the focus target is way out of role — bombers won't waste a
+  // strike on a fighter, etc. — but for capitals + cruisers + free
+  // fighters the focus is a hard pin.
+  let target = null;
+  if (ship.side === "blue" && world.focusTargetId != null) {
+    const focus = world.ships.find((o) => o.id === world.focusTargetId);
+    if (focus && !focus.dead && focus.side !== ship.side) {
+      // Bombers + fighters retain their soft preferences only when the
+      // focus would be a strict downgrade (focusing a fighter as a
+      // bomber wastes pods). For bombers, accept anything from frigate
+      // up; for fighters, accept anything. Other classes always
+      // honour the focus.
+      if (ship.klass === "bomber") {
+        if (focus.klass !== "fighter") target = focus;
+      } else {
+        target = focus;
+      }
+    }
+  }
+
   // Battleships duel each other; if no enemy battleship is on the
   // field they pick the next-largest live target. Cruisers prefer
   // the largest enemy with missile-pod weight in mind. Bombers hunt
   // capitals.
-  let target = null;
-  if (ship.klass === "battleship") {
+  if (!target && ship.klass === "battleship") {
     target = pickBattleshipTarget(ship, world.ships);
-  } else if (ship.klass === "cruiser") {
+  } else if (!target && ship.klass === "cruiser") {
     target = pickCruiserTarget(ship, world.ships);
-  } else if (ship.klass === "bomber") {
+  } else if (!target && ship.klass === "bomber") {
     target = pickBomberTarget(ship, world.ships);
   }
 
@@ -128,25 +151,57 @@ export function updateAI(ship, world, dt) {
   // their assigned capital. Anything past that gets dropped and the
   // ship falls through to the return-to-station path below. Without
   // this, fighter escorts happily chased enemies across the entire
-  // arena and left their capital naked. The leash was originally
-  // 900/1400 which left escorts too clingy to be useful screening —
-  // bumped to 1700/2400 so they actually peel out and intercept
-  // before the threat gets to the cap.
-  const ESCORT_ENGAGE_RANGE = 1700;
-  const ESCORT_RECALL_RANGE = 2400;
+  // arena and left their capital naked. History:
+  //   - originally 900/1400  (too clingy — escorts barely sortied)
+  //   - bumped to  1700/2400 (still too tight: capital pod range is
+  //     1700-1800 and BB main is 2000+, so a threat fully in weapon
+  //     range was already inside the leash by the time escorts moved)
+  //   - now      3500/5000  (escorts proactively peel off to meet
+  //     approaching threats — pod / main-gun bubbles around the cap
+  //     no longer outreach the screen). Recall gives the fighter
+  //     headroom to chase a bit past engage range before the leash
+  //     yanks it back.
+  const ESCORT_ENGAGE_RANGE = 3500;
+  const ESCORT_RECALL_RANGE = 5000;
   let escortCap = null;
   if (ship.klass === "fighter" && ship.escortOf != null && world.ships) {
     escortCap = world.ships.find((o) => o.id === ship.escortOf && !o.dead) || null;
     if (!escortCap) {
       ship.escortOf = null; // assigned capital is gone; free fighter
-    } else if (target) {
-      const dxT = target.pos.x - escortCap.pos.x;
-      const dyT = target.pos.y - escortCap.pos.y;
+    } else {
+      // Escort target priority: pick the nearest hostile to the *cap*
+      // (not to ourselves) inside the engage bubble. That way escorts
+      // sortie out to meet approaching threats from any direction —
+      // including threats that a specific escort wasn't the closest
+      // friendly to. Falls back to the nearest-to-me target picked
+      // earlier if nothing is inside the leash. Bombers escorting
+      // their charge use the same rule.
+      let bestCapD2 = ESCORT_ENGAGE_RANGE * ESCORT_ENGAGE_RANGE;
+      let bestCapT = null;
+      for (const o of world.ships) {
+        if (o.dead || o.side === ship.side) continue;
+        const dx = o.pos.x - escortCap.pos.x;
+        const dy = o.pos.y - escortCap.pos.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestCapD2) { bestCapD2 = d2; bestCapT = o; }
+      }
+      if (bestCapT) {
+        target = bestCapT;
+      } else if (target) {
+        // No threat inside the bubble — drop the nearest-to-me target
+        // if it's too far from the cap (would yank us out of position).
+        const dxT = target.pos.x - escortCap.pos.x;
+        const dyT = target.pos.y - escortCap.pos.y;
+        const targetFarFromCap = (dxT * dxT + dyT * dyT) > (ESCORT_ENGAGE_RANGE * ESCORT_ENGAGE_RANGE);
+        if (targetFarFromCap) target = null;
+      }
+      // Recall regardless of target — escort that wandered too far
+      // drops its target to head back to the station ring.
       const dxS = ship.pos.x - escortCap.pos.x;
       const dyS = ship.pos.y - escortCap.pos.y;
-      const targetFarFromCap = (dxT * dxT + dyT * dyT) > (ESCORT_ENGAGE_RANGE * ESCORT_ENGAGE_RANGE);
-      const escortFarFromCap = (dxS * dxS + dyS * dyS) > (ESCORT_RECALL_RANGE * ESCORT_RECALL_RANGE);
-      if (targetFarFromCap || escortFarFromCap) target = null;
+      if ((dxS * dxS + dyS * dyS) > (ESCORT_RECALL_RANGE * ESCORT_RECALL_RANGE)) {
+        target = null;
+      }
     }
   }
 
@@ -164,28 +219,79 @@ export function updateAI(ship, world, dt) {
       c.firingMissile = false;
       ship.attackState = "approach";
       ship.approachTimer = 0;
-      return;
+      // Fall through to the wall-clamp safety net below — without it,
+      // an escort orbiting a capital that drifted into a corner would
+      // happily fly into the wall.
+    } else {
+      // No target, no escort assignment — point the nose at arena
+      // centre rather than null'ing c.aim. Heading-locked ships with
+      // c.aim === null don't turn at all, so an idle fighter that
+      // happens to face a wall would coast into it and stay clamped.
+      c.thrust = { x: 0, y: 0 };
+      if (world && world.arena && world.arena.bounds) {
+        const b = world.arena.bounds;
+        const cx = (b.minX + b.maxX) * 0.5;
+        const cy = (b.minY + b.maxY) * 0.5;
+        c.aim = { x: cx - ship.pos.x, y: cy - ship.pos.y };
+      } else {
+        c.aim = null;
+      }
+      c.firing = false;
+      c.firingMissile = false;
     }
-    c.thrust = { x: 0, y: 0 };
-    c.aim = null;
-    c.firing = false;
-    c.firingMissile = false;
+  } else {
+    if (ship.klass === "fighter") {
+      flybyAI(ship, target, dt, world);
+    } else if (ship.klass === "bomber") {
+      bomberFlankAI(ship, target, dt, world);
+    } else if (ship.klass === "battleship") {
+      battleshipAI(ship, target, dt, world);
+    } else if (ship.klass === "cruiser") {
+      cruiserAI(ship, target, dt, world);
+    } else if (ship.klass === "frigate") {
+      frigateAI(ship, target, dt, world);
+    }
+  }
+  // Admiral PRESS / HOLD must still override even when the ship has no
+  // target (e.g. an idle escort fighter under HOLD should still pull
+  // back to the fleet centroid). Runs after the per-class branch so it
+  // can supersede the no-target c.aim default.
+  applyAdmiralPosture(ship, world);
+
+  // Safety net: corners pin heading-locked craft (fighter / bomber)
+  // when their per-class AI didn't run wall avoidance — escort station
+  // ring, idle no-target, admiral PRESS aim into a corner-target, etc.
+  // The bounds clamp in ship.js zeroes wall-normal velocity but leaves
+  // heading unchanged, so a ship facing into the wall just sits there.
+  // After the per-class AI has set c.aim, re-blend the wall-avoidance
+  // vector for fighters + bombers so the nose is always pulled inward
+  // when near a boundary regardless of which AI branch ran.
+  if (ship.klass === "fighter" || ship.klass === "bomber") {
+    enforceWallEscape(ship, world);
+  }
+}
+
+// Final-pass wall avoidance for heading-locked small craft. Always runs
+// after the per-class AI so it overrides any branch that forgot to
+// blend wallAvoidance (the escort-station path, the idle no-target
+// path, etc.). The strength scales linearly with the worst-axis
+// proximity so a ship deep in a corner gets a hard inward turn; a
+// ship that's only kissing one wall gets a gentle nudge.
+function enforceWallEscape(ship, world) {
+  if (!world || !world.arena || !world.arena.bounds) return;
+  const wall = wallAvoidance(ship, world.arena.bounds);
+  if (!wall) return;
+  const c = ship.controller;
+  // No prior aim — set one that points inward directly.
+  if (!c.aim || (c.aim.x === 0 && c.aim.y === 0)) {
+    c.aim = { x: wall.x, y: wall.y };
     return;
   }
-
-  if (ship.klass === "fighter") {
-    flybyAI(ship, target, dt, world);
-  } else if (ship.klass === "bomber") {
-    bomberFlankAI(ship, target, dt, world);
-  } else if (ship.klass === "battleship") {
-    battleshipAI(ship, target, dt, world);
-  } else if (ship.klass === "cruiser") {
-    cruiserAI(ship, target, dt, world);
-  } else if (ship.klass === "frigate") {
-    frigateAI(ship, target, dt, world);
-  }
-
-  applyAdmiralPosture(ship, world);
+  const aimN = V.norm(c.aim);
+  // Weight rises sharply with proximity — outweighs every other
+  // steering vector once wall.strength approaches 1.
+  const w = 3.0 * wall.strength;
+  c.aim = { x: aimN.x + wall.x * w, y: aimN.y + wall.y * w };
 }
 
 // Admiral-mode directive override. Runs after the per-class AI has set
@@ -516,12 +622,22 @@ function flybyAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;
 
-  if (ship.attackState === undefined) {
-    ship.attackState = "approach";
+  // Lazily initialise per-ship flyby state. The no-target escort path
+  // in updateAI sets `attackState = "approach"` directly without
+  // touching breakSide / breakTimer, so a fighter that spent its first
+  // few ticks as a station-keeping escort could enter the break branch
+  // later with `breakSide === undefined`. `undefined` poisons
+  // `tangX = perp.x * breakSide` → NaN aim → NaN heading → NaN pos,
+  // and the corruption spreads through packCohesion (pack centre goes
+  // NaN once any pack member's pos is NaN). Initialise every missing
+  // field independently so any code path that sets only attackState
+  // can't leave the others undefined.
+  if (ship.breakSide === undefined) {
     ship.breakSide = (ship.id % 2 === 0) ? 1 : -1;
-    ship.breakTimer = 0;
-    ship.approachTimer = 0;
   }
+  if (ship.breakTimer === undefined) ship.breakTimer = 0;
+  if (ship.approachTimer === undefined) ship.approachTimer = 0;
+  if (ship.attackState === undefined) ship.attackState = "approach";
 
   const rel = V.sub(target.pos, ship.pos);
   const dist = V.len(rel);

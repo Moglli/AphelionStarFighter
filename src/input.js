@@ -529,6 +529,9 @@ export class StartMenu {
     this.showResupply = false;
     this.showEvent = false;
     this.showBattleChoice = false;
+    // Promotion overlay — pops automatically when the run controller
+    // has a pendingPromotion stamped (boss-clear act transition).
+    this.showPromotion = false;
     // Cached layout rects for each overlay.
     this.runSetupRects = { panel: null, factionChips: [], beginBtn: null, cancelBtn: null };
     this.runMapRects = {
@@ -896,6 +899,7 @@ export class StartMenu {
     else if (this.showRefill) screenName = 'refill';
     else if (this.showCustom) screenName = 'custom';
     else if (this.showRunSetup) screenName = 'runSetup';
+    else if (this.showPromotion) screenName = 'promotion';
     else if (this.showResupply) screenName = 'resupply';
     else if (this.showEvent) screenName = 'event';
     else if (this.showBattleChoice) screenName = 'battleChoice';
@@ -905,7 +909,7 @@ export class StartMenu {
     // sits above the starmap (z-index 10) and the DOM screen handles the
     // visuals — keeping menu-root hidden here was the JUMP-does-nothing
     // bug, the overlay state flipped but no DOM ever rendered.
-    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice;
+    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice || this.showPromotion;
     if (!this.showRunMap || hasSubOverlay) {
       this._menuSystem.showScreen(screenName);
       // Dim the canvas behind any base screen (home / main / about) so
@@ -1024,6 +1028,23 @@ export class StartMenu {
       };
     }
 
+    // Build promotion state — auto-detected from the run's
+    // pendingPromotion field. main.js stamps this when a boss-clear
+    // promotes the player; the overlay opens automatically here and
+    // dismissing it routes through onRunChoice("dismiss-promotion").
+    let promotionState = null;
+    if (run && run.pendingPromotion) {
+      promotionState = run.pendingPromotion;
+      // First-frame auto-open. If the overlay is already visible we
+      // leave it; if the user already dismissed we won't re-open
+      // because dismiss clears the run field via the callback.
+      if (!this.showPromotion && this.showRunMap) {
+        this.showPromotion = true;
+      }
+    } else if (this.showPromotion) {
+      this.showPromotion = false;
+    }
+
     // Build energy regen info
     let energyRegen = null;
     if (this.energy && this.energy.current < MAX_ENERGY) {
@@ -1074,6 +1095,7 @@ export class StartMenu {
       battleNode: battleState,
       resupply: resupplyState,
       event: eventState,
+      promotion: promotionState,
       factions: RACE_KEYS,
       factionMeta: meta ? Object.fromEntries(RACE_KEYS.map(k => [k, { wins: meta.runsWon }])) : {},
       frontierStatus,
@@ -1239,14 +1261,23 @@ export class StartMenu {
         this.showEvent = false;
       },
       onEventClose: () => { this.showEvent = false; },
-      onRunSetupSelect: (factionKey) => {
-        if (this.onRunChoice) this.onRunChoice("new-run", { faction: factionKey });
+      onRunSetupSelect: (factionKey, opts) => {
+        const callsign = (opts && opts.callsign) ? opts.callsign : "";
+        if (this.onRunChoice) {
+          this.onRunChoice("new-run", { faction: factionKey, callsign });
+        }
         this.showRunSetup = false;
         // Auto-open the run map so the player lands in their first act.
         this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
         this.showRunMap = true;
       },
       onRunSetupCancel: () => { this.showRunSetup = false; },
+      onPromotionDismiss: () => {
+        // Clears run.pendingPromotion and refreshes the menu state so
+        // showPromotion drops back to false on the next sync.
+        if (this.onRunChoice) this.onRunChoice("dismiss-promotion", {});
+        this.showPromotion = false;
+      },
       // Top-level nav: home → play → about
       onHomePlay:  () => { this._baseScreen = 'main'; },
       onHomeAbout: () => { this._baseScreen = 'about'; },
@@ -2746,6 +2777,16 @@ export class InputManager {
     }
     if (!this.keys.has("Enter")) this._enterLatched = false;
     return false;
+  }
+
+  // In-match QUIT button (HUD top-right) sets `quitRequested`; main.js
+  // drains it once per frame. Escape key also signals quit so desktop
+  // players have the same out.
+  consumeQuitRequest() {
+    const keyEdge = this._consumeKey("Escape", "_escLatched");
+    const btnEdge = !!this.quitRequested;
+    this.quitRequested = false;
+    return keyEdge || btnEdge;
   }
 
   // Edge-triggered key press, latched until released.

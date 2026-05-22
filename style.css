@@ -2102,6 +2102,215 @@ html, body {
   margin-top: 4px;
 }
 
+/* -----------------------------------------------------------
+   Carousel chrome — used by the Custom overlay and PLAY screen
+   to break up dense forms into focused single-decision steps.
+   ----------------------------------------------------------- */
+.carousel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.carousel-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.carousel-step-label {
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 2.2px;
+  color: #7af;
+  opacity: 0.8;
+}
+
+.carousel-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.carousel-body {
+  position: relative;
+  width: 100%;
+  min-height: 220px;
+}
+
+.carousel-step {
+  display: none;
+  width: 100%;
+  animation: carousel-slide 0.18s ease-out;
+}
+
+.carousel-step.active {
+  display: block;
+}
+
+@keyframes carousel-slide {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.carousel-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.carousel-btn {
+  padding: 8px 18px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  min-width: 96px;
+}
+
+.carousel-next {
+  background: rgba(40, 80, 60, 0.85);
+  border-color: #9f8;
+  color: #fff;
+}
+
+.carousel-next.deploy-mode {
+  background: rgba(60, 110, 80, 0.95);
+  letter-spacing: 2px;
+  font-weight: bold;
+}
+
+.carousel-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(120, 180, 220, 0.25);
+  border: 1px solid rgba(120, 180, 220, 0.4);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.carousel-dot.active {
+  background: #7af;
+  transform: scale(1.25);
+}
+
+/* Review step layout */
+.custom-review {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.custom-review-row {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(20, 40, 60, 0.55);
+  border: 1px solid rgba(120, 180, 220, 0.2);
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+}
+
+.custom-review-row[data-side="hostile"] {
+  background: rgba(60, 30, 30, 0.5);
+  border-color: rgba(255, 140, 120, 0.3);
+}
+
+.custom-review-side {
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 1.8px;
+  color: var(--text-muted);
+}
+
+.custom-review-row[data-side="allied"] .custom-review-side { color: #7af; }
+.custom-review-row[data-side="hostile"] .custom-review-side { color: #f97; }
+
+.custom-review-list {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.custom-review-total {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.custom-review-hint {
+  text-align: center;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+}
+
+/* Main menu / PLAY screen carousel — review-step layout */
+.menu-main.carousel-panel {
+  padding: 32px 28px;
+}
+
+.menu-main .carousel-header h1 {
+  margin: 4px 0;
+  font-size: 24px;
+  letter-spacing: 3px;
+}
+
+.menu-main .menu-section {
+  margin-top: 4px;
+}
+
+.main-carousel-body {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.main-carousel-body .carousel-step {
+  width: 100%;
+}
+
+.main-review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto 12px;
+}
+
+.main-review-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: rgba(20, 40, 60, 0.55);
+  border: 1px solid rgba(120, 180, 220, 0.2);
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  font-size: 12px;
+}
+
+.main-review-k {
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+}
+
+.main-review-v {
+  color: var(--text-primary);
+}
+
 /* Grand total */
 .custom-totals {
   font-size: 18px;
@@ -3500,8 +3709,151 @@ html, body {
 .runsetup-footer {
   display: flex;
   justify-content: center;
+  gap: 16px;
   width: 100%;
   margin-top: 20px;
+}
+
+/* Career-start briefing copy. Sits below the subtitle. */
+.runsetup-briefing {
+  max-width: 540px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  margin: 8px 0 4px 0;
+}
+.runsetup-briefing p {
+  margin: 6px 0;
+}
+.runsetup-briefing p:last-child {
+  color: #fc8;
+  font-style: italic;
+}
+
+.runsetup-callsign-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.runsetup-label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: #5ab;
+  font-weight: bold;
+}
+.runsetup-callsign-input {
+  background: rgba(0, 0, 0, 0.55);
+  border: 1.5px solid rgba(120, 180, 220, 0.45);
+  color: #fff;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  text-align: center;
+  padding: 10px 16px;
+  width: 220px;
+  text-transform: uppercase;
+}
+.runsetup-callsign-input:focus {
+  outline: none;
+  border-color: #7df;
+}
+.runsetup-callsign-input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+  letter-spacing: 1px;
+  font-weight: normal;
+  text-transform: none;
+}
+
+.runsetup-faction-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 32px;
+  background: rgba(30, 24, 18, 0.85);
+  border: 1.5px solid rgba(120, 180, 220, 0.4);
+  clip-path: polygon(8px 0%, calc(100% - 8px) 0%, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0% calc(100% - 8px), 0% 8px);
+  margin: 4px 0;
+}
+
+/* -----------------------------------------------------------
+   12b. Promotion Overlay (between acts)
+   ----------------------------------------------------------- */
+.menu-promotion {
+  align-items: center;
+  justify-content: center;
+}
+.promotion-panel {
+  min-width: 480px;
+  max-width: 640px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px;
+}
+.promotion-eyebrow {
+  font-size: 10px;
+  letter-spacing: 4px;
+  color: #5ab;
+  font-weight: bold;
+}
+.promotion-panel h2 {
+  font-size: 38px;
+  margin: 0;
+  color: #ffd680;
+  letter-spacing: 3px;
+}
+.promotion-title {
+  font-size: 14px;
+  letter-spacing: 2px;
+  color: var(--text-secondary);
+  margin-top: -8px;
+}
+.promotion-blurb {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  margin: 8px 0;
+  max-width: 480px;
+}
+.promotion-additions {
+  width: 100%;
+  margin-top: 6px;
+  padding: 14px 20px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 214, 128, 0.35);
+}
+.promotion-additions-label {
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: #ffd680;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+.promotion-additions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+.promotion-addition-row {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.promotion-addition-capital {
+  font-weight: bold;
+  color: #cef;
+  letter-spacing: 1px;
+}
+.promotion-addition-empty {
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 /* -----------------------------------------------------------
@@ -4601,59 +4953,217 @@ html, body {
   bottom: 80px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(8, 14, 24, 0.9);
-  border: 1.5px solid rgba(120, 200, 255, 0.3);
-  border-radius: 8px;
-  padding: 10px 14px;
-  width: min(600px, 90vw);
+  background: rgba(8, 14, 24, 0.92);
+  border: 1.5px solid rgba(120, 200, 255, 0.32);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+  width: min(640px, 95vw);
   opacity: 0;
   transition: opacity 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
 }
 
-.admiral-panel.active {
-  opacity: 1;
-}
+.admiral-panel.active { opacity: 1; }
 
 .admiral-title {
   font-size: 10px;
   font-weight: bold;
   color: #a89878;
   text-align: center;
-  margin-bottom: 6px;
-  letter-spacing: 1px;
+  letter-spacing: 1.5px;
 }
 
+/* ---- Master command bar ------------------------------------------- */
+.admiral-master {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(120, 180, 220, 0.12);
+}
+
+.admiral-master-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  background: rgba(20, 40, 60, 0.78);
+  color: #cdf;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1.2px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.08s ease, filter 0.15s ease, background 0.15s ease;
+}
+.admiral-master-btn:hover { filter: brightness(1.15); }
+.admiral-master-btn:active { transform: scale(0.96); }
+.master-hold  { background: rgba(120, 30, 30, 0.6);  border-color: rgba(255, 110, 80, 0.45); color: #fdb; }
+.master-free  { background: rgba(20, 60, 80, 0.7);   border-color: rgba(120, 200, 255, 0.5); color: #cdf; }
+.master-press { background: rgba(30, 100, 50, 0.7);  border-color: rgba(140, 240, 160, 0.55); color: #cfd; }
+.master-missiles {
+  flex: 1.2;
+  background: rgba(40, 60, 80, 0.7);
+  color: #cdf;
+}
+.master-missiles.missiles-hold {
+  background: rgba(120, 30, 30, 0.65);
+  border-color: rgba(255, 110, 80, 0.55);
+  color: #fdb;
+}
+
+/* ---- Focus-fire pill ---------------------------------------------- */
+.admiral-focus {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(80, 60, 20, 0.55);
+  border: 1px solid rgba(255, 210, 90, 0.55);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.admiral-focus.active { display: flex; }
+.focus-label {
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  color: #fec97a;
+  font-size: 10px;
+}
+.focus-name {
+  flex: 1;
+  color: #fff5d8;
+  font-weight: bold;
+}
+.focus-clear {
+  background: transparent;
+  border: 1px solid rgba(255, 210, 90, 0.55);
+  color: #fec97a;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1;
+}
+.focus-clear:hover { background: rgba(255, 210, 90, 0.2); }
+
+/* ---- Per-class command grid --------------------------------------- */
 .admiral-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
 }
 
-.admiral-row {
+.admiral-cell {
+  background: rgba(34, 28, 22, 0.78);
+  border: 1px solid rgba(120, 180, 220, 0.18);
+  border-radius: 4px;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.admiral-cell-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  background: rgba(34, 28, 22, 0.8);
-  border-radius: 4px;
-  font-size: 11px;
+  gap: 6px;
+  font-size: 10px;
 }
-
-.admiral-toggle {
-  padding: 3px 8px;
+.admiral-cell-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: rgba(20, 40, 60, 0.9);
+  border: 1px solid rgba(120, 180, 220, 0.4);
   border-radius: 3px;
-  border: 1px solid rgba(120, 180, 220, 0.3);
-  background: rgba(20, 40, 60, 0.8);
-  color: #cdf;
   font-size: 9px;
   font-weight: bold;
-  cursor: pointer;
-  font-family: inherit;
+  color: #9bd;
+}
+.admiral-cell-name {
+  font-weight: bold;
+  color: #cdf;
+  letter-spacing: 0.8px;
+}
+.admiral-cell-count {
+  margin-left: auto;
+  color: #a89878;
+  font-size: 10px;
+  font-weight: bold;
 }
 
-.admiral-toggle.active {
-  background: rgba(100, 80, 50, 0.8);
-  border-color: rgba(180, 220, 255, 0.6);
+.admiral-cell-postures {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.posture-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(120, 180, 220, 0.25);
+  background: rgba(20, 40, 60, 0.72);
+  color: #b8c8d8;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.08s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.posture-btn:hover { filter: brightness(1.18); }
+.posture-btn.flash { transform: scale(1.08); filter: brightness(1.35); }
+
+/* Active variants: posture buttons take on their semantic colour when
+   selected — red for hold, cyan for free, green for press — so the
+   admiral can see the fleet's stance at a glance. */
+.posture-hold.active  { background: rgba(150, 40, 40, 0.88); border-color: rgba(255, 110, 80, 0.85); color: #fff; }
+.posture-free.active  { background: rgba(30, 80, 110, 0.88); border-color: rgba(140, 220, 255, 0.85); color: #fff; }
+.posture-press.active { background: rgba(30, 120, 60, 0.88); border-color: rgba(150, 240, 170, 0.85); color: #fff; }
+.missile-toggle.active {
+  background: rgba(150, 40, 40, 0.85);
+  border-color: rgba(255, 110, 80, 0.85);
+  color: #fff;
+}
+
+/* ---- Command toast (top-centre flash) ----------------------------- */
+.admiral-toast {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  background: rgba(8, 14, 24, 0.9);
+  border: 1.5px solid rgba(140, 220, 255, 0.55);
+  border-radius: 4px;
+  padding: 6px 18px;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: #cdf;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.admiral-toast.active {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  animation: admiral-toast-pulse 0.36s ease-out;
+}
+@keyframes admiral-toast-pulse {
+  0%   { transform: translateX(-50%) translateY(-12px); opacity: 0; }
+  40%  { transform: translateX(-50%) translateY(0);     opacity: 1; }
+  100% { transform: translateX(-50%) translateY(0);     opacity: 1; }
 }
 
 /* -----------------------------------------------------------
@@ -4687,6 +5197,19 @@ html, body {
 .battle-pill:hover {
   filter: brightness(1.15);
   border-color: rgba(180, 220, 255, 0.55);
+}
+
+/* QUIT pill — same chrome as SPECTATE but warm-red so it reads as the
+   "abandon match" action. Lives in `.battle-top-right` next to the
+   spectate pill so it's always reachable mid-match. */
+.battle-pill.quit-pill {
+  color: #f9b8a8;
+  border-color: rgba(255, 140, 110, 0.45);
+}
+
+.battle-pill.quit-pill:hover {
+  border-color: rgba(255, 170, 140, 0.85);
+  background: rgba(60, 20, 18, 0.88);
 }
 
 /* -----------------------------------------------------------

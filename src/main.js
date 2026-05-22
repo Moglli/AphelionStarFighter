@@ -14,7 +14,8 @@ import { GameAudio } from "./audio.js";
 import {
   loadRun, loadMeta, startNewRun, abandonRun, discardRun,
   buildModeConfig, captureBattleOutcome, completeNode, enterNode,
-  isRunOver, recordRunEnd,
+  isRunOver, recordRunEnd, clearPendingPromotion, endReasonFlavor,
+  ACT_RANKS,
   buyRepair, buyRecruit, buyRefuel, applyBoon, applyEventChoice,
 } from "./roguelite.js";
 import {
@@ -141,8 +142,16 @@ function refresh() {
 
 function handleRunChoice(action, payload) {
   if (action === "new-run") {
-    activeRun = startNewRun(payload.faction, payload.seed);
+    activeRun = startNewRun(
+      payload.faction,
+      payload.seed,
+      { callsign: payload.callsign },
+    );
     refresh();
+    return;
+  }
+  if (action === "dismiss-promotion") {
+    if (activeRun) { clearPendingPromotion(activeRun); refresh(); }
     return;
   }
   if (action === "abandon-run") {
@@ -210,38 +219,82 @@ function handleRunChoice(action, payload) {
 }
 
 // When a battle ends, walk live ships → run.capitals + run.smallCraft,
-// then either continue the run or end it. Subscribing here (not inside
-// roguelite.js) so we have direct access to the live game object.
+// then either continue the run or end the career. Subscribing here
+// (not inside roguelite.js) so we have direct access to the live game
+// object. Career-end rules: a SINGLE defeated battle ends the run —
+// the player is a Terran officer and the war doesn't give second
+// chances. We tag the cause so the run-summary screen can show the
+// right death-flavor line.
 events.on("matchEnded", ({ mode, winner }) => {
   if (mode !== "roguelite" || !activeRun || !pendingNode) return;
   // Snapshot the run reference up front — completeNode can clear it
   // synchronously on a final-boss win via the runEnded handler below.
   const runRef = activeRun;
   captureBattleOutcome(runRef, game);
+
+  // Detect whether the player ship survived the battle. promotePlayer
+  // re-spawns the player from a live blue fighter mid-match; isPlayer
+  // is sticky to the most recent host. If no isPlayer ship exists (or
+  // it's flagged dead) by matchEnded, the player is KIA.
+  const playerShip = game.ships.find((s) => s.isPlayer);
+  const playerKIA = !playerShip || playerShip.dead;
+
   if (winner === "blue") {
     completeNode(runRef, pendingNode.id);
+  } else {
+    // Any defeat closes the career — but pick a flavor reason so the
+    // summary reads correctly. Order matters: KIA trumps fleet-lost,
+    // since being dead is the most personal cause.
+    if (playerKIA) {
+      runRef.endReason = "kia";
+    } else if (runRef.capitals.length === 0 && runRef.act >= 2) {
+      runRef.endReason = "fleet-lost";
+    } else {
+      runRef.endReason = "defeat";
+    }
   }
   pendingNode = null;
-  // If the run is still alive after capture+complete, check whether
-  // the fleet wipe condition fired (locked design rule: losing a single
-  // battle doesn't end the run — only losing every capital does).
+
+  // KIA can also fire on a *won* battle if the player died in the
+  // process but their fleet still cleared the node. That's still a
+  // career-ender — heroic last stand.
+  if (activeRun && winner === "blue" && playerKIA && !activeRun.endReason) {
+    activeRun.endReason = "kia";
+  }
+
   if (activeRun && isRunOver(activeRun)) {
-    recordRunEnd(activeRun, false);
-    discardRun();
-    activeRun = null;
+    recordRunEnd(activeRun, false, activeRun.endReason);
+    // Don't clear the run yet — the match-over panel reads
+    // game.runSummary to display the death flavor. discardRun fires
+    // in the runEnded subscriber below after the panel is dismissed.
   }
   refresh();
 });
 
-// Run-completed cleanup: when act 3's boss is cleared, roguelite.js
-// emits runEnded with won=true. We don't clear the run here so the
-// player can see the victory state — handleRunChoice("abandon-run")
-// from the menu clears it.
-events.on("runEnded", ({ won }) => {
-  // The roguelite.js completeNode flow already wrote saveStore. Pull
-  // the latest into our cached reference.
+// Run-completed cleanup: when act 5's boss is cleared, roguelite.js
+// emits runEnded with won=true. We stash a career summary on the game
+// object so the match-over panel can render the career arc — rank
+// reached, why it ended, callsign — instead of just "you lost". The
+// run isn't discarded until the panel is dismissed.
+events.on("runEnded", ({ run, won, reason, flavor }) => {
+  const rank = (ACT_RANKS[run.act] || {}).rank || "Officer";
+  game.runSummary = {
+    won,
+    reason,
+    flavor,
+    rank,
+    callsign: run.callsign || "",
+    act: run.act,
+    actsTotal: 5,
+    visitedCount: (run.visitedNodeIds || []).length,
+  };
   if (!won) {
+    // Defeated runs are already wiped from save by recordRunEnd's
+    // caller (matchEnded sets the flag; we discardRun on dismiss in
+    // the menu flow). Drop our cached reference so the menu reverts
+    // to NEW CAMPAIGN after the panel is gone.
     activeRun = null;
+    discardRun();
   } else {
     activeRun = loadRun();
   }
@@ -417,8 +470,19 @@ function frame(now) {
           if (d2 < reach && d2 < bestD2) { best = s; bestD2 = d2; }
         }
         if (best) {
-          game.spectateTargetId = best.id;
-          if (game.spectateCamera) game.spectateCamera.locked = true;
+          // In admiral mode, tapping an enemy sets focus-fire instead
+          // of moving the spectate lock. Tapping a friendly still
+          // re-aims the inspect camera so the admiral can watch a
+          // specific commander. Spectate-without-admiral keeps the
+          // legacy behaviour (any tap locks the camera).
+          if (game.admiralMode && best.side === "red") {
+            game.focusTargetId = best.id;
+            // Don't disturb the camera lock — the player is directing
+            // attention to a target, not changing what they're watching.
+          } else {
+            game.spectateTargetId = best.id;
+            if (game.spectateCamera) game.spectateCamera.locked = true;
+          }
         }
       }
     }
@@ -442,6 +506,23 @@ function frame(now) {
         input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
         input.startMenu.showRunMap = true;
       }
+    }
+  }
+
+  // In-match QUIT (HUD button or Escape key): bail out of the current
+  // match and return to the main menu. Only fires while playing — at
+  // matchOver the enter-press path already returns to menu. Roguelite
+  // runs preserve their saved state so re-opening Frontier resumes the
+  // run on the same node.
+  if (game.state === "playing" && !game.matchOver && input.consumeQuitRequest()) {
+    const wasRoguelite = game.mode === "roguelite";
+    restart(game);
+    audio.stop();
+    refresh();
+    if (wasRoguelite && activeRun) {
+      input.startMenu.selectedMode = "roguelite";
+      input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
+      input.startMenu.showRunMap = true;
     }
   }
 
@@ -511,6 +592,47 @@ function draw() {
   for (const ship of game.ships) if (!ship.dead) drawShip(ctx, ship, zoom);
   for (const p of game.projectiles) if (!p.dead) drawProjectile(ctx, p);
   drawBeams(ctx, game);
+  // Admiral focus reticle: rotating dashed ring on the focused enemy
+  // so the player can see which target the fleet is prioritising at
+  // a glance. Drawn AFTER ships so it sits on top of the hull.
+  if (game.admiralMode && game.focusTargetId != null) {
+    const ft = game.ships.find((s) => s.id === game.focusTargetId && !s.dead);
+    if (ft) {
+      const r = (ft.spec && ft.spec.radius) || 24;
+      const ringR = r + 22;
+      const t = performance.now() / 1000;
+      ctx.save();
+      ctx.translate(ft.pos.x, ft.pos.y);
+      ctx.rotate(t * 0.6);
+      ctx.strokeStyle = "rgba(255,210,90,0.95)";
+      ctx.lineWidth = 2.5 / zoom;
+      ctx.setLineDash([10 / zoom, 6 / zoom]);
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Four corner brackets so the reticle reads as a target lock,
+      // not just a dashed circle.
+      const br = ringR + 8;
+      const bl = 14 / zoom;
+      ctx.lineWidth = 2.5 / zoom;
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
+        const cx = Math.cos(a) * br;
+        const cy = Math.sin(a) * br;
+        ctx.beginPath();
+        ctx.moveTo(cx - bl * Math.cos(a + 0.4), cy - bl * Math.sin(a + 0.4));
+        ctx.lineTo(cx, cy);
+        ctx.lineTo(cx - bl * Math.cos(a - 0.4), cy - bl * Math.sin(a - 0.4));
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      // Focus target is dead or missing — clear so the panel hides
+      // and the AI stops trying to honour a phantom target.
+      game.focusTargetId = null;
+    }
+  }
   // Persistent debris on top of live ships — fresh chunks visibly chip
   // off the hull mid-engagement instead of fading with the particles.
   if (game.debris) for (const d of game.debris) drawDebris(ctx, d);

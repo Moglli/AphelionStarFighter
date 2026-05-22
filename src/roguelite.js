@@ -46,7 +46,11 @@ import { RACES, RACE_KEYS } from "./races.js";
 // one-stop. If something here gets nudged, re-run the verification
 // flow in /root/.claude/plans/i-want-to-plan-cosmic-taco.md.
 // ---------------------------------------------------------------------------
-export const ACTS_PER_RUN = 3;
+// 5 acts mirrors the 5 ranks of the Terran officer career — Pilot
+// Officer → Lieutenant → Lt Commander → Captain → Admiral. Each
+// boss-clear promotes the player and bolts new capitals onto the
+// fleet via PROMOTION_FLEET[act].
+export const ACTS_PER_RUN = 5;
 export const COLS_PER_ACT = 6;   // 0=entry, 5=boss; 1..4 are picks
 export const ROWS_PER_ACT = 4;
 
@@ -82,33 +86,127 @@ const REPAIR_COST = {
 // Small-craft recruit costs (credits).
 const RECRUIT_COST = { fighter: 8, bomber: 20 };
 
-// Faction-default starter fleet. Class set is intentionally short of
-// "every capital available" — earning a battleship later is the
-// late-act payoff.
+// Career starter fleet — what a Pilot Officer ships out with on day
+// one. Just the player's fighter and three AI wingmen. No capitals.
+// The fleet grows act-by-act via PROMOTION_FLEET below.
 const STARTER_FLEET = {
-  fighter: 16,
-  bomber: 3,
-  capitals: [
-    { klass: "frigate" },
-    { klass: "frigate" },
-    { klass: "cruiser" },
-    { klass: "carrier" },
-  ],
+  fighter: 4,
+  bomber: 0,
+  capitals: [],
 };
 
-// Hand-curated boss rosters per faction. Each boss is THE encounter of
-// its act — gates progress and is the focal point of the run narrative.
-// Kept here so adding a faction is one entry, not a procgen rewrite.
-const BOSS_ROSTERS = {
-  terran:    { fighter: 12, bomber: 4, frigate: 2, cruiser: 1, battleship: 1, carrier: 1 },
-  reavers:   { fighter: 22, bomber: 6, frigate: 3, cruiser: 1, battleship: 0, carrier: 1 },
-  hegemony:  { fighter: 10, bomber: 2, frigate: 2, cruiser: 2, battleship: 2, carrier: 1 },
-  voidsworn: { fighter: 12, bomber: 4, frigate: 2, cruiser: 2, battleship: 1, carrier: 1 },
+// Promotion bonuses appended to the fleet on each act-break (boss
+// clear). Indexed by the act being entered, so PROMOTION_FLEET[2]
+// applies when Act 1's boss is cleared and the player promotes to
+// Lieutenant. Act 1 has no entry — it's the starter.
+const PROMOTION_FLEET = {
+  2: { fighter: 4, bomber: 1, capitals: [{ klass: "frigate" }] },
+  3: { fighter: 4, bomber: 2, capitals: [{ klass: "frigate" }, { klass: "cruiser" }] },
+  4: { fighter: 6, bomber: 2, capitals: [{ klass: "carrier" }, { klass: "battleship" }] },
+  5: { fighter: 8, bomber: 3, capitals: [{ klass: "battleship" }, { klass: "carrier" }] },
+};
+
+// Officer rank progression. Drives the promotion-screen blurb and the
+// HUD "rank pill" on the run map. Each act = one rank.
+export const ACT_RANKS = {
+  1: {
+    rank: "Pilot Officer",
+    title: "Just Got My Wings",
+    intro: "You took your wings yesterday. The Frontier Service needs warm bodies in cockpits and you're the warmest one available.",
+    promotionBlurb: null, // no promo into act 1 — it's the starting rank
+  },
+  2: {
+    rank: "Lieutenant",
+    title: "Flight Leader",
+    intro: "They gave you a flight to lead and a frigate to ride with. Try not to get her killed.",
+    promotionBlurb: "Frontier Command logs your first solo command kill. You're promoted to Lieutenant — a frigate, the *Sparrowhawk*, is attached to your flight.",
+  },
+  3: {
+    rank: "Lt. Commander",
+    title: "Strike Group Foxtrot",
+    intro: "Strike Group Foxtrot is yours. Two frigates and a cruiser. Try to come back with all three.",
+    promotionBlurb: "You're promoted to Lieutenant Commander. Strike Group Foxtrot — a second frigate and the cruiser *Andolin* — falls under your command.",
+  },
+  4: {
+    rank: "Captain",
+    title: "Task Force Vanguard",
+    intro: "A carrier. A battleship. The war just got a lot heavier — and you've just learned who's really running it.",
+    promotionBlurb: "Captain's bars. The carrier *Halcyon* and the battleship *Iron Resolve* are placed under your command. Intelligence briefs you on a new threat: the Voidsworn have been seeding this war from the shadows.",
+  },
+  5: {
+    rank: "Admiral",
+    title: "Fleet Command",
+    intro: "Fleet Command. One last jump, one last enemy. Make the brass proud — or make them mourn.",
+    promotionBlurb: "Fleet Admiral. The second battleship *Last Argument* and the carrier *Sky-of-Iron* are added to the line. The Voidsworn War-Queen waits at the end of this act. Bring her down.",
+  },
+};
+
+// Per-act named boss. faction is the *boss* faction (not the trash-mob
+// faction — those still roll random per node). roster is hand-tuned
+// at a 1x multiplier; the scaling factor in scaleRoster is bypassed
+// for boss nodes so these numbers are what the player actually faces.
+const BOSSES = {
+  1: {
+    name: "Crimson Talon",
+    faction: "reavers",
+    description: "A Reaver ace flying a stolen corvette. Made his name burning lone-pilot patrols.",
+    roster: { fighter: 14, bomber: 3, frigate: 1 },
+  },
+  2: {
+    name: "ITN Severance",
+    faction: "hegemony",
+    description: "A Hegemony cruiser captain with a flag for surgical strikes on border colonies.",
+    roster: { fighter: 10, bomber: 2, frigate: 2, cruiser: 1 },
+  },
+  3: {
+    name: "Black Auriga",
+    faction: "reavers",
+    description: "A captured Terran cruiser, retrofitted by a Reaver warlord. Your name is on her hull.",
+    roster: { fighter: 18, bomber: 4, frigate: 2, cruiser: 1 },
+  },
+  4: {
+    name: "ITN Eclipse",
+    faction: "voidsworn",
+    description: "A Voidsworn dreadnought. First contact with the true enemy — cold, silent, methodical.",
+    roster: { fighter: 12, bomber: 4, frigate: 2, cruiser: 2, battleship: 1, carrier: 1 },
+  },
+  5: {
+    name: "Apheliotrope",
+    faction: "voidsworn",
+    description: "The Voidsworn War-Queen aboard their flagship. Beyond her: nothing.",
+    roster: { fighter: 14, bomber: 5, frigate: 3, cruiser: 2, battleship: 2, carrier: 1 },
+  },
+};
+
+// Per-act base trash-mob roster. Trash nodes (non-boss, non-elite)
+// roll their *faction* at random (excluding terran) but pull their
+// shape from this table — i.e. Act 1 fights are always small-craft
+// affairs regardless of who's flying them, because that's what a
+// freshly-winged Pilot Officer realistically faces.
+const ACT_TRASH_BASE = {
+  1: { fighter: 5, bomber: 1 },
+  2: { fighter: 7, bomber: 2, frigate: 1 },
+  3: { fighter: 9, bomber: 2, frigate: 1, cruiser: 1 },
+  4: { fighter: 11, bomber: 3, frigate: 2, cruiser: 1 },
+  5: { fighter: 12, bomber: 4, frigate: 2, cruiser: 2, battleship: 1 },
+};
+
+// Per-act elite roster — punchier than trash, smaller than boss.
+const ACT_ELITE_BASE = {
+  1: { fighter: 4, bomber: 2, frigate: 1 },
+  2: { fighter: 4, bomber: 2, frigate: 1, cruiser: 1 },
+  3: { fighter: 6, bomber: 2, frigate: 2, cruiser: 1 },
+  4: { fighter: 6, bomber: 3, frigate: 1, cruiser: 1, battleship: 1 },
+  5: { fighter: 8, bomber: 3, frigate: 2, cruiser: 2, battleship: 1 },
 };
 
 // Event card catalogue. Each card has 2-3 buttons. Each button's `apply`
 // receives the live run and mutates it directly; the controller persists
 // after every node clear.
+//
+// `actTags` (optional) filters which acts a card can roll on. Absent
+// means "any act". Used to seed rank-appropriate flavor — rookie
+// hazing cards in Act 1, war-hero cameos in Act 5, etc.
 export const EVENT_CARDS = [
   {
     id: "derelict-freighter",
@@ -235,6 +333,211 @@ export const EVENT_CARDS = [
       },
     ],
   },
+
+  // ---- Act 1: rookie-pilot flavor ----------------------------------------
+  {
+    id: "rookie-hazing",
+    title: "Hazing",
+    body: "Your wingmen want to know if you can stick a hard burn through an unmarked debris field. The veterans are watching.",
+    actTags: [1],
+    options: [
+      {
+        label: "Push the throttle (+1 fighter joins your flight)",
+        apply: (run) => {
+          run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + 1);
+          return "You scraped through. They give you a callsign.";
+        },
+      },
+      {
+        label: "Refuse the dare (+10 credits, no respect)",
+        apply: (run) => { run.resources.credits += 10; return "They'll remember."; },
+      },
+    ],
+  },
+  {
+    id: "first-kill",
+    title: "First Confirmed Kill",
+    body: "Your gun-cam just confirmed it — that Reaver fighter you splashed last node was a known ace. The flight wants to celebrate.",
+    actTags: [1],
+    options: [
+      {
+        label: "Share the bottle (+1 fuel — drinks loosen jump nerves)",
+        apply: (run) => { run.resources.fuel += 1; return "You toast the kill."; },
+      },
+      {
+        label: "Sober up — the war's not over (+15 credits, journal entry)",
+        apply: (run) => { run.resources.credits += 15; return "You stay sharp."; },
+      },
+    ],
+  },
+
+  // ---- Act 2: frigate-captain / border-defense flavor --------------------
+  {
+    id: "convoy-distress",
+    title: "Convoy in Distress",
+    body: "A Terran civilian convoy is taking fire two jumps off your route. Your frigate captain leaves the call to you.",
+    actTags: [2, 3],
+    options: [
+      {
+        label: "Divert and protect (-1 fuel, +30 credits gratitude)",
+        apply: (run) => {
+          if (run.resources.fuel < 1) return "No fuel to divert.";
+          run.resources.fuel -= 1;
+          run.resources.credits += 30;
+          return "Civilians saved. Word travels.";
+        },
+      },
+      {
+        label: "Stay the course (mission first)",
+        apply: () => "You hear the chatter cut off mid-jump.",
+      },
+    ],
+  },
+  {
+    id: "defector-captain",
+    title: "Defector Captain",
+    body: "A Hegemony frigate captain wants to come over the line. He'll bring his ship — and his crew.",
+    actTags: [2, 3],
+    options: [
+      {
+        label: "Accept defection (boon: +12% hull on a random capital, +2 fighters)",
+        apply: (run) => {
+          if (run.capitals.length === 0) {
+            run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + 2);
+            return "Crew folded into your wings. No capital to bolt his hull to.";
+          }
+          const idx = Math.floor(run.rng() * run.capitals.length);
+          run.capitals[idx].hpFrac = Math.min(1, run.capitals[idx].hpFrac + 0.12);
+          run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + 2);
+          return "Frigate parts welded onto the line. Pilots added.";
+        },
+      },
+      {
+        label: "Report him to Hegemony fleet (+40 credits intel bounty)",
+        apply: (run) => { run.resources.credits += 40; return "He doesn't make the jump."; },
+      },
+    ],
+  },
+
+  // ---- Act 3: warlord hunt / hard-choices flavor -------------------------
+  {
+    id: "wounded-warlord",
+    title: "Wounded Capital",
+    body: "A crippled Reaver cruiser drifts before you, its bridge gutted. The warlord's lieutenant signals surrender.",
+    actTags: [3, 4],
+    options: [
+      {
+        label: "Execute the kill (+50 credits, sets a tone)",
+        apply: (run) => {
+          run.resources.credits += 50;
+          run.flags = run.flags || {};
+          run.flags.executedWoundedCapital = true;
+          return "No survivors. The line moves on.";
+        },
+      },
+      {
+        label: "Take prisoners (+1 fuel, intel feeds Act 5 allies)",
+        apply: (run) => {
+          run.resources.fuel += 1;
+          run.flags = run.flags || {};
+          run.flags.sparedWoundedCapital = true;
+          return "Prisoners aboard. Their intel will surface later.";
+        },
+      },
+    ],
+  },
+  {
+    id: "intel-drop",
+    title: "Encrypted Intel Drop",
+    body: "An anonymous cipher hits your comm — coordinates, fleet movements, a name you weren't supposed to know.",
+    actTags: [3, 4],
+    options: [
+      {
+        label: "Act on it (+30 credits, +1 fuel — well-routed jumps)",
+        apply: (run) => {
+          run.resources.credits += 30;
+          run.resources.fuel += 1;
+          return "Intel pays off twice over.";
+        },
+      },
+      {
+        label: "Forward it to fleet command (+40 credits)",
+        apply: (run) => { run.resources.credits += 40; return "Command thanks you in dispatches."; },
+      },
+    ],
+  },
+
+  // ---- Act 4: fleet-command / Voidsworn-reveal flavor --------------------
+  {
+    id: "coalition-flagship",
+    title: "Coalition Signal",
+    body: "A Hegemony task force, formerly your enemy, wants to fold under your command for the next jump.",
+    actTags: [4, 5],
+    options: [
+      {
+        label: "Accept the alliance (boon: reinforced-prows for the fleet)",
+        apply: (run) => {
+          for (const c of run.capitals) c.hpFrac = Math.min(1, c.hpFrac + 0.10);
+          run.boons.push({ key: "reinforced-prows", desc: "Capitals: small hull bonus" });
+          return "Coalition holds. Hulls reinforced.";
+        },
+      },
+      {
+        label: "Refuse — Terran fleet only (+60 credits paid for the slight)",
+        apply: (run) => { run.resources.credits += 60; return "Hegemony withdraws. Insult paid."; },
+      },
+    ],
+  },
+  {
+    id: "saboteur-aboard",
+    title: "Saboteur Aboard",
+    body: "Your carrier's chief reports an unaccounted Voidsworn-tagged cipher running through the comms. Internal hunt or shrug it off?",
+    actTags: [4, 5],
+    options: [
+      {
+        label: "Hunt them down (-20 credits sweep cost, no risk)",
+        apply: (run) => {
+          if (run.resources.credits < 20) return "Insufficient credits — sweep aborted.";
+          run.resources.credits -= 20;
+          return "Saboteur caught and spaced.";
+        },
+      },
+      {
+        label: "Trust your crew (random capital takes -15% hull)",
+        apply: (run) => {
+          if (run.capitals.length === 0) return "No capitals at risk.";
+          const idx = Math.floor(run.rng() * run.capitals.length);
+          run.capitals[idx].hpFrac = Math.max(0.05, run.capitals[idx].hpFrac - 0.15);
+          return `A charge detonated on the ${run.capitals[idx].klass}.`;
+        },
+      },
+    ],
+  },
+
+  // ---- Act 5: war-finale flavor ------------------------------------------
+  {
+    id: "rally-the-fleet",
+    title: "Rally the Fleet",
+    body: "The entire Frontier Service waits on your speech. The next jump is the last one.",
+    actTags: [5],
+    options: [
+      {
+        label: "Speak from the heart (boon: +20% player ship HP for the run)",
+        apply: (run) => {
+          run.boons.push({ key: "fortified-bridge", desc: "Player ship: +20% HP" });
+          return "Pilots cheer. Your fighter is reinforced.";
+        },
+      },
+      {
+        label: "Read the prepared lines (+50 credits, +2 fuel)",
+        apply: (run) => {
+          run.resources.credits += 50;
+          run.resources.fuel += 2;
+          return "Functional. Resources allocated.";
+        },
+      },
+    ],
+  },
 ];
 
 // Boon refits available at resupply nodes. Costs 1 fuel each.
@@ -319,7 +622,15 @@ function clearRun() {
 // Run lifecycle.
 // ---------------------------------------------------------------------------
 
-export function startNewRun(faction, seed = null) {
+// Default callsign pool — picked when the player doesn't supply one.
+// Pulled from a stock list of "feels military" handles. Players who
+// care can override via startNewRun({ callsign: "..." }).
+const DEFAULT_CALLSIGNS = [
+  "ECHO", "SABRE", "VECTOR", "TALON", "AXIOM",
+  "ORION", "HALO", "RAVEN", "SPECTRE", "VANGUARD",
+];
+
+export function startNewRun(faction, seed = null, opts = {}) {
   const s = seed != null ? (seed >>> 0) : (Math.floor(Math.random() * 0xffffffff) >>> 0);
   const meta = loadMeta();
   const rng = mulberry32(s);
@@ -337,9 +648,14 @@ export function startNewRun(faction, seed = null) {
     instanceId: nextInstanceId++,
   }));
 
+  const callsign = (opts && opts.callsign)
+    ? String(opts.callsign).toUpperCase().slice(0, 12)
+    : DEFAULT_CALLSIGNS[Math.floor(rng() * DEFAULT_CALLSIGNS.length)];
+
   const run = {
     seed: s,
     faction,
+    callsign,
     act: 1,
     nodePos: 0,
     visitedNodeIds: [],
@@ -352,6 +668,9 @@ export function startNewRun(faction, seed = null) {
     boons: [],
     battleMode: "fly",
     pendingNode: null,
+    pendingPromotion: null,
+    endReason: null,
+    flags: {},
     startedAtMs: Date.now(),
     rng,
   };
@@ -386,19 +705,35 @@ function generateAct(run, actIndex) {
   const nodes = [];
   const edges = [];
 
-  // Pick a sticky boss faction for this act — the player's whole
-  // act-narrative is "vs THIS faction". Excludes the player's own race.
-  const candidates = RACE_KEYS.filter((k) => k !== run.faction);
-  const bossFaction = candidates[Math.floor(rng() * candidates.length)];
+  // Per-act boss is hand-curated — name, faction, and roster come
+  // from the BOSSES table so the narrative arc is consistent.
+  const bossEntry = BOSSES[actIndex] || BOSSES[1];
+  const bossFaction = bossEntry.faction;
+  // Trash-mob faction roll excludes Terran (the player) and the
+  // *boss faction* most of the time, so the boss feels distinct
+  // when you finally meet them. 30% of trash nodes still pull
+  // from the boss faction to seed familiarity.
+  const trashCandidates = RACE_KEYS.filter((k) => k !== run.faction);
+  const pickTrashFaction = () => {
+    const off = trashCandidates.filter((k) => k !== bossFaction);
+    if (off.length === 0) return bossFaction;
+    return rng() < 0.30
+      ? bossFaction
+      : off[Math.floor(rng() * off.length)];
+  };
 
-  // Column 0: single entry node.
+  // Trash + elite rosters come from per-act tables, scaled by
+  // column position so deeper-into-the-act nodes feel beefier.
+  const trashBase  = ACT_TRASH_BASE[actIndex]  || ACT_TRASH_BASE[1];
+  const eliteBase  = ACT_ELITE_BASE[actIndex]  || ACT_ELITE_BASE[1];
+
+  // Column 0: single entry node — always a light battle.
   const startId = nodes.length;
   nodes.push({
     id: startId, col: 0, row: Math.floor(ROWS_PER_ACT / 2),
     type: "battle",
-    faction: candidates[Math.floor(rng() * candidates.length)],
-    roster: scaleRoster({ fighter: 8, bomber: 2, frigate: 1 },
-                        diffFor(actIndex, 0)),
+    faction: pickTrashFaction(),
+    roster: scaleRoster(trashBase, diffFor(actIndex, 0)),
   });
 
   // Columns 1..COLS_PER_ACT-2: candidate slots, picked by type table.
@@ -415,27 +750,37 @@ function generateAct(run, actIndex) {
         id: nodes.length, col, row, type,
       };
       if (type === "battle" || type === "elite") {
-        node.faction = candidates[Math.floor(rng() * candidates.length)];
-        const base = type === "elite"
-          ? { frigate: 1, cruiser: 1, bomber: 2 }
-          : { fighter: 8, bomber: 2, frigate: 1 };
+        node.faction = pickTrashFaction();
+        const base = type === "elite" ? eliteBase : trashBase;
         node.roster = scaleRoster(base, diffFor(actIndex, col));
       } else if (type === "event") {
-        node.eventId = EVENT_CARDS[Math.floor(rng() * EVENT_CARDS.length)].id;
+        // Filter the event pool to cards tagged for this act (or
+        // untagged — those are universal). Fall back to the full
+        // pool if no acted-tagged cards roll.
+        const pool = EVENT_CARDS.filter(
+          (c) => !c.actTags || c.actTags.includes(actIndex),
+        );
+        const chosen = pool.length > 0
+          ? pool[Math.floor(rng() * pool.length)]
+          : EVENT_CARDS[Math.floor(rng() * EVENT_CARDS.length)];
+        node.eventId = chosen.id;
       }
       nodes.push(node);
     }
   }
 
-  // Final column: single boss node. All reachable col-(COLS_PER_ACT-2)
-  // nodes converge on it via the edge pass below.
+  // Final column: single named boss node. All reachable col-
+  // (COLS_PER_ACT-2) nodes converge on it via the edge pass below.
+  // Boss rosters are hand-tuned at 1x — NOT scaled by diffFor — so
+  // the per-act numbers in BOSSES are exactly what the player faces.
   const bossId = nodes.length;
   nodes.push({
     id: bossId, col: COLS_PER_ACT - 1, row: Math.floor(ROWS_PER_ACT / 2),
     type: "boss",
     faction: bossFaction,
-    roster: scaleRoster(BOSS_ROSTERS[bossFaction] || BOSS_ROSTERS.terran,
-                        Math.min(diffFor(actIndex, COLS_PER_ACT - 1), 2.5)),
+    bossName: bossEntry.name,
+    bossDescription: bossEntry.description,
+    roster: { ...bossEntry.roster },
   });
 
   // Edge construction: for each node, pick 1-2 destinations in the
@@ -683,20 +1028,68 @@ export function completeNode(run, nodeId) {
       // The match-over panel ("Tap to return to fleet") handles the
       // UI dismissal; refresh() will then see no active run and the
       // menu reverts to "NEW RUN".
+      run.endReason = "war-won";
       recordRunEnd(run, true);
       clearRun();
       return;
     }
-    // Spin up the next act graph; place player at its entry.
-    run.act += 1;
+    // Promote: append PROMOTION_FLEET to the carried-over fleet, then
+    // spin up the next act graph and stash a pending-promotion record
+    // so the UI can show the rank-up celebration before opening the
+    // next starmap.
+    const newAct = run.act + 1;
+    const promotion = applyPromotion(run, newAct);
+    run.act = newAct;
     const nextGraph = generateAct(run, run.act);
     run.graphs.push(nextGraph);
     run.nodePos = nextGraph.startNode;
     run.visitedNodeIds = [nextGraph.startNode];
+    run.pendingPromotion = promotion;
   }
 
   saveRun(run);
   events.emit("nodeCleared", { node, run });
+}
+
+// Append the new act's PROMOTION_FLEET to the run's persistent fleet
+// and return a snapshot describing what was added (used by the
+// promotion screen).
+function applyPromotion(run, newAct) {
+  const fleet = PROMOTION_FLEET[newAct];
+  const rankInfo = ACT_RANKS[newAct] || {};
+  if (!fleet) {
+    return {
+      newAct,
+      rank: rankInfo.rank || "",
+      title: rankInfo.title || "",
+      blurb: rankInfo.promotionBlurb || "",
+      added: { fighter: 0, bomber: 0, capitals: [] },
+    };
+  }
+  const addedCapitals = [];
+  for (const c of fleet.capitals || []) {
+    const cap = { klass: c.klass, hpFrac: 1.0, instanceId: run.nextInstanceId++ };
+    run.capitals.push(cap);
+    addedCapitals.push({ klass: c.klass });
+  }
+  const addF = fleet.fighter || 0;
+  const addB = fleet.bomber || 0;
+  run.smallCraft.fighter = Math.min(MAX_FIGHTERS, run.smallCraft.fighter + addF);
+  run.smallCraft.bomber  = Math.min(MAX_BOMBERS,  run.smallCraft.bomber  + addB);
+  return {
+    newAct,
+    rank: rankInfo.rank || "",
+    title: rankInfo.title || "",
+    blurb: rankInfo.promotionBlurb || "",
+    added: { fighter: addF, bomber: addB, capitals: addedCapitals },
+  };
+}
+
+// UI hook: dismissing the promotion modal calls this.
+export function clearPendingPromotion(run) {
+  if (!run) return;
+  run.pendingPromotion = null;
+  saveRun(run);
 }
 
 // Apply the cost of jumping to a node BEFORE entering it. Called by
@@ -835,18 +1228,57 @@ export function applyEventChoice(run, eventId, choiceIndex) {
 // ---------------------------------------------------------------------------
 
 export function isRunOver(run) {
-  // Locked design rule: a run dies when every capital is destroyed.
-  // Fighters/bombers alone aren't enough — they auto-drip back.
-  return run.capitals.length === 0;
+  // Career-end rules:
+  //  - All capitals destroyed (Acts 2+).
+  //  - Player KIA (signalled by main.js setting run.endReason = "kia").
+  //  - Battle lost (signalled by main.js setting run.endReason = "defeat").
+  //  - Act 1 special case: no capitals exist, so a wiped fighter wing
+  //    with the player ship gone is "stranded" — treat as KIA.
+  if (run.endReason) return true;
+  if (run.capitals.length === 0 && run.act >= 2) return true;
+  return false;
+}
+
+// Death-flavor text for the run-summary screen. Keyed on the
+// run.endReason set by main.js on the matchEnded edge. Falls back
+// to a generic line if the reason is unknown.
+export function endReasonFlavor(run) {
+  const rank = (ACT_RANKS[run.act] || {}).rank || "Officer";
+  const reason = run.endReason || "wiped";
+  switch (reason) {
+    case "kia":
+      return `Killed in action. ${rank} ${run.callsign || ""} failed to return from the jump.`.trim();
+    case "fleet-lost":
+      return `${rank} ${run.callsign || ""} court-martialed. The fleet was lost with all hands.`.trim();
+    case "defeat":
+      return `${rank} ${run.callsign || ""} cashiered. The Frontier Service does not forgive defeat.`.trim();
+    case "stranded":
+      return `${rank} ${run.callsign || ""} stranded between jumps. Search-and-rescue found nothing.`.trim();
+    case "war-won":
+      return `The Frontier Wars ended on this jump. Admiral ${run.callsign || ""} retired in glory.`.trim();
+    default:
+      return "Career concluded.";
+  }
 }
 
 // Called from main.js after a defeat. Records meta progress + emits
 // runEnded; the controller then calls clearRun().
-export function recordRunEnd(run, won) {
+export function recordRunEnd(run, won, reason = null) {
+  if (reason && !run.endReason) run.endReason = reason;
   saveStore.update((d) => {
     d.roguelite.meta.runsCompleted += 1;
     if (won) {
       d.roguelite.meta.runsWon += 1;
+      // Stamp a memorial entry — the player's career is remembered
+      // on the title-screen wall. Cap the list at 10 so the wall
+      // doesn't grow without bound on a hot-streak save.
+      const memorial = d.roguelite.meta.memorial || [];
+      memorial.unshift({
+        callsign: run.callsign || "",
+        rank: (ACT_RANKS[ACTS_PER_RUN] || {}).rank || "Admiral",
+        wonOn: Date.now(),
+      });
+      d.roguelite.meta.memorial = memorial.slice(0, 10);
       const g = run.graphs[run.act - 1];
       if (g && g.bossFaction) {
         d.roguelite.meta.warProgress[g.bossFaction] =
@@ -861,7 +1293,11 @@ export function recordRunEnd(run, won) {
     }
   });
   saveStore.flush();
-  events.emit("runEnded", { run, won, reason: won ? "completed" : "wiped" });
+  events.emit("runEnded", {
+    run, won,
+    reason: run.endReason || (won ? "completed" : "wiped"),
+    flavor: endReasonFlavor(run),
+  });
 }
 
 export function discardRun() {

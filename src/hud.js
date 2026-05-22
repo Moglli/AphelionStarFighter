@@ -82,6 +82,13 @@ export class BattleHUD {
     spectateBtn.textContent = "SPECTATE";
     spectateBtn.style.pointerEvents = "auto";
     topRight.appendChild(spectateBtn);
+    // QUIT pill — abandons the current match and returns to the main
+    // menu. Always available so the player can bail out of a stuck or
+    // unwinnable fight without waiting for the stall watchdog.
+    const quitBtn = this._createEl("button", "battle-pill quit-pill", "quit-btn");
+    quitBtn.textContent = "QUIT";
+    quitBtn.style.pointerEvents = "auto";
+    topRight.appendChild(quitBtn);
     this._root.appendChild(topRight);
 
     // ---- Damage indicator ----
@@ -210,10 +217,37 @@ export class BattleHUD {
     this._root.appendChild(actionCluster);
 
     // ---- Admiral panel ----
+    // Now a three-block layout: a master-command bar (ALL HOLD / FREE
+    // / PRESS + MISSILES), a focus-target pill (visible only when an
+    // enemy is locked as focus fire), and the per-class command grid
+    // with live counts + colour-coded posture buttons.
     const admiralPanel = this._createEl("div", "admiral-panel", "admiral-panel");
     admiralPanel.setAttribute("aria-hidden", "true");
-    admiralPanel.innerHTML = `<div class="admiral-title">FLEET COMMAND</div><div class="admiral-grid" id="admiral-grid"></div>`;
+    admiralPanel.innerHTML = `
+      <div class="admiral-title">FLEET COMMAND</div>
+      <div class="admiral-master" id="admiral-master">
+        <button class="admiral-master-btn master-hold"  data-master="hold">ALL HOLD</button>
+        <button class="admiral-master-btn master-free"  data-master="free">ALL FREE</button>
+        <button class="admiral-master-btn master-press" data-master="press">ALL PRESS</button>
+        <button class="admiral-master-btn master-missiles" id="admiral-master-missiles">MISSILES: FREE</button>
+      </div>
+      <div class="admiral-focus" id="admiral-focus">
+        <span class="focus-label">FOCUS FIRE</span>
+        <span class="focus-name" id="admiral-focus-name">Tap an enemy to focus</span>
+        <button class="focus-clear" id="admiral-focus-clear" title="Clear focus">&times;</button>
+      </div>
+      <div class="admiral-grid" id="admiral-grid"></div>
+    `;
     this._root.appendChild(admiralPanel);
+
+    // Command toast — brief floating caption at top-centre that flashes
+    // when the admiral issues an order. Gives instant feedback so the
+    // player sees the command landed, even before the fleet reacts.
+    const toast = this._createEl("div", "admiral-toast", "admiral-toast");
+    toast.setAttribute("aria-hidden", "true");
+    this._root.appendChild(toast);
+    this._admiralToast = toast;
+    this._admiralToastTimer = null;
 
     mountEl.appendChild(this._root);
 
@@ -267,6 +301,18 @@ export class BattleHUD {
         this._input.spectateBtn.justPressed = true;
       }
     });
+
+    // ---- Wire QUIT button click ----
+    // Sets an InputManager flag that main.js drains every frame, the
+    // same way the canvas-side enter-press / spectate signal work.
+    // Confirmation step lives in main.js so the HUD stays cheap and
+    // doesn't need to know about game lifecycle.
+    this._quitBtnEl = this._root.querySelector("#quit-btn");
+    if (this._quitBtnEl) {
+      this._quitBtnEl.addEventListener("click", () => {
+        if (this._input) this._input.quitRequested = true;
+      });
+    }
 
     // ---- Wire action-cluster buttons (FIRE / MISSILE / BOOST) ----
     // Each DOM .action-btn has `pointer-events: auto` (so the canvas
@@ -515,7 +561,16 @@ export class BattleHUD {
     const sx = mapW / ARENA.width;
     const sy = mapH / ARENA.height;
 
-    const liveShips = game.ships.filter((s) => !s.dead);
+    // Filter aggressively: any ship that's flagged dead, has had its
+    // wreck spawned (signals the death has been visually committed),
+    // or has dropped to non-positive hull HP should NOT show on the
+    // minimap. The game.ships array filter in update() already strips
+    // dead non-player ships, but the dead player ship stays around
+    // during respawn and a paranoid extra layer here guards against
+    // any future ship-removal-timing change.
+    const liveShips = game.ships.filter(
+      (s) => !s.dead && !s.wreckSpawned && (s.hp == null || s.hp > 0),
+    );
     this._minimapCount.textContent = `${liveShips.length} units`;
 
     // Reuse dot elements from pool
@@ -749,12 +804,35 @@ export class BattleHUD {
 
       const isRoguelite = game.mode === "roguelite";
       const won = game.winner === "blue";
+      const stalled = !!game.endedByStall;
+
+      // Career-summary takes priority — set on game by main.js's
+      // runEnded handler when the run is over (either war-won or any
+      // defeat). We show the rank + callsign + flavor blurb instead
+      // of a generic "DEFEAT" / "VICTORY".
+      const summary = game.runSummary;
+      if (isRoguelite && summary) {
+        const headline = summary.won ? "WAR WON" : "CAREER ENDED";
+        this._matchoverTitle.textContent = headline;
+        const handle = `${summary.rank}${summary.callsign ? ` ${summary.callsign}` : ""}`;
+        const progress = `Act ${summary.act}/${summary.actsTotal} · ${summary.visitedCount} jumps`;
+        this._matchoverSubtitle.innerHTML =
+          `<strong>${handle}</strong><br>${summary.flavor || ""}<br><span style="opacity:0.65;font-size:0.85em;">${progress}</span>`;
+        this._matchoverSubtitle.style.color = summary.won ? "#bfd" : "#fdb";
+        this._matchoverPrompt.textContent = "Tap to return to home";
+        return;
+      }
+
       let msg;
-      if (isRoguelite) msg = won ? "NODE CLEARED" : "FLEET LOSSES";
+      if (stalled) msg = "STALEMATE";
+      else if (isRoguelite) msg = won ? "NODE CLEARED" : "FLEET LOSSES";
       else msg = won ? "VICTORY" : "DEFEAT";
       this._matchoverTitle.textContent = msg;
 
-      if (isRoguelite) {
+      if (stalled) {
+        this._matchoverSubtitle.textContent = "No contact for 45s — match resolved by ship count.";
+        this._matchoverSubtitle.style.color = "#fdb";
+      } else if (isRoguelite) {
         const sub = won ? "Returning to starmap..." : "Fleet took losses -- check the starmap.";
         this._matchoverSubtitle.textContent = sub;
         this._matchoverSubtitle.style.color = won ? "#bfd" : "#fdb";
@@ -834,66 +912,194 @@ export class BattleHUD {
   }
 
   _rebuildAdmiralGrid(game) {
-    // Only rebuild if directives changed
+    // Live ship counts per class — drives the "FIGHTER ×12" stamp on
+    // each cell so the player sees how many ships each command will
+    // affect right now. Recompute every frame; cheap.
+    const blueCounts = { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0 };
+    for (const s of game.ships) {
+      if (s.dead || s.side !== "blue") continue;
+      if (blueCounts[s.klass] != null) blueCounts[s.klass]++;
+    }
+
+    // Focus bar — visible when a focus target is locked.
+    const focusBar = this._root.querySelector("#admiral-focus");
+    const focusNameEl = this._root.querySelector("#admiral-focus-name");
+    const focusClearBtn = this._root.querySelector("#admiral-focus-clear");
+    const focusTarget = game.focusTargetId != null
+      ? game.ships.find((s) => s.id === game.focusTargetId && !s.dead)
+      : null;
+    if (focusBar) {
+      if (focusTarget) {
+        focusBar.classList.add("active");
+        if (focusNameEl) {
+          const raceName = (RACES[focusTarget.race] && RACES[focusTarget.race].name) || focusTarget.race;
+          const klassName = (CLASSES[focusTarget.klass] && CLASSES[focusTarget.klass].name) || focusTarget.klass;
+          focusNameEl.textContent = `${raceName} ${klassName}`;
+        }
+      } else {
+        focusBar.classList.remove("active");
+        if (focusNameEl) focusNameEl.textContent = "Tap an enemy to focus";
+      }
+    }
+    if (focusClearBtn && !focusClearBtn._wired) {
+      focusClearBtn._wired = true;
+      focusClearBtn.addEventListener("click", () => {
+        game.focusTargetId = null;
+        this._toastAdmiral("FOCUS CLEARED");
+      });
+    }
+
+    // Wire master-command bar buttons (only once).
+    if (!this._admiralMasterWired) {
+      this._admiralMasterWired = true;
+      const masterBar = this._root.querySelector("#admiral-master");
+      if (masterBar) {
+        for (const btn of masterBar.querySelectorAll(".admiral-master-btn[data-master]")) {
+          const posture = btn.dataset.master;
+          btn.addEventListener("click", () => {
+            if (game.setPosture) {
+              for (const klass of ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"]) {
+                game.setPosture(klass, posture);
+              }
+            }
+            this._toastAdmiral(`ALL FLEET · ${posture.toUpperCase()}`);
+          });
+        }
+      }
+      const masterMissiles = this._root.querySelector("#admiral-master-missiles");
+      if (masterMissiles) {
+        masterMissiles.addEventListener("click", () => {
+          if (!game.setMissiles) return;
+          // Toggle: if any pod-equipped class is currently FREE, switch
+          // all to HOLD; otherwise switch all to FREE. Only the four
+          // classes that actually carry pods count — fighter +
+          // carrier never had missiles flag in spec, so they're
+          // skipped to keep the label semantics honest.
+          const podClasses = ["bomber", "frigate", "cruiser", "battleship"];
+          const anyFree = podClasses.some((k) => {
+            const d = game.directives && game.directives[k];
+            return d && d.missiles !== "hold";
+          });
+          const next = anyFree ? "hold" : "on";
+          for (const klass of podClasses) game.setMissiles(klass, next);
+          this._toastAdmiral(`MISSILES · ${next === "hold" ? "HOLD" : "FREE"}`);
+        });
+      }
+    }
+    // Reflect current master-missiles state in the button label. Label
+    // describes the *current* state ("MISSILES: HOLD" means pods are
+    // held), not the action the button will take.
+    const masterMissiles = this._root.querySelector("#admiral-master-missiles");
+    if (masterMissiles) {
+      const podClasses = ["bomber", "frigate", "cruiser", "battleship"];
+      const anyFree = podClasses.some((k) => {
+        const d = game.directives && game.directives[k];
+        return d && d.missiles !== "hold";
+      });
+      masterMissiles.textContent = `MISSILES: ${anyFree ? "FREE" : "HOLD"}`;
+      masterMissiles.classList.toggle("missiles-hold", !anyFree);
+    }
+
+    // Only rebuild the per-class grid when directives change. Counts
+    // update separately below so we don't tear DOM each frame just to
+    // update an integer.
     const dirKey = JSON.stringify(game.directives);
-    if (this._lastAdmiralKey === dirKey) return;
-    this._lastAdmiralKey = dirKey;
-
-    // Clean old listeners
-    for (const h of this._admiralClickHandlers) {
-      h.el.removeEventListener("click", h.fn);
-    }
-    this._admiralClickHandlers = [];
-
-    const classes = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
-    const postures = ["hold", "free", "press"];
-    const missileClasses = new Set(["bomber", "frigate", "cruiser", "battleship"]);
-
-    this._admiralGrid.innerHTML = "";
-    for (const klass of classes) {
-      const d = game.directives[klass] || { posture: "free", missiles: "on" };
-      const row = document.createElement("div");
-      row.className = "admiral-row";
-
-      const label = document.createElement("span");
-      label.textContent = klass.toUpperCase();
-      label.style.fontWeight = "bold";
-      label.style.color = "#9bd";
-      row.appendChild(label);
-
-      const toggleGroup = document.createElement("div");
-      toggleGroup.style.display = "flex";
-      toggleGroup.style.gap = "4px";
-
-      for (const p of postures) {
-        const btn = document.createElement("button");
-        btn.className = "admiral-toggle" + (d.posture === p ? " active" : "");
-        btn.textContent = p.toUpperCase();
-        const handler = () => {
-          if (game.setPosture) game.setPosture(klass, p);
-        };
-        btn.addEventListener("click", handler);
-        this._admiralClickHandlers.push({ el: btn, fn: handler });
-        toggleGroup.appendChild(btn);
+    const needsGridRebuild = this._lastAdmiralKey !== dirKey;
+    if (needsGridRebuild) {
+      this._lastAdmiralKey = dirKey;
+      for (const h of this._admiralClickHandlers) {
+        h.el.removeEventListener("click", h.fn);
       }
+      this._admiralClickHandlers = [];
 
-      if (missileClasses.has(klass)) {
-        const mBtn = document.createElement("button");
-        const held = d.missiles === "hold";
-        mBtn.className = "admiral-toggle" + (held ? " active" : "");
-        mBtn.textContent = "M";
-        mBtn.title = held ? "Missiles HOLD" : "Missiles ON";
-        const handler = () => {
-          if (game.setMissiles) game.setMissiles(klass, held ? "on" : "hold");
-        };
-        mBtn.addEventListener("click", handler);
-        this._admiralClickHandlers.push({ el: mBtn, fn: handler });
-        toggleGroup.appendChild(mBtn);
+      const classes = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+      const postures = ["hold", "free", "press"];
+      const missileClasses = new Set(["bomber", "frigate", "cruiser", "battleship"]);
+      const CLASS_GLYPHS = { fighter: "F", bomber: "B", frigate: "Fr", cruiser: "C", battleship: "BB", carrier: "CV" };
+
+      this._admiralGrid.innerHTML = "";
+      this._admiralCellEls = {};
+      for (const klass of classes) {
+        const d = game.directives[klass] || { posture: "free", missiles: "on" };
+        const cell = document.createElement("div");
+        cell.className = "admiral-cell";
+
+        // Cell header: class glyph + name + live count.
+        const head = document.createElement("div");
+        head.className = "admiral-cell-head";
+        head.innerHTML = `
+          <span class="admiral-cell-glyph">${CLASS_GLYPHS[klass] || "?"}</span>
+          <span class="admiral-cell-name">${klass.toUpperCase()}</span>
+          <span class="admiral-cell-count" data-klass="${klass}">×0</span>
+        `;
+        cell.appendChild(head);
+
+        // Posture buttons — colour-coded by class.
+        const postureBar = document.createElement("div");
+        postureBar.className = "admiral-cell-postures";
+        for (const p of postures) {
+          const btn = document.createElement("button");
+          btn.className = `posture-btn posture-${p}` + (d.posture === p ? " active" : "");
+          btn.textContent = p.toUpperCase();
+          const handler = () => {
+            if (game.setPosture) game.setPosture(klass, p);
+            this._toastAdmiral(`${klass.toUpperCase()} · ${p.toUpperCase()}`);
+            btn.classList.add("flash");
+            setTimeout(() => btn.classList.remove("flash"), 240);
+          };
+          btn.addEventListener("click", handler);
+          this._admiralClickHandlers.push({ el: btn, fn: handler });
+          postureBar.appendChild(btn);
+        }
+
+        if (missileClasses.has(klass)) {
+          const mBtn = document.createElement("button");
+          const held = d.missiles === "hold";
+          mBtn.className = "posture-btn missile-toggle" + (held ? " active" : "");
+          mBtn.textContent = held ? "M HOLD" : "M FREE";
+          mBtn.title = held ? "Missile pods HOLD — tap to free" : "Missile pods FREE — tap to hold";
+          const handler = () => {
+            if (game.setMissiles) game.setMissiles(klass, held ? "on" : "hold");
+            this._toastAdmiral(`${klass.toUpperCase()} · MISSILES ${held ? "FREE" : "HOLD"}`);
+            mBtn.classList.add("flash");
+            setTimeout(() => mBtn.classList.remove("flash"), 240);
+          };
+          mBtn.addEventListener("click", handler);
+          this._admiralClickHandlers.push({ el: mBtn, fn: handler });
+          postureBar.appendChild(mBtn);
+        }
+
+        cell.appendChild(postureBar);
+        this._admiralGrid.appendChild(cell);
+        this._admiralCellEls[klass] = cell;
       }
-
-      row.appendChild(toggleGroup);
-      this._admiralGrid.appendChild(row);
     }
+
+    // Update per-cell live counts every frame (cheap text writes).
+    if (this._admiralCellEls) {
+      for (const klass of Object.keys(this._admiralCellEls)) {
+        const cell = this._admiralCellEls[klass];
+        const countEl = cell && cell.querySelector(".admiral-cell-count");
+        if (countEl) countEl.textContent = `×${blueCounts[klass] || 0}`;
+      }
+    }
+  }
+
+  // Briefly flash a caption at the top-centre of the screen whenever
+  // the admiral issues a command. Gives instant feedback even before
+  // the fleet visibly reacts. Replaces any in-flight toast — useful
+  // when the player taps several buttons in quick succession.
+  _toastAdmiral(msg) {
+    if (!this._admiralToast) return;
+    this._admiralToast.textContent = msg;
+    this._admiralToast.classList.remove("active");
+    // Force reflow so the active-class animation restarts cleanly.
+    void this._admiralToast.offsetWidth;
+    this._admiralToast.classList.add("active");
+    if (this._admiralToastTimer) clearTimeout(this._admiralToastTimer);
+    this._admiralToastTimer = setTimeout(() => {
+      if (this._admiralToast) this._admiralToast.classList.remove("active");
+    }, 1400);
   }
 
   show() { this._root.style.visibility = "visible"; }

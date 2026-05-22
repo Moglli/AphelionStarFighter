@@ -148,6 +148,22 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.matchOver = false;
   game.winner = null;
   game._matchEndedEmitted = false;
+  // Stall watchdog: tracks how long since the last damage event. If the
+  // arena goes idle (no hits dealt on either side for STALL_LIMIT
+  // seconds), the match force-ends as a draw — heading-locked craft
+  // sometimes wander into pockets they don't escape, and without this
+  // the player has no way out short of a quit. Reset to 0 on every
+  // applyDamage call.
+  game.stallTimer = 0;
+  // Admiral focus-fire target. Set when the admiral taps an enemy
+  // ship; the AI prefers it for every blue ship. Cleared on a fresh
+  // match so stale focus doesn't leak across runs.
+  game.focusTargetId = null;
+  game.endedByStall = false;
+  // Career-summary stash (set by main.js's runEnded handler when a
+  // Frontier run ends). Cleared on every new match so a fresh
+  // skirmish doesn't show stale rank text.
+  game.runSummary = null;
   game.spectating = false;
   game.spectateTargetId = null;
   game.spectateCamera = { x: 0, y: 0, locked: true };
@@ -670,6 +686,23 @@ export function update(game, dt) {
     // inside the MAX_DEBRIS budget on a multi-kill frame.
     const shower = Math.min(50, 6 + Math.floor(s.spec.radius * 0.2));
     pushDebris(game.debris, createDebrisBurst(s.pos, s.pos, s.vel, s.klass, s.side, shower));
+    // Visible explosion at the death point — shockwave + sparks + fire
+    // + smoke. Intensity scales with hull radius so a battleship blow
+    // rumbles big, but small craft (fighter/bomber) get a floor of 0.95
+    // so their pop is large enough to catch the eye in a chaotic brawl.
+    // Previously fighter deaths used intensity ≈0.54 which read as a
+    // weak puff — players reported escort wings "just disappearing"
+    // because the small-craft burst got lost in surrounding VFX.
+    if (game.particles) {
+      const isSmallCraft = s.klass === "fighter" || s.klass === "bomber";
+      const burstIntensity = isSmallCraft
+        ? 0.95
+        : Math.min(1.6, 0.45 + (s.spec.radius / 110));
+      // For small craft, draw the burst against a slightly larger
+      // radius so the shockwave is genuinely readable at zoom 0.5.
+      const burstR = isSmallCraft ? Math.max(s.spec.radius, 16) : s.spec.radius;
+      spawnDestructionBurst(game.particles, s.pos.x, s.pos.y, burstR, burstIntensity);
+    }
     // Boom! Explosion SFX scales intensity with hull radius so a
     // battleship death rumbles deeper than a fighter pop.
     const intensity = Math.min(1, 0.3 + (s.spec.radius / 180));
@@ -724,6 +757,24 @@ export function update(game, dt) {
       else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
     }
   }
+
+  // Stall watchdog: if no damage has been dealt for STALL_LIMIT seconds
+  // the match force-ends so the player isn't trapped watching idle
+  // craft drift. Resolves by ship count — the side with more live
+  // hulls wins; a tie ends as the player's loss (red) to discourage
+  // grief-stall on the human side. Reset on every applyDamage call
+  // (above) so contested battles never trip it.
+  const STALL_LIMIT = 45;
+  if (!game.matchOver) {
+    game.stallTimer = (game.stallTimer || 0) + dt;
+    if (game.stallTimer >= STALL_LIMIT) {
+      const blueLive = game.ships.filter((s) => s.side === "blue" && !s.dead).length;
+      const redLive  = game.ships.filter((s) => s.side === "red"  && !s.dead).length;
+      game.matchOver = true;
+      game.winner = blueLive > redLive ? "blue" : "red";
+      game.endedByStall = true;
+    }
+  }
   // Edge-detect: emit matchEnded exactly once, the frame matchOver
   // first flips true. progression.js + the roguelite controller in
   // main.js both subscribe; capture-then-restart is keyed off this.
@@ -754,6 +805,9 @@ export function restart(game) {
   game._matchEndedEmitted = false;
   game.modeConfig = null;
   game.rogueliteContext = null;
+  game.focusTargetId = null;
+  game.endedByStall = false;
+  game.runSummary = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -881,10 +935,28 @@ function moduleStage(hp, hpMax) {
 // so PD still plinks (deters loitering inside the bubble) but isn't
 // the headline damage source it had become.
 const PD_VS_SHIP_MUL = 0.22;
+// Carriers are screening platforms, not gun platforms. Their PD turrets
+// still need to deter loitering fighters but shouldn't meaningfully
+// contribute to chipping down enemy capitals. Carrier-fired PD rounds
+// land on larger ships (anything that isn't strike craft) at 70% of
+// the normal 0.22× ship multiplier — so ~0.154× of base PD damage vs
+// a frigate/cruiser/battleship/carrier/station.
+const CARRIER_PD_VS_LARGE_MUL = 0.7;
 
 function applyDamage(ship, p, moduleTargets = null, particles = null, game = null) {
   let remaining = p.damage;
-  if (p.fromKlass === "pd") remaining *= PD_VS_SHIP_MUL;
+  if (p.fromKlass === "pd") {
+    remaining *= PD_VS_SHIP_MUL;
+    if (p.ownerKlass === "carrier"
+        && ship.klass !== "fighter" && ship.klass !== "bomber") {
+      remaining *= CARRIER_PD_VS_LARGE_MUL;
+    }
+  }
+  // Reset the stall watchdog: any damage event counts as the arena
+  // still being meaningfully active. The watchdog is checked in
+  // update() and forces a draw when no damage has been dealt for
+  // STALL_LIMIT seconds (see below).
+  if (game) game.stallTimer = 0;
 
   // Step 1: Shield (unless missile, which bypasses).
   if (p.kind !== "missile" && ship.shieldMax > 0 && ship.shield > 0) {

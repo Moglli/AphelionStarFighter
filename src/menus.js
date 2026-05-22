@@ -136,6 +136,21 @@ export class MenuSystem {
   }
 
   /** Show a screen by name, hide all others. */
+  _resetOverlayState(name) {
+    // Re-opening an overlay should always land on its first step so
+    // returning users aren't dropped halfway through a previous edit.
+    // Skip when the screen was already active — showScreen runs every
+    // frame from the input draw loop and resetting on every tick would
+    // pin the carousel to step 0 forever.
+    if (this._currentScreen === name) return;
+    if (name === "custom" && typeof this._gotoCustomStep === "function") {
+      this._gotoCustomStep(0);
+    }
+    if (name === "main" && typeof this._gotoMainStep === "function") {
+      this._gotoMainStep(0);
+    }
+  }
+
   showScreen(name) {
     // Root visibility
     if (this._root) {
@@ -149,11 +164,12 @@ export class MenuSystem {
 
     // Show target screen
     if (name && this._screens[name]) {
+      this._resetOverlayState(name);
       this._screens[name].classList.add("active");
     }
 
     // Scrim: visible for overlays, hidden for base screens (home / main / about)
-    const overlays = ["settings", "refill", "custom", "runSetup", "battleChoice", "resupply", "event"];
+    const overlays = ["settings", "refill", "custom", "runSetup", "battleChoice", "resupply", "event", "promotion"];
     if (this._scrim) {
       this._scrim.style.display = (name && overlays.includes(name)) ? "block" : "none";
     }
@@ -237,6 +253,11 @@ export class MenuSystem {
 
     // 10. Event Overlay
     this._buildEvent(root);
+
+    // 11. Promotion Overlay — appears between acts when a boss clear
+    // promotes the player. Renders the new rank, the blurb, and what
+    // ships are joining the fleet.
+    this._buildPromotion(root);
 
     this._mountEl.appendChild(root);
   }
@@ -343,30 +364,46 @@ export class MenuSystem {
   // options live in the respective overlays.
 
   _buildMainMenu(root) {
+    // Step-carousel layout: one focused decision per step rather than
+    // the old single-screen stack of four chip rows. Steps:
+    //   0. GAME MODE          (always)
+    //   1. MAP SIZE           (skipped for Frontier; honored for the rest)
+    //   2. FACTION            (skipped for Frontier + Custom)
+    //   3. FLEET SIZE         (skipped for Frontier + Custom)
+    //   4. DEPLOY review      (always)
+    // Steps that are skipped for the active mode just slide past on Next
+    // — the dot indicator collapses to only show visible steps.
     const screen = document.createElement("div");
-    screen.className = "menu-screen menu-main";
+    screen.className = "menu-screen menu-main carousel-panel";
     screen.dataset.screen = "main";
 
     // BACK button — returns to home screen.
     const back = document.createElement("button");
     back.className = "menu-back-btn";
     back.id = "main-back-btn";
-    back.textContent = "← BACK";
+    back.textContent = "← HOME";
     this._addListener(back, "click", () => {
       if (this._callbacks.onMainBack) this._callbacks.onMainBack();
     });
     screen.appendChild(back);
 
-    // Title
+    // Title + step indicator.
     const header = document.createElement("header");
-    header.className = "menu-title menu-title-play";
+    header.className = "menu-title menu-title-play carousel-header";
     header.innerHTML = `
-      <h1>PLAY</h1>
-      <div class="menu-title-accent"></div>
+      <div class="carousel-step-label" id="main-step-label">STEP 1 / 5</div>
+      <h1 id="main-step-title">PICK A MODE</h1>
+      <p class="carousel-subtitle" id="main-step-sub">Choose how you want to play.</p>
     `;
     screen.appendChild(header);
 
-    // Chip sections: mode (always), then size/race/fleet (conditional)
+    const carouselBody = document.createElement("div");
+    carouselBody.className = "carousel-body main-carousel-body";
+    screen.appendChild(carouselBody);
+
+    // One step per chip section. Each step is a `.carousel-step` div
+    // wrapping a single `.menu-section` so the slide animation runs
+    // around the section without disturbing chip layout.
     const sections = [
       { key: "mode", label: "GAME MODE", chipId: "mode-chips" },
       { key: "size", label: "MAP SIZE", chipId: "size-chips" },
@@ -375,27 +412,46 @@ export class MenuSystem {
     ];
 
     this._sectionEls = {};
-    for (const sec of sections) {
+    this._mainStepEls = [];
+    sections.forEach((sec, i) => {
+      const step = document.createElement("section");
+      step.className = "carousel-step";
+      step.dataset.step = String(i);
       const section = document.createElement("div");
       section.className = "menu-section";
       section.dataset.section = sec.key;
       section.innerHTML = `
-        <div class="section-label"><span></span>${sec.label}<span></span></div>
         <div class="chip-row" id="${sec.chipId}"></div>
       `;
-      screen.appendChild(section);
+      step.appendChild(section);
+      carouselBody.appendChild(step);
       this._chipContainers[sec.key] = section.querySelector(".chip-row");
       this._chips[sec.key] = [];
       this._sectionEls[sec.key] = section;
-    }
+      this._mainStepEls.push(step);
+    });
 
-    // Frontier status line
+    // Step 4: DEPLOY review — chosen settings summary + the existing
+    // primary action button (handles DEPLOY / CONFIGURE / RESUME etc.).
+    const reviewStep = document.createElement("section");
+    reviewStep.className = "carousel-step";
+    reviewStep.dataset.step = "4";
+    reviewStep.innerHTML = `
+      <div class="main-review" id="main-review"></div>
+    `;
+    carouselBody.appendChild(reviewStep);
+    this._mainStepEls.push(reviewStep);
+    this._mainReviewEl = reviewStep.querySelector("#main-review");
+
+    // Frontier status line — shown on the review step when the active
+    // mode is Frontier so the player knows whether they're resuming or
+    // starting fresh.
     this._frontierStatus = document.createElement("div");
     this._frontierStatus.className = "frontier-status";
     this._frontierStatus.id = "frontier-status";
-    screen.appendChild(this._frontierStatus);
+    reviewStep.appendChild(this._frontierStatus);
 
-    // START button
+    // START button lives in the review step.
     this._startBtn = document.createElement("button");
     this._startBtn.className = "menu-start-btn";
     this._startBtn.id = "main-start-btn";
@@ -414,10 +470,101 @@ export class MenuSystem {
         this._callbacks.onStart();
       }
     });
-    screen.appendChild(this._startBtn);
+    reviewStep.appendChild(this._startBtn);
+
+    // Carousel nav: BACK / dots / NEXT. The Next button doubles as the
+    // primary action on the review step (DEPLOY) but we keep the START
+    // button visible there as well so the existing "CONFIGURE..." /
+    // "RESUME CAMPAIGN" / etc. labels stay reachable. Next is hidden on
+    // the review step to keep one obvious primary action.
+    const nav = document.createElement("nav");
+    nav.className = "carousel-nav";
+    nav.innerHTML = `
+      <button class="menu-btn carousel-btn" id="main-prev">← BACK</button>
+      <div class="carousel-dots" id="main-dots"></div>
+      <button class="menu-btn carousel-btn carousel-next" id="main-next">NEXT →</button>
+    `;
+    screen.appendChild(nav);
+
+    this._mainStep = 0;
+    this._mainPrevBtn = nav.querySelector("#main-prev");
+    this._mainNextBtn = nav.querySelector("#main-next");
+    this._mainDotsEl = nav.querySelector("#main-dots");
+    this._mainStepLabel = header.querySelector("#main-step-label");
+    this._mainStepTitle = header.querySelector("#main-step-title");
+    this._mainStepSub = header.querySelector("#main-step-sub");
+
+    this._addListener(this._mainPrevBtn, "click", () => this._stepMain(-1));
+    this._addListener(this._mainNextBtn, "click", () => this._stepMain(+1));
 
     root.appendChild(screen);
     this._screens.main = screen;
+    // Initialise step chrome (label, dots, active step) so the carousel
+    // reads correctly on first render before the first sync() call.
+    this._gotoMainStep(0);
+  }
+
+  // Resolve the list of visible step indices for the current selected
+  // mode. Frontier and Custom skip their irrelevant configuration
+  // sections — they own their own setup (Frontier: run state, Custom:
+  // CONFIGURE overlay).
+  _visibleMainSteps() {
+    const mode = this._lastSelectedMode || "open";
+    // Step ids: 0=mode, 1=size, 2=race, 3=fleet, 4=review.
+    if (mode === "roguelite") return [0, 4];
+    if (mode === "custom")    return [0, 1, 4];
+    return [0, 1, 2, 3, 4];
+  }
+
+  // Move the visible step pointer by ±1 along the visible-steps list.
+  _stepMain(direction) {
+    const visible = this._visibleMainSteps();
+    const here = visible.indexOf(this._mainStep);
+    let nextPos = (here < 0 ? 0 : here) + direction;
+    if (nextPos < 0) nextPos = 0;
+    if (nextPos >= visible.length) nextPos = visible.length - 1;
+    this._gotoMainStep(visible[nextPos]);
+  }
+
+  _gotoMainStep(idx) {
+    const visible = this._visibleMainSteps();
+    if (!visible.includes(idx)) idx = visible[0];
+    this._mainStep = idx;
+    if (this._mainStepEls) {
+      for (const el of this._mainStepEls) {
+        const stepIdx = parseInt(el.dataset.step, 10);
+        el.classList.toggle("active", stepIdx === idx);
+      }
+    }
+    // Rebuild dots to match the count of visible steps for the active
+    // mode (so Frontier shows 2 dots, Open shows 5).
+    if (this._mainDotsEl) {
+      this._mainDotsEl.innerHTML = "";
+      const here = visible.indexOf(idx);
+      for (let i = 0; i < visible.length; i++) {
+        const d = document.createElement("span");
+        d.className = "carousel-dot" + (i === here ? " active" : "");
+        this._mainDotsEl.appendChild(d);
+      }
+    }
+    const here = visible.indexOf(idx);
+    const stepNum = here + 1;
+    const total = visible.length;
+    if (this._mainStepLabel) this._mainStepLabel.textContent = `STEP ${stepNum} / ${total}`;
+    const STEP_TITLES = {
+      0: { title: "PICK A MODE",   sub: "Choose how you want to play." },
+      1: { title: "MAP SIZE",      sub: "Smaller maps = tighter brawls; larger = breathing room." },
+      2: { title: "FACTION",       sub: "Pick the race you'll deploy with." },
+      3: { title: "FLEET SIZE",    sub: "Skirmish to full clash." },
+      4: { title: "DEPLOY",        sub: "Confirm and launch." },
+    };
+    const info = STEP_TITLES[idx] || { title: "", sub: "" };
+    if (this._mainStepTitle) this._mainStepTitle.textContent = info.title;
+    if (this._mainStepSub) this._mainStepSub.textContent = info.sub;
+    const isFirst = here === 0;
+    const isLast = here === visible.length - 1;
+    if (this._mainPrevBtn) this._mainPrevBtn.style.visibility = isFirst ? "hidden" : "";
+    if (this._mainNextBtn) this._mainNextBtn.style.display = isLast ? "none" : "";
   }
 
   // ---- Energy Bar ---------------------------------------------------------
@@ -533,36 +680,76 @@ export class MenuSystem {
   // ---- Custom Match Overlay -----------------------------------------------
 
   _buildCustomOverlay(root) {
+    // Step-carousel layout: FRIENDLY → ENEMY → REVIEW.
+    // Each step shows one focused decision so the player isn't hit with
+    // both sides + per-faction sliders + grand totals on one screen.
     const screen = document.createElement("div");
     screen.className = "menu-screen menu-custom";
     screen.dataset.screen = "custom";
     screen.innerHTML = `
-      <div class="overlay-panel custom-panel">
+      <div class="overlay-panel custom-panel carousel-panel">
         <div class="panel-accent-rule"></div>
-        <h2>CUSTOM MATCH</h2>
-        <p class="custom-subtitle">UP TO TWO FACTIONS PER TEAM &middot; PER-FACTION FLEET SIZE</p>
-        <div class="custom-sides">
-          <div class="custom-side" data-side="allied">
-            <div class="custom-side-header"><span class="side-title">FRIENDLY</span></div>
-            <div class="custom-team-list" id="custom-allied-teams"></div>
-            <button class="menu-btn custom-add-btn" id="custom-allied-add">+ ADD ALLY</button>
-            <div class="custom-side-total" id="custom-allied-total">0 units</div>
-          </div>
-          <div class="custom-side" data-side="hostile">
-            <div class="custom-side-header"><span class="side-title">ENEMY</span></div>
-            <div class="custom-team-list" id="custom-hostile-teams"></div>
-            <button class="menu-btn custom-add-btn" id="custom-hostile-add">+ ADD ENEMY</button>
-            <div class="custom-side-total" id="custom-hostile-total">0 units</div>
-          </div>
+        <header class="carousel-header">
+          <div class="carousel-step-label" id="custom-step-label">STEP 1 / 3</div>
+          <h2 id="custom-step-title">FRIENDLY FORCES</h2>
+          <p class="carousel-subtitle" id="custom-step-sub">Pick faction and fleet for your side</p>
+        </header>
+        <div class="carousel-body" id="custom-carousel-body">
+          <section class="carousel-step" data-step="0">
+            <div class="custom-side" data-side="allied">
+              <div class="custom-team-list" id="custom-allied-teams"></div>
+              <button class="menu-btn custom-add-btn" id="custom-allied-add">+ ADD ALLY</button>
+              <div class="custom-side-total" id="custom-allied-total">0 ships</div>
+            </div>
+          </section>
+          <section class="carousel-step" data-step="1">
+            <div class="custom-side" data-side="hostile">
+              <div class="custom-team-list" id="custom-hostile-teams"></div>
+              <button class="menu-btn custom-add-btn" id="custom-hostile-add">+ ADD ENEMY</button>
+              <div class="custom-side-total" id="custom-hostile-total">0 ships</div>
+            </div>
+          </section>
+          <section class="carousel-step" data-step="2">
+            <div class="custom-review">
+              <div class="custom-review-row" data-side="allied">
+                <span class="custom-review-side">FRIENDLY</span>
+                <span class="custom-review-list" id="custom-review-allied"></span>
+                <span class="custom-review-total" id="custom-review-allied-total">0</span>
+              </div>
+              <div class="custom-review-row" data-side="hostile">
+                <span class="custom-review-side">ENEMY</span>
+                <span class="custom-review-list" id="custom-review-hostile"></span>
+                <span class="custom-review-total" id="custom-review-hostile-total">0</span>
+              </div>
+              <div class="custom-totals" id="custom-grand-total"></div>
+              <p class="custom-review-hint">Step back to tweak fleets, or launch when ready.</p>
+            </div>
+          </section>
         </div>
-        <div class="custom-totals" id="custom-grand-total"></div>
+        <nav class="carousel-nav">
+          <button class="menu-btn carousel-btn" id="custom-prev">← BACK</button>
+          <div class="carousel-dots" id="custom-dots">
+            <span class="carousel-dot active"></span>
+            <span class="carousel-dot"></span>
+            <span class="carousel-dot"></span>
+          </div>
+          <button class="menu-btn carousel-btn carousel-next" id="custom-next">NEXT →</button>
+        </nav>
         <div class="custom-footer">
           <button class="menu-btn cancel-btn" id="custom-cancel">CANCEL</button>
-          <button class="menu-btn start-btn" id="custom-start">START</button>
         </div>
       </div>
     `;
 
+    this._customStep = 0;
+    this._customStepCount = 3;
+    this._customStepEls = screen.querySelectorAll(".carousel-step");
+    this._customStepLabel = screen.querySelector("#custom-step-label");
+    this._customStepTitle = screen.querySelector("#custom-step-title");
+    this._customStepSub = screen.querySelector("#custom-step-sub");
+    this._customDots = screen.querySelectorAll("#custom-dots .carousel-dot");
+    this._customPrevBtn = screen.querySelector("#custom-prev");
+    this._customNextBtn = screen.querySelector("#custom-next");
     this._customAlliedTeamsEl = screen.querySelector("#custom-allied-teams");
     this._customHostileTeamsEl = screen.querySelector("#custom-hostile-teams");
     this._customAlliedAddBtn = screen.querySelector("#custom-allied-add");
@@ -570,6 +757,10 @@ export class MenuSystem {
     this._customAlliedTotal = screen.querySelector("#custom-allied-total");
     this._customHostileTotal = screen.querySelector("#custom-hostile-total");
     this._customGrandTotal = screen.querySelector("#custom-grand-total");
+    this._customReviewAllied = screen.querySelector("#custom-review-allied");
+    this._customReviewHostile = screen.querySelector("#custom-review-hostile");
+    this._customReviewAlliedTotal = screen.querySelector("#custom-review-allied-total");
+    this._customReviewHostileTotal = screen.querySelector("#custom-review-hostile-total");
     // Tracked team-block elements per side so _syncCustomMatch can do
     // incremental updates instead of rebuilding the DOM tree each frame.
     this._customTeamBlocks = { allied: [], hostile: [] };
@@ -580,15 +771,64 @@ export class MenuSystem {
     this._addListener(this._customHostileAddBtn, "click", () => {
       if (this._callbacks.onCustomAddTeam) this._callbacks.onCustomAddTeam("hostile");
     });
+    this._addListener(this._customPrevBtn, "click", () => this._gotoCustomStep(this._customStep - 1));
+    this._addListener(this._customNextBtn, "click", () => {
+      // On the final step the NEXT button doubles as DEPLOY — _gotoCustomStep
+      // swaps its label when reaching the end. Fire onCustomStart in that case.
+      if (this._customStep >= this._customStepCount - 1) {
+        if (this._callbacks.onCustomStart) this._callbacks.onCustomStart();
+      } else {
+        this._gotoCustomStep(this._customStep + 1);
+      }
+    });
     this._addListener(screen.querySelector("#custom-cancel"), "click", () => {
       if (this._callbacks.onCustomClose) this._callbacks.onCustomClose();
-    });
-    this._addListener(screen.querySelector("#custom-start"), "click", () => {
-      if (this._callbacks.onCustomStart) this._callbacks.onCustomStart();
     });
 
     root.appendChild(screen);
     this._screens.custom = screen;
+    // Default visible step (overlay always opens on step 0).
+    this._gotoCustomStep(0);
+  }
+
+  // Carousel step navigation for the Custom overlay. Updates the
+  // visible step + chrome (label, dots, prev/next/start visibility).
+  // Re-entering the overlay resets to step 0 — see showScreen.
+  _gotoCustomStep(idx) {
+    const last = this._customStepCount - 1;
+    if (idx < 0) idx = 0;
+    if (idx > last) idx = last;
+    this._customStep = idx;
+    if (this._customStepEls) {
+      for (const el of this._customStepEls) {
+        const stepIdx = parseInt(el.dataset.step, 10);
+        el.classList.toggle("active", stepIdx === idx);
+      }
+    }
+    if (this._customDots) {
+      for (let i = 0; i < this._customDots.length; i++) {
+        this._customDots[i].classList.toggle("active", i === idx);
+      }
+    }
+    if (this._customStepLabel) {
+      this._customStepLabel.textContent = `STEP ${idx + 1} / ${this._customStepCount}`;
+    }
+    const titles = ["FRIENDLY FORCES", "ENEMY FORCES", "REVIEW & LAUNCH"];
+    const subs = [
+      "Pick faction and fleet for your side",
+      "Pick faction and fleet for the opposition",
+      "Confirm the matchup, then deploy",
+    ];
+    if (this._customStepTitle) this._customStepTitle.textContent = titles[idx] || "";
+    if (this._customStepSub) this._customStepSub.textContent = subs[idx] || "";
+    // Prev hides on first step; Next becomes DEPLOY on the last.
+    const isFirst = idx === 0;
+    const isLast = idx === last;
+    if (this._customPrevBtn) this._customPrevBtn.style.visibility = isFirst ? "hidden" : "";
+    if (this._customNextBtn) {
+      this._customNextBtn.textContent = isLast ? "DEPLOY" : "NEXT →";
+      this._customNextBtn.classList.toggle("deploy-mode", isLast);
+    }
   }
 
   // ---- Run Setup ----------------------------------------------------------
@@ -599,18 +839,50 @@ export class MenuSystem {
     screen.dataset.screen = "runSetup";
     screen.innerHTML = `
       <div class="runsetup-panel">
-        <h2>SELECT FACTION</h2>
-        <p class="runsetup-subtitle">Choose your faction for the Frontier campaign</p>
-        <div class="faction-grid" id="faction-grid"></div>
+        <h2>BEGIN CAREER</h2>
+        <p class="runsetup-subtitle">Terran Frontier Service — Pilot Officer commission</p>
+
+        <div class="runsetup-briefing">
+          <p>You took your wings yesterday. Reaver raids are eating Terran convoys
+             and the Hegemony is testing the border. The Service needs warm bodies
+             in cockpits — you're the warmest one available.</p>
+          <p>One career. One defeat ends it. Bring the war home, or die trying.</p>
+        </div>
+
+        <div class="runsetup-callsign-row">
+          <label for="runsetup-callsign" class="runsetup-label">CALLSIGN</label>
+          <input type="text" id="runsetup-callsign" class="runsetup-callsign-input"
+                 maxlength="12" placeholder="(random)" autocomplete="off" />
+        </div>
+
+        <div class="runsetup-faction-card">
+          <div class="faction-emblem" style="background:#7df;"></div>
+          <div class="faction-name">TERRAN FRONTIER SERVICE</div>
+          <div class="faction-tagline">Citizens, soldiers, pilots.</div>
+        </div>
+
         <div class="runsetup-footer">
           <button class="menu-btn cancel-btn" id="runsetup-cancel">CANCEL</button>
+          <button class="menu-btn start-btn" id="runsetup-begin">REPORT FOR DUTY</button>
         </div>
       </div>
     `;
 
-    this._factionGrid = screen.querySelector("#faction-grid");
+    // Legacy hook left intact: external code that called
+    // _factionGrid.children.length will see zero. The new flow only
+    // uses the begin button.
+    this._factionGrid = null;
+    this._runsetupCallsignInput = screen.querySelector("#runsetup-callsign");
     this._addListener(screen.querySelector("#runsetup-cancel"), "click", () => {
       if (this._callbacks.onRunSetupCancel) this._callbacks.onRunSetupCancel();
+    });
+    this._addListener(screen.querySelector("#runsetup-begin"), "click", () => {
+      const callsign = this._runsetupCallsignInput
+        ? this._runsetupCallsignInput.value.trim().toUpperCase()
+        : "";
+      if (this._callbacks.onRunSetupSelect) {
+        this._callbacks.onRunSetupSelect("terran", { callsign });
+      }
     });
 
     root.appendChild(screen);
@@ -735,6 +1007,42 @@ export class MenuSystem {
     this._screens.event = screen;
   }
 
+  // ---- Promotion ----------------------------------------------------------
+
+  _buildPromotion(root) {
+    const screen = document.createElement("div");
+    screen.className = "menu-screen menu-promotion";
+    screen.dataset.screen = "promotion";
+    screen.innerHTML = `
+      <div class="overlay-panel promotion-panel">
+        <div class="panel-accent-rule"></div>
+        <div class="promotion-eyebrow">FRONTIER COMMAND · COMMENDATION</div>
+        <h2 id="promotion-rank">LIEUTENANT</h2>
+        <div class="promotion-title" id="promotion-title">Flight Leader</div>
+        <p class="promotion-blurb" id="promotion-blurb"></p>
+        <div class="promotion-additions">
+          <div class="promotion-additions-label">JOINING YOUR LINE</div>
+          <div class="promotion-additions-list" id="promotion-additions"></div>
+        </div>
+        <div class="overlay-footer">
+          <button class="menu-btn start-btn" id="promotion-proceed">PROCEED</button>
+        </div>
+      </div>
+    `;
+
+    this._promotionRank = screen.querySelector("#promotion-rank");
+    this._promotionTitle = screen.querySelector("#promotion-title");
+    this._promotionBlurb = screen.querySelector("#promotion-blurb");
+    this._promotionAdditions = screen.querySelector("#promotion-additions");
+
+    this._addListener(screen.querySelector("#promotion-proceed"), "click", () => {
+      if (this._callbacks.onPromotionDismiss) this._callbacks.onPromotionDismiss();
+    });
+
+    root.appendChild(screen);
+    this._screens.promotion = screen;
+  }
+
   // -------------------------------------------------------------------------
   // Event listener helper (tracked for cleanup)
   // -------------------------------------------------------------------------
@@ -815,6 +1123,9 @@ export class MenuSystem {
 
     // --- Event ---
     this._syncEvent(menuState);
+
+    // --- Promotion ---
+    this._syncPromotion(menuState);
   }
 
   // ---- sync: Main Menu Chips ----------------------------------------------
@@ -856,19 +1167,44 @@ export class MenuSystem {
     if (this._chips.race.length) this._updateChipSelection(this._chips.race, s.selectedRace);
     if (this._chips.fleet.length) this._updateChipSelection(this._chips.fleet, s.selectedFleet);
 
-    // Hide size/race/fleet for modes that own their own setup. Frontier
-    // gets faction + map size from the run itself; Custom owns rosters
-    // and races inside its CONFIGURE overlay.
-    if (this._sectionEls) {
-      const mode = s.selectedMode;
-      const isRoguelite = mode === "roguelite";
-      const isCustom = mode === "custom";
-      const hideAll = isRoguelite;
-      const hideExtras = isRoguelite || isCustom;
-      if (this._sectionEls.size) this._sectionEls.size.style.display = hideAll ? "none" : "";
-      if (this._sectionEls.race) this._sectionEls.race.style.display = hideExtras ? "none" : "";
-      if (this._sectionEls.fleet) this._sectionEls.fleet.style.display = hideExtras ? "none" : "";
+    // Track active mode so the carousel knows which intermediate steps
+    // to skip. Frontier and Custom run their own deeper setup.
+    const modeChanged = this._lastSelectedMode !== s.selectedMode;
+    this._lastSelectedMode = s.selectedMode;
+    // If we switched modes while sitting on a step that the new mode
+    // skips, slide back to the start so the carousel doesn't get stuck
+    // on a hidden step.
+    if (modeChanged && this._mainStepEls) {
+      const visible = this._visibleMainSteps();
+      if (!visible.includes(this._mainStep)) this._gotoMainStep(visible[0]);
+      else this._gotoMainStep(this._mainStep); // refresh dots / label
     }
+
+    // Populate the review step.
+    if (this._mainReviewEl) this._renderMainReview(s);
+  }
+
+  // Build the review-step summary so the player can sanity-check the
+  // matchup before tapping DEPLOY. Renders a compact "key: value" list
+  // of whatever options the active mode actually consumed.
+  _renderMainReview(s) {
+    const mode = s.selectedMode;
+    const rows = [];
+    const modeMeta = (s.modeOptions || []).find((m) => m.key === mode);
+    rows.push({ k: "MODE", v: modeMeta ? modeMeta.label : mode });
+    if (mode !== "roguelite") {
+      const size = (s.mapSizes || []).find((sz) => sz.key === s.selectedSize);
+      if (size) rows.push({ k: "MAP", v: `${size.label} · ${size.mapW} × ${size.mapH}` });
+    }
+    if (mode !== "roguelite" && mode !== "custom") {
+      const race = s.races ? s.races[s.selectedRace] : null;
+      if (race) rows.push({ k: "FACTION", v: race.name });
+      const fleet = (s.fleetOptions || []).find((f) => f.key === s.selectedFleet);
+      if (fleet) rows.push({ k: "FLEET", v: `${fleet.label} (×${fleet.mul})` });
+    }
+    this._mainReviewEl.innerHTML = rows.map(
+      (r) => `<div class="main-review-row"><span class="main-review-k">${r.k}</span><span class="main-review-v">${r.v}</span></div>`
+    ).join("");
   }
 
   // ---- sync: START Button -------------------------------------------------
@@ -1067,8 +1403,24 @@ export class MenuSystem {
     let totalsColor = "#9bd";
     if (grand > 400) totalsColor = "#f97";
     else if (grand > 200) totalsColor = "#fc8";
-    this._customGrandTotal.textContent = `Total fleet \u00b7 Friendly ${blueTotal}  \u00b7  Enemy ${redTotal}  \u00b7  ${grand} ships`;
+    this._customGrandTotal.textContent = `Total fleet \u00b7 ${grand} ships`;
     this._customGrandTotal.style.color = totalsColor;
+
+    // Review-step summary lines: per-side faction breakdown so the
+    // player can sanity-check the matchup before launching without
+    // having to step back through both editor pages.
+    const fmtSide = (teams) => {
+      if (!teams || teams.length === 0) return "no fleet";
+      return teams.map((t) => {
+        const race = s.races && s.races[t.race] ? s.races[t.race].name : t.race;
+        const n = Object.values(t.counts || {}).reduce((a, b) => a + (b || 0), 0);
+        return `${race} \u00d7 ${n}`;
+      }).join("  \u00b7  ");
+    };
+    if (this._customReviewAllied) this._customReviewAllied.textContent = fmtSide(custom.blueTeams);
+    if (this._customReviewHostile) this._customReviewHostile.textContent = fmtSide(custom.redTeams);
+    if (this._customReviewAlliedTotal) this._customReviewAlliedTotal.textContent = `${blueTotal} ships`;
+    if (this._customReviewHostileTotal) this._customReviewHostileTotal.textContent = `${redTotal} ships`;
   }
 
   _buildSliders(container, side, accent, custom, teamIdx = 0) {
@@ -1119,35 +1471,10 @@ export class MenuSystem {
 
   // ---- sync: Run Setup ----------------------------------------------------
 
-  _syncRunSetup(s) {
-    const factions = s.factions || [];
-    if (!this._factionGrid.children.length && factions.length) {
-      this._factionGrid.innerHTML = "";
-      this._factionCards = [];
-      for (const key of factions) {
-        const race = s.races ? s.races[key] : null;
-        const meta = s.factionMeta ? s.factionMeta[key] : null;
-        const card = document.createElement("button");
-        card.className = "faction-card";
-        card.dataset.key = key;
-        const accent = race ? race.accent : "#7df";
-        const wins = meta ? (meta.wins || 0) : 0;
-        const winsText = wins > 0
-          ? `&#9733; ${wins} VICTOR${wins > 1 ? "IES" : "Y"}`
-          : "Unbroken";
-        card.innerHTML = `
-          <div class="faction-emblem" style="background:${accent};"></div>
-          <div class="faction-name">${race ? race.name.toUpperCase() : key.toUpperCase()}</div>
-          <div class="faction-tagline">${race ? race.tagline : ""}</div>
-          <div class="faction-record">${winsText}</div>
-        `;
-        this._addListener(card, "click", () => {
-          if (this._callbacks.onRunSetupSelect) this._callbacks.onRunSetupSelect(key);
-        });
-        this._factionGrid.appendChild(card);
-        this._factionCards.push({ el: card, key });
-      }
-    }
+  _syncRunSetup(_s) {
+    // Static screen: built once in _buildRunSetup, no per-frame sync
+    // needed. Career is locked to Terran; the only player input is the
+    // callsign textbox + REPORT FOR DUTY button.
   }
 
   // ---- sync: Battle Choice ------------------------------------------------
@@ -1270,5 +1597,30 @@ export class MenuSystem {
       });
       this._eventChoices.appendChild(btn);
     }
+  }
+
+  // ---- sync: Promotion ----------------------------------------------------
+
+  _syncPromotion(s) {
+    const promo = s.promotion;
+    if (!promo) return;
+    this._promotionRank.textContent = (promo.rank || "").toUpperCase();
+    this._promotionTitle.textContent = promo.title || "";
+    this._promotionBlurb.textContent = promo.blurb || "";
+
+    const added = promo.added || {};
+    const capitals = added.capitals || [];
+    const fighters = added.fighter || 0;
+    const bombers = added.bomber || 0;
+
+    const parts = [];
+    for (const c of capitals) {
+      parts.push(`<div class="promotion-addition-row promotion-addition-capital">+ ${capitalDisplayName(c.klass).toUpperCase()}</div>`);
+    }
+    if (fighters > 0) parts.push(`<div class="promotion-addition-row">+ ${fighters} fighter${fighters > 1 ? "s" : ""}</div>`);
+    if (bombers > 0)  parts.push(`<div class="promotion-addition-row">+ ${bombers} bomber${bombers > 1 ? "s" : ""}</div>`);
+    if (parts.length === 0) parts.push(`<div class="promotion-addition-row promotion-addition-empty">No new units</div>`);
+
+    this._promotionAdditions.innerHTML = parts.join("");
   }
 }
