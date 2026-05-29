@@ -43,6 +43,8 @@ export const RACES = {
     tagline: "Balanced",
     accent: "#7df",
     fighter: {}, bomber: {}, frigate: {}, cruiser: {}, battleship: {}, carrier: {},
+    // Terran sits closest to the 50% line in sims — left untouched as
+    // the balance baseline.
     roster: { fighter: 24, bomber: 6, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 },
     station: {
       spread: 260,
@@ -68,14 +70,19 @@ export const RACES = {
     tagline: "Swarm",
     accent: "#c6f",
     fighter: {
-      hp: 22, maxSpeed: 460, turnRate: 3.6,
+      // Tuning pass: fighter speed +30% (460→598) and damage +30%
+      // (3→3.9) to widen Reavers' fast-glass-cannon role gap from
+      // Terran.
+      hp: 22, maxSpeed: 598, turnRate: 3.6,
       shield: { max: 12, regen: 9, regenDelay: 2.5 },
-      weapon: { damage: 3, cooldown: 0.14, capacity: 24, reloadTime: 0.5 },
+      weapon: { damage: 3.9, cooldown: 0.14, capacity: 24, reloadTime: 0.5 },
     },
     bomber: {
       hp: 50, maxSpeed: 260, turnRate: 1.8,
       shield: { max: 20, regen: 6, regenDelay: 3 },
-      missilePods: { count: 2, cooldown: 9.0, damage: 55, projectileSpeed: 320 },
+      // Tuning pass: missile projectileSpeed +40% (320→448) — Reavers'
+      // pod salvos arrive much faster, harder for PD to swat.
+      missilePods: { count: 2, cooldown: 9.0, damage: 55, projectileSpeed: 448 },
     },
     frigate: {
       hp: 100, maxSpeed: 180,
@@ -92,7 +99,11 @@ export const RACES = {
     carrier: {
       replenish: { fighter: 12.0, bomber: 24.0 },
     },
-    roster: { fighter: 36, bomber: 9, frigate: 6, cruiser: 1, battleship: 0, carrier: 1 },
+    // Reavers swarmed at default counts but had no battleship and only
+    // 1 cruiser — sims showed them losing ~87% of skirmishes against
+    // Hegemony. Bumped fighter+bomber+frigate ~33%, added 1 battleship,
+    // 2nd cruiser. Stays a glass-cannon swarm with one heavy anchor.
+    roster: { fighter: 48, bomber: 12, frigate: 8, cruiser: 2, battleship: 1, carrier: 1 },
     // Reavers: more, smaller nodes — a bristling spike-cluster instead of
     // a fortress. Lots of missile pods, no heavy laser.
     station: {
@@ -150,7 +161,10 @@ export const RACES = {
       hp: 1500, maxSpeed: 35,
       shield: { max: 700 }, armor: { max: 800 },
     },
-    roster: { fighter: 18, bomber: 4, frigate: 5, cruiser: 3, battleship: 2, carrier: 1 },
+    // Hegemony was over-dominant (88% win rate at default rosters)
+    // due to 2 BB + 3 cruisers. Trim to 1 BB + 2 cruisers — still the
+    // heaviest capital line of any race, just less overwhelming.
+    roster: { fighter: 18, bomber: 4, frigate: 5, cruiser: 2, battleship: 1, carrier: 1 },
     // Hegemony: 5 hardened nodes. Big armor pools, biggest core.
     station: {
       spread: 280,
@@ -175,6 +189,142 @@ export const RACES = {
           mods: { hp: 1000, radius: 60,
                   shield: { max: 400 }, armor: { max: 500, wearRate: 0.42 },
                   pdCannons: pd(6, { damage: 9 }) } },
+      ],
+    },
+  },
+  thren: {
+    key: "thren",
+    name: "Thren",
+    tagline: "Bio-swarm",
+    // Bright bioluminescent green so the accent reads against the
+    // organic flesh-tinted hull base.
+    accent: "#7fb",
+    // Light, fast, fragile — Thren fighters are the most agile in the
+    // game but cannot trade. Slightly lower HP than Reavers; still the
+    // smallest strike-craft hitbox in the game so they read as slippery.
+    fighter: {
+      // Tuning pass: weapon damage +20% (3→3.6). Thren fighters
+      // already had the highest fire rate (0.12 s cd); the bump
+      // tilts them further toward "the swarm hits harder than it
+      // looks like it should". Radius bumped 8→16 to match the 2026-
+      // 05-27 strike-craft visibility pass — still meaningfully
+      // smaller than Terran's 24, but no longer invisible at zoom 0.5.
+      hp: 18, maxSpeed: 500, turnRate: 4.0,
+      radius: 16,
+      shield: { max: 8, regen: 6, regenDelay: 3.0 },
+      weapon: {
+        damage: 3.6, cooldown: 0.12, projectileSpeed: 820,
+        spread: 0.05, range: 850,
+        capacity: 28, reloadTime: 0.5,
+      },
+      missile: { damage: 26, cooldown: 8.0 },
+    },
+    // Mid-weight strike bombers — softer than Hegemony but with
+    // dense pod racks. The organic-pod missiles travel slightly
+    // faster than baseline.
+    bomber: {
+      // Tuning pass: missilePods damage −75% (75→19). Thren bombers
+      // were dishing too much when stacked with the carrier's cannon;
+      // damage gutted so the role is "swarm support" not "burst-kill".
+      // Radius bumped 15→22 — see fighter note above; still smaller
+      // than Terran's 28, in line with the rest of the fleet visibly.
+      hp: 60, maxSpeed: 250, turnRate: 1.9,
+      radius: 22,
+      shield: { max: 90, regen: 14 },
+      missilePods: {
+        count: 5, damage: 19, cooldown: 7.0,
+        projectileSpeed: 460, turnRate: 2.6,
+      },
+    },
+    // Frigate / cruiser / battleship are intentionally absent from
+    // the Thren roster — they don't field those classes. Empty
+    // overrides keep resolveSpec safe if a probe ever asks for one.
+    frigate: {}, cruiser: {}, battleship: {},
+    // MASSIVE bio-carrier — the Thren centrepiece. Two of them
+    // act as the race's anchors since Thren fields NO BB / cruiser
+    // / frigate / station — pure swarm + carrier doctrine. Each
+    // carrier carries a cruiser-grade bow cannon, dense PD ring,
+    // heavy shield, missile pods, and rapid swarm replenishment.
+    //
+    // Tuning history: v1 (2 carriers + full stats) → 80% overall
+    // (broken OP). v2 (1 carrier + nerfed stats) → 10% (broken UP).
+    // v3 (1 carrier + restored stats + 34 fighters) → 10% still.
+    // v4 (2 carriers + v2's nerfed per-carrier stats + 16 fighters)
+    // — two slightly-weaker carriers + smaller starting swarm so
+    // total fleet power lands between v1 and v3.
+    carrier: {
+      // Tuning pass: radius +100% (220→440). The Thren carrier is now
+      // genuinely *massive* — over 2× any other carrier in the game.
+      // This pushes the engagement footprint up, the visible target
+      // area up, and (incidentally) gives PD turrets a much bigger
+      // ring radius to occupy.
+      hp: 1900, maxSpeed: 32, turnRate: 0.10,
+      radius: 440,
+      shield: { max: 1200, regen: 34, regenDelay: 4.5 },
+      armor: { max: 900, wearRate: 0.33 },
+      pdCannons: {
+        count: 16, damage: 9, cooldown: 0.18,
+        projectileSpeed: 1040, range: 600,
+        projectileRadius: 3, projectileColors: { blue: "#cef", red: "#fda" },
+      },
+      missilePods: {
+        count: 3, damage: 70, cooldown: 9.0,
+        projectileSpeed: 360, range: 2200, ttl: 7.0,
+        turnRate: 2.0, hp: 4, radius: 8, acquireRange: 2400,
+        colors: { blue: "#9fd", red: "#fc8" },
+      },
+      // Bow cannon — single heavy round per cycle.
+      // Buff pass: damage ×4 (55→220) + projectile speed ×1.3 (560→728)
+      // so the carrier's signature shot hits like a capital killer and
+      // is far harder to sidestep. Cannon module is also ×3 tankier (see
+      // modules.js) so the gun survives long enough to land the volume.
+      firingMode: "forward",
+      weapon: {
+        damage: 220, cooldown: 3.2, projectileSpeed: 728, range: 1500,
+        spread: 0.02, muzzles: 1, muzzleSpread: 0,
+        projectileRadius: 12,
+        projectileColors: { blue: "#9fd", red: "#fc6" },
+      },
+      cannonTurnRate: 0.55,
+      cannonArc: Math.PI * 0.55,
+      // Tuning pass: spawn rate +100% — interval halved (13→6.5s
+      // fighters, 28→14s bombers). Two carriers each pumping out a
+      // fighter every 6.5s = ~18 new fighters per minute per side.
+      // Comfortably the fastest replenishment in the game.
+      replenish: { fighter: 6.5, bomber: 14 },
+    },
+    // 24 fighters + 6 bombers + 2 massive carriers. v4 dropped the
+    // starting swarm too far (18+4 → Thren at 10%); v5 walks it
+    // back up to the v1 starting numbers but keeps v4's slightly
+    // nerfed per-carrier stats and faster replenishment. Total
+    // starting ship count 32 — close to other races' 31–38.
+    roster: { fighter: 24, bomber: 6, frigate: 0, cruiser: 0, battleship: 0, carrier: 2 },
+    // Defend-mode station — a single organic "spawn pool" core.
+    // Keeps the race playable in defend mode without inventing
+    // multi-node structure-bio aesthetics.
+    station: {
+      spread: 220,
+      nodes: [
+        { name: "Brood Core",   offset: { x:  0, y:  0 },
+          mods: { hp: 1500, radius: 110,
+                  shield: { max: 900, regen: 32, regenDelay: 4 }, armor: { max: 700 },
+                  pdCannons: pd(8, { damage: 7 }), missilePods: pods(3, { damage: 70 }) } },
+        { name: "Spore Sac N",  offset: { x:  0, y:  1 },
+          mods: { hp: 700, radius: 60,
+                  shield: { max: 400, regen: 22 }, armor: { max: 240 },
+                  pdCannons: pd(4, { damage: 7 }) } },
+        { name: "Spore Sac S",  offset: { x:  0, y: -1 },
+          mods: { hp: 700, radius: 60,
+                  shield: { max: 400, regen: 22 }, armor: { max: 240 },
+                  pdCannons: pd(4, { damage: 7 }) } },
+        { name: "Spore Sac E",  offset: { x:  1, y:  0 },
+          mods: { hp: 700, radius: 60,
+                  shield: { max: 400, regen: 22 }, armor: { max: 240 },
+                  pdCannons: pd(3, { damage: 7 }), missilePods: pods(1, { damage: 70 }) } },
+        { name: "Spore Sac W",  offset: { x: -1, y:  0 },
+          mods: { hp: 700, radius: 60,
+                  shield: { max: 400, regen: 22 }, armor: { max: 240 },
+                  pdCannons: pd(3, { damage: 7 }), missilePods: pods(1, { damage: 70 }) } },
       ],
     },
   },
@@ -215,7 +365,10 @@ export const RACES = {
       shield: { max: 850, regen: 28, regenDelay: 3.5 },
       replenish: { fighter: 22, bomber: 40 },
     },
-    roster: { fighter: 18, bomber: 5, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 },
+    // Voidsworn at 38% needed a small bump. +1 cruiser brings the
+    // capital line up to match Hegemony's new shape, preserving the
+    // shield-tank flavour without breaking the per-ship feel.
+    roster: { fighter: 18, bomber: 5, frigate: 4, cruiser: 3, battleship: 1, carrier: 1 },
     // Voidsworn: huge shields with fast regen, premium beam weapons. Fewer
     // nodes but each one is shield-tanky.
     station: {

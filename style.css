@@ -1,3 +1,18 @@
+/* Global border-box reset.
+ * Audit (2026-05-23) found every menu/overlay container — home,
+ * play hub, skirmish, custom-overlay, run-setup, settings — was
+ * overflowing the iPhone-13 viewport by 2× its horizontal padding
+ * (e.g. .skirmish-body computed at 426px in a 390px viewport).
+ * Cause: containers declared `width: 100%` with the default
+ * `box-sizing: content-box`, so padding was added on top of the
+ * 100% width instead of subtracted from it. Setting border-box
+ * globally fixes every overflow at once and is the modern web
+ * default; existing rules that already declared border-box are
+ * unaffected. */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -70,7 +85,11 @@ html, body {
 
   /* HUD */
   --hud-strip-height: 56px;
-  --fleet-panel-width: clamp(260px, 24vw, 320px);
+  /* No longer a right sidebar — tab bar is at bottom now (Tier 41).
+     Keep at 0 so legacy `right: var(--fleet-panel-width)` rules
+     align flush instead of leaving a gap. */
+  --fleet-panel-width: 0px;
+  --starmap-tabbar-height: 72px;
 }
 
 /* -----------------------------------------------------------
@@ -94,6 +113,28 @@ html, body {
   inset: 0;
   background: var(--starmap-bg);
   overflow: hidden;
+}
+
+/* Drifting nebula clouds — layered blurred colour fields that slowly
+   pan + breathe, giving the void depth behind the node lattice. */
+.starmap-nebula {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 30% at 22% 28%, rgba(90, 70, 180, 0.30), transparent 70%),
+    radial-gradient(42% 34% at 78% 64%, rgba(40, 120, 170, 0.26), transparent 72%),
+    radial-gradient(30% 26% at 60% 18%, rgba(170, 60, 120, 0.20), transparent 70%),
+    radial-gradient(34% 30% at 38% 80%, rgba(50, 100, 200, 0.22), transparent 72%);
+  filter: blur(8px);
+  opacity: 0.9;
+  animation: nebula-drift 60s ease-in-out infinite alternate;
+}
+
+@keyframes nebula-drift {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(2.5%, -2%) scale(1.06); }
+  100% { transform: translate(-2%, 2.5%) scale(1.02); }
 }
 
 /* Subtle grid pattern */
@@ -287,8 +328,30 @@ html, body {
   pointer-events: auto;
   cursor: pointer;
   will-change: transform;
-  animation: node-bob 3s ease-in-out infinite;
+  animation: node-bob var(--node-bob-dur, 3s) ease-in-out infinite;
   z-index: 2;
+}
+/* Per-node hue variation — shifts the body/glow/decoration colour
+   family so no two same-type nodes read identically. Scoped to the
+   coloured parts so the glyph + flag text stay neutral/legible. */
+.node-core,
+.node-glow,
+.node-ring,
+.node-corona,
+.node-pring,
+.node-orbit-dot {
+  filter: hue-rotate(var(--node-hue, 0deg));
+}
+/* Lit-sphere highlight — gives every core a sense of volume + light
+   direction so it reads as a celestial body, not a flat shape. Clipped
+   to the core's clip-path shape. */
+.node-core::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 33% 28%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.08) 45%, transparent 62%);
+  pointer-events: none;
 }
 
 .starmap-node:hover {
@@ -321,9 +384,49 @@ html, body {
   justify-content: center;
   font-size: 18px;
   font-weight: bold;
-  color: rgba(20, 16, 12, 0.9);
+  color: rgba(20, 16, 12, 0.95);
   pointer-events: none;
   z-index: 3;
+}
+.node-glyph svg {
+  display: block;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.5));
+}
+/* Suppress legacy text-letter glyphs (B/E/?/R/etc) now that SVG
+   icons are rendered inside .node-glyph (Tier 41). */
+.node-glyph::after { content: none !important; }
+
+/* Node flag label — small text below the node showing boss/ace/
+   vendor name. Polish-pass addition (Tier 41) so the player doesn't
+   have to hover to read which star is which. */
+.node-flag {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  color: rgba(220, 230, 240, 0.7);
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 4;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.85), 0 0 8px rgba(0, 0, 0, 0.6);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.node-boss .node-flag {
+  font-size: 10px;
+  color: #ffd680;
+  text-shadow: 0 0 6px rgba(255, 198, 102, 0.45), 0 0 8px rgba(0, 0, 0, 0.85);
+}
+.node-elite .node-flag {
+  color: #fdb;
+}
+.node-resupply .node-flag {
+  color: #9df;
 }
 
 .node-ring {
@@ -558,8 +661,8 @@ html, body {
 
 /* Gentle bob per node */
 @keyframes node-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+  0%, 100% { transform: translateY(0) scale(var(--node-scale, 1)); }
+  50% { transform: translateY(-4px) scale(var(--node-scale, 1)); }
 }
 
 /* Battle heartbeat pulse */
@@ -597,6 +700,123 @@ html, body {
 @keyframes breathe-glow {
   0%, 100% { box-shadow: 0 0 12px var(--current-halo); }
   50% { box-shadow: 0 0 24px var(--current-halo), 0 0 48px var(--current-halo); }
+}
+
+/* -----------------------------------------------------------
+   8b. Procedural node decorations — orbit / ring / speckles /
+   corona. Toggled per-node by nodeVisualVariant() in starmap.js
+   so each node reads as its own little star system.
+   ----------------------------------------------------------- */
+
+/* Star corona — radiating spikes behind the core. Two crossed
+   conic flares + a soft bloom, slowly counter-rotating. */
+.node-corona {
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    conic-gradient(from 0deg,
+      transparent 0deg, currentColor 6deg, transparent 18deg,
+      transparent 84deg, currentColor 90deg, transparent 102deg,
+      transparent 168deg, currentColor 174deg, transparent 186deg,
+      transparent 252deg, currentColor 258deg, transparent 270deg,
+      transparent 342deg, currentColor 348deg, transparent 360deg);
+  color: inherit;
+  opacity: 0.35;
+  -webkit-mask-image: radial-gradient(circle, transparent 28%, #000 42%, transparent 78%);
+  mask-image: radial-gradient(circle, transparent 28%, #000 42%, transparent 78%);
+  animation: corona-spin 14s linear infinite;
+  z-index: 0;
+}
+.node-battle .node-corona { color: var(--battle-color); }
+.node-elite  .node-corona { color: var(--elite-color); }
+.node-boss   .node-corona { color: var(--boss-color); opacity: 0.5; }
+
+/* Planetary ring — a thin tilted ellipse encircling the body. */
+.node-pring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  color: var(--resupply-color);
+  opacity: 0.7;
+  pointer-events: none;
+  transform: rotate(var(--ring-tilt, -30deg)) scaleY(0.34);
+  box-shadow: 0 0 6px currentColor;
+  z-index: 1;
+}
+.node-boss     .node-pring { color: var(--boss-color); inset: -6px; border-width: 2.5px; }
+.node-elite    .node-pring { color: var(--elite-color); }
+.node-resupply .node-pring { color: var(--resupply-color); }
+
+/* Asteroid speckles — a scatter of motes drifting around the node. */
+.node-speckles {
+  position: absolute;
+  inset: -6px;
+  pointer-events: none;
+  animation: speckle-drift 18s linear infinite;
+  z-index: 1;
+}
+.node-speckles::before,
+.node-speckles::after {
+  content: "";
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgba(200, 210, 230, 0.9);
+  top: 50%;
+  left: 50%;
+}
+.node-speckles::before {
+  box-shadow:
+    10px -14px 0 0 rgba(190,200,220,0.8),
+    -16px 6px 0 0 rgba(160,175,200,0.7),
+    14px 12px 0 0 rgba(200,210,230,0.85),
+    -8px -12px 0 0 rgba(170,185,205,0.6);
+}
+.node-speckles::after {
+  box-shadow:
+    18px 2px 0 0 rgba(180,190,215,0.7),
+    -14px -10px 0 0 rgba(200,210,230,0.8),
+    6px 16px 0 0 rgba(160,175,200,0.6),
+    -18px 10px 0 0 rgba(190,200,220,0.75);
+}
+
+/* Orbiting satellite — a small body revolving the node. */
+.node-orbit {
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: orbit-spin var(--orbit-dur, 9s) linear infinite;
+  z-index: 4;
+}
+.node-orbit-rev .node-orbit { animation-direction: reverse; }
+.node-orbit-dot {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: #dff;
+  box-shadow: 0 0 5px #9cf, 0 0 9px rgba(150,210,255,0.6);
+}
+
+@keyframes corona-spin {
+  from { transform: rotate(var(--node-spin, 0deg)); }
+  to   { transform: rotate(calc(var(--node-spin, 0deg) + 360deg)); }
+}
+@keyframes orbit-spin {
+  from { transform: rotate(var(--node-spin, 0deg)); }
+  to   { transform: rotate(calc(var(--node-spin, 0deg) + 360deg)); }
+}
+@keyframes speckle-drift {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 /* -----------------------------------------------------------
@@ -672,6 +892,64 @@ html, body {
   margin-left: auto;
 }
 
+/* Tier 16: per-capital sub-line — class + captain. Reads as
+   "Cruiser · Capt. Iverra" under the ship name. */
+.fleet-capital-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.4px;
+  margin-left: 24px;
+}
+.fleet-capital-class {
+  text-transform: uppercase;
+}
+.fleet-capital-captain::before {
+  content: "·";
+  margin-right: 4px;
+  color: var(--text-secondary);
+}
+.fleet-capital-captain {
+  font-style: italic;
+}
+.fleet-capital-trait {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  background: rgba(120, 200, 255, 0.16);
+  color: #aef;
+  border-radius: 2px;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+/* Captain level stars in the fleet panel row (Tier 32). */
+.fleet-capital-rank {
+  margin-left: 4px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: #fc6;
+  text-shadow: 0 0 6px rgba(255, 198, 102, 0.5);
+}
+
+/* Clickable capital row — hover + active visual feedback. */
+.fleet-capital-clickable {
+  cursor: pointer;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+.fleet-capital-clickable:hover {
+  background: rgba(120, 200, 255, 0.10);
+}
+.fleet-capital-clickable:active {
+  background: rgba(120, 200, 255, 0.20);
+}
+
 .fleet-hp-bar-bg {
   width: 100%;
   height: 6px;
@@ -741,6 +1019,125 @@ html, body {
   margin-bottom: 6px;
   text-transform: uppercase;
 }
+
+.fleet-panel-dossier {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fleet-dossier-item {
+  padding: 6px 8px;
+  border-radius: 3px;
+  border-left: 3px solid #555;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.fleet-dossier-item .dossier-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.fleet-dossier-item .dossier-name {
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.4px;
+}
+
+.fleet-dossier-item .dossier-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-secondary);
+}
+
+.fleet-dossier-item .dossier-detail {
+  color: #cbd;
+  margin-top: 2px;
+  font-size: 10.5px;
+}
+
+.fleet-dossier-ally    { border-left-color: #5cf; }
+.fleet-dossier-rival   { border-left-color: #f57; }
+.fleet-dossier-intel   { border-left-color: #fe8; }
+.fleet-dossier-memorial{ border-left-color: #ac9; }
+.fleet-dossier-note    { border-left-color: #888; }
+
+/* Career log (Tier 18) — chronological strip under the dossier.
+   Each line shows the act tag + entry text, tinted by kind. */
+.fleet-panel-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.fleet-log-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 2px solid #555;
+  border-radius: 2px;
+}
+.fleet-log-item .log-act {
+  font-size: 10px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  letter-spacing: 0.6px;
+  flex-shrink: 0;
+}
+.fleet-log-item .log-text {
+  color: var(--text-primary);
+}
+.fleet-log-boss      { border-left-color: #fc6; }
+.fleet-log-rival     { border-left-color: #f57; }
+.fleet-log-ace       { border-left-color: #ec7; }
+.fleet-log-arc       { border-left-color: #6cf; }
+.fleet-log-promotion { border-left-color: #aef; }
+.fleet-log-note      { border-left-color: #888; }
+
+/* Memoir lines on the memorial wall. Same kind tinting as the
+   live career log but quieter — these are completed careers. */
+.memorial-row-memoir {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.memorial-row-memoir .memoir-line {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  padding-left: 8px;
+  border-left: 2px solid #555;
+  line-height: 1.35;
+}
+.memorial-row-memoir .memoir-act {
+  display: inline-block;
+  font-weight: bold;
+  margin-right: 4px;
+  letter-spacing: 0.6px;
+  color: var(--text-primary);
+}
+.memoir-boss      { border-left-color: #fc6 !important; }
+.memoir-rival     { border-left-color: #f57 !important; }
+.memoir-ace       { border-left-color: #ec7 !important; }
+.memoir-arc       { border-left-color: #6cf !important; }
+.memoir-promotion { border-left-color: #aef !important; }
+.memoir-note      { border-left-color: #888 !important; }
 
 /* -----------------------------------------------------------
    12. Header HUD — top strip
@@ -845,7 +1242,518 @@ html, body {
 }
 
 /* -----------------------------------------------------------
-   13. Footer buttons
+   Tier 41 — Bottom tab bar + tab panel + overflow menu
+   ----------------------------------------------------------- */
+.starmap-tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--starmap-tabbar-height);
+  background: linear-gradient(180deg, rgba(8, 14, 24, 0.92), rgba(4, 8, 14, 0.96));
+  border-top: 1px solid rgba(120, 200, 255, 0.18);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  z-index: 25;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.32);
+}
+.starmap-tab-bar .tab-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  border-top: 2px solid transparent;
+}
+.starmap-tab-bar .tab-btn:hover {
+  background: rgba(120, 200, 255, 0.06);
+  color: var(--text-primary);
+}
+.starmap-tab-bar .tab-btn.active {
+  color: #aef;
+  border-top-color: #6cf;
+  background: rgba(120, 200, 255, 0.10);
+}
+.starmap-tab-bar .tab-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.starmap-tab-bar .tab-label {
+  font-size: 9.5px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+}
+
+/* Tab content overlay — slides up over the map. */
+.starmap-tab-panel {
+  position: fixed;
+  top: var(--hud-strip-height);
+  left: 0;
+  right: 0;
+  bottom: var(--starmap-tabbar-height);
+  background: linear-gradient(180deg, rgba(8, 14, 24, 0.95), rgba(4, 8, 14, 0.98));
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+.starmap-tab-panel.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.starmap-tab-panel[aria-hidden="true"] {
+  display: none;
+}
+.tab-panel-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.15);
+  gap: 12px;
+}
+.tab-back-btn {
+  background: rgba(120, 200, 255, 0.10);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.30);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.tab-back-btn:hover {
+  background: rgba(120, 200, 255, 0.22);
+  color: #fff;
+}
+.tab-panel-title {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 2.4px;
+  color: #fff;
+  font-weight: bold;
+}
+.tab-panel-spacer { flex: 1; }
+.tab-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Card containers used inside tabs. */
+.td-card {
+  background: rgba(8, 14, 24, 0.55);
+  border: 1px solid rgba(120, 200, 255, 0.15);
+  border-radius: 6px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.td-eyebrow {
+  font-size: 9.5px;
+  letter-spacing: 2px;
+  color: var(--text-secondary);
+  font-weight: bold;
+}
+.td-headline {
+  font-size: 22px;
+  letter-spacing: 2px;
+  font-weight: bold;
+  color: #fff;
+}
+.td-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.4px;
+}
+.td-bignum {
+  font-size: 32px;
+  color: #ffd680;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+.td-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.td-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.td-chip {
+  padding: 4px 10px;
+  background: rgba(120, 200, 255, 0.16);
+  color: #aef;
+  border-radius: 2px;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+.td-muted {
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 12px;
+}
+.td-statgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+}
+.td-statgrid > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.td-statgrid > div > span { color: var(--text-secondary); }
+.td-statgrid > div > b { color: #fff; }
+.td-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  text-align: center;
+  padding: 12px;
+}
+
+/* List rows shared across tabs (commanders, fleet, rivals). */
+.td-row {
+  background: rgba(8, 14, 24, 0.55);
+  border: 1px solid rgba(120, 200, 255, 0.12);
+  border-radius: 4px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.td-row + .td-row { margin-top: 6px; }
+.td-row-clickable {
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.td-row-clickable:hover {
+  border-color: rgba(120, 200, 255, 0.45);
+  transform: translateX(2px);
+}
+.td-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.td-row-name {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.4px;
+}
+.td-row-rank {
+  font-size: 11px;
+  color: #fc6;
+  text-shadow: 0 0 6px rgba(255, 198, 102, 0.4);
+}
+.td-row-pct {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+  letter-spacing: 0.6px;
+}
+.td-row-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.td-row-class {
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.td-row-captain {
+  font-style: italic;
+}
+.td-row-trait {
+  margin-left: auto;
+  padding: 1px 6px;
+  font-size: 9px;
+  background: rgba(120, 200, 255, 0.16);
+  color: #aef;
+  border-radius: 2px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+/* Commander perks (level-up picks) in the COMMANDERS dossier tab. */
+.td-perk-banner {
+  margin: 0 0 8px;
+  padding: 5px 8px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0a1420;
+  background: linear-gradient(90deg, #ffd680, #ffb347);
+  border-radius: 4px;
+  font-weight: bold;
+}
+.td-row-wingcmd { border-left: 2px solid rgba(120, 200, 255, 0.35); }
+.td-perk-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 2px;
+}
+.td-perk-chip {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(150, 240, 200, 0.16);
+  color: #9af0c8;
+  border: 1px solid rgba(150, 240, 200, 0.35);
+}
+.td-perk-pick-label {
+  margin: 6px 0 3px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: #ffd680;
+  font-weight: bold;
+}
+.td-perk-pick-row { display: flex; flex-direction: column; gap: 4px; }
+.td-perk-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid #3a7bb0;
+  border-radius: 4px;
+  background: rgba(8, 32, 58, 0.7);
+  color: #d6f1ff;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.td-perk-pick:hover, .td-perk-pick:active {
+  background: rgba(90, 200, 255, 0.16);
+  border-color: #8fd6ff;
+}
+.td-perk-pick-name { font-size: 11px; font-weight: bold; }
+.td-perk-pick-blurb { font-size: 9px; color: #8fc8ee; }
+/* Tappable commander rows → open the detail overlay. */
+.td-row-tap { cursor: pointer; transition: background 0.1s; }
+.td-row-tap:hover, .td-row-tap:active { background: rgba(120, 200, 255, 0.10); }
+.td-row-chev { margin-left: 6px; color: #6fa8d0; font-weight: bold; }
+/* Perk list inside the commander detail overlay. */
+.cdtl-perks { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+.cdtl-perk {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 5px 8px; text-align: left;
+  background: rgba(150, 240, 200, 0.10);
+  border-left: 2px solid #9af0c8; border-radius: 3px;
+}
+.cdtl-perk-name { font-size: 12px; font-weight: bold; color: #c9ffe6; }
+.cdtl-perk-blurb { font-size: 10px; color: #9fd0c0; }
+.cdtl-perk-empty { font-size: 11px; font-style: italic; color: var(--text-secondary); }
+.td-row-detail {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-style: italic;
+  line-height: 1.4;
+}
+.td-row-hpbar {
+  height: 4px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.td-row-hpfill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.td-row-hpfill.hp-high { background: #6e9; }
+.td-row-hpfill.hp-mid  { background: #fc6; }
+.td-row-hpfill.hp-low  { background: #f66; }
+.td-tone-rival     { border-left: 3px solid #f57; }
+.td-tone-memorial  { border-left: 3px solid #ac9; opacity: 0.7; }
+.td-tone-note      { border-left: 3px solid #888; }
+
+/* Factions tab — reputation bars. */
+.td-faction-row {
+  background: rgba(8, 14, 24, 0.55);
+  border: 1px solid rgba(120, 200, 255, 0.12);
+  border-radius: 4px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.td-faction-row + .td-faction-row { margin-top: 8px; }
+.td-faction-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+}
+.td-faction-name {
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 1.4px;
+}
+.td-faction-value {
+  color: var(--text-secondary);
+}
+.td-faction-bar {
+  position: relative;
+  height: 8px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 4px;
+}
+.td-faction-axis {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.40);
+}
+.td-faction-fill {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 8px;
+  border-radius: 4px;
+  background: #aef;
+  box-shadow: 0 0 8px rgba(170, 230, 255, 0.6);
+  transform: translateX(-4px);
+  transition: left 0.3s ease;
+}
+.td-faction-ally    .td-faction-fill { background: #6e9; box-shadow: 0 0 10px rgba(110, 230, 153, 0.65); }
+.td-faction-rival   .td-faction-fill { background: #f57; box-shadow: 0 0 10px rgba(255, 87, 119, 0.6); }
+.td-faction-neutral .td-faction-fill { background: #ccc; }
+
+/* Log tab. */
+.td-log-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.td-log-line {
+  background: rgba(8, 14, 24, 0.45);
+  border-left: 2px solid #555;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.td-log-act {
+  font-weight: bold;
+  margin-right: 6px;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+}
+.td-log-boss      { border-left-color: #fc6; }
+.td-log-rival     { border-left-color: #f57; }
+.td-log-ace       { border-left-color: #ec7; }
+.td-log-arc       { border-left-color: #6cf; }
+.td-log-promotion { border-left-color: #aef; }
+.td-log-note      { border-left-color: #888; }
+
+/* Header overflow menu (Tier 41). */
+.header-menu-btn {
+  background: rgba(120, 200, 255, 0.10);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.30);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 8px;
+  transition: all 0.15s ease;
+}
+.header-menu-btn:hover {
+  background: rgba(120, 200, 255, 0.25);
+  color: #fff;
+}
+.starmap-overflow {
+  position: fixed;
+  top: calc(var(--hud-strip-height) + 8px);
+  right: 16px;
+  z-index: 30;
+  background: rgba(8, 14, 24, 0.96);
+  border: 1px solid rgba(120, 200, 255, 0.30);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.15s ease;
+}
+.starmap-overflow[aria-hidden="true"] {
+  display: none;
+}
+.overflow-item {
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 12px;
+  letter-spacing: 0.8px;
+  font-weight: bold;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s ease;
+}
+.overflow-item:hover {
+  background: rgba(120, 200, 255, 0.12);
+  color: #fff;
+}
+.overflow-item + .overflow-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Slim header redesign (Tier 41). */
+.starmap-header .header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* -----------------------------------------------------------
+   13. Footer buttons (legacy, now unused — Tier 41 replaced
+   with tab bar above. Kept hidden so old saves with stray
+   instances don't disrupt layout.)
    ----------------------------------------------------------- */
 .starmap-footer {
   position: fixed;
@@ -1127,7 +2035,11 @@ html, body {
   .node-glow,
   .node-core,
   .node-boss .node-glow,
-  .node-event .node-core::after {
+  .node-event .node-core::after,
+  .node-corona,
+  .node-orbit,
+  .node-speckles,
+  .starmap-nebula {
     animation: none !important;
     transition: none !important;
   }
@@ -1292,6 +2204,1015 @@ html, body {
   letter-spacing: 3px;
 }
 
+/* ==========================================================
+   Tier 42 — Mobile-first home screen redesign (menu-home-v2)
+   ========================================================== */
+
+/* When v2 is active, override the legacy flex layout so the
+   new sectioned layout works edge-to-edge. */
+.menu-home-v2 {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0 !important;
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  position: relative;
+}
+.menu-home-v2 .menu-home-nav { display: none; }
+.menu-home-v2 .menu-title    { display: none; }
+
+/* ---- Top status bar ---- */
+.home-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: rgba(8, 14, 24, 0.85);
+  border-bottom: 1px solid rgba(120, 200, 255, 0.18);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  flex-shrink: 0;
+}
+.home-avatar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.home-avatar-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2a3f5a 0%, #1a2638 100%);
+  border: 1.5px solid rgba(120, 200, 255, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: #ffd680;
+  text-shadow: 0 0 6px rgba(255, 218, 130, 0.4);
+}
+.home-avatar-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.1;
+}
+.home-avatar-rank {
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  color: #ffd680;
+}
+.home-avatar-callsign {
+  font-size: 12px;
+  color: #fff;
+  letter-spacing: 0.6px;
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+.home-avatar-progress {
+  font-size: 9px;
+  letter-spacing: 0.8px;
+  color: #fc6;
+  font-weight: bold;
+}
+.home-avatar {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+.home-avatar:hover {
+  background: rgba(120, 200, 255, 0.08);
+}
+.home-currency-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.home-currency-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: rgba(8, 14, 24, 0.7);
+  border: 1px solid rgba(120, 200, 255, 0.28);
+  border-radius: 14px;
+  color: #fff;
+  font-family: inherit;
+  font-weight: bold;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.home-currency-chip:hover {
+  background: rgba(120, 200, 255, 0.16);
+  border-color: rgba(120, 200, 255, 0.55);
+}
+.home-currency-chip .curr-icon {
+  font-size: 12px;
+  color: #aef;
+}
+.home-currency-chip .curr-value {
+  letter-spacing: 0.6px;
+  min-width: 18px;
+  text-align: right;
+}
+.home-currency-chip#home-curr-service .curr-icon { color: #fc6; }
+.home-currency-chip#home-curr-credits .curr-icon { color: #cf8; }
+.home-currency-premium .curr-icon { color: #d9f; }
+.home-currency-premium {
+  border-color: rgba(200, 130, 240, 0.32);
+}
+.home-currency-premium:hover {
+  border-color: rgba(200, 130, 240, 0.62);
+  background: rgba(200, 130, 240, 0.16);
+}
+.home-inbox-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(120, 200, 255, 0.10);
+  border: 1px solid rgba(120, 200, 255, 0.28);
+  color: #aef;
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+}
+.home-inbox-btn:hover {
+  background: rgba(120, 200, 255, 0.22);
+}
+
+/* ---- Hero band ---- */
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px 16px 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.home-title-line h1 {
+  font-size: clamp(20px, 5vw, 30px);
+  margin: 0;
+  letter-spacing: 4px;
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 0 0 18px rgba(120, 200, 255, 0.45);
+}
+.home-title-rule {
+  width: 80%;
+  max-width: 320px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(120, 200, 255, 0.55), transparent);
+  margin: 10px auto;
+}
+.home-tagline {
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: var(--text-secondary);
+  margin: 0;
+  font-weight: bold;
+}
+
+/* ---- Main content (cards + tiles + links) ---- */
+.home-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 16px 16px 16px;
+  overflow-y: auto;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* Hero card — main play tile. */
+.home-card {
+  background: rgba(8, 14, 24, 0.72);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+}
+.home-card:hover {
+  border-color: rgba(120, 200, 255, 0.55);
+  background: rgba(8, 14, 24, 0.85);
+  transform: translateY(-1px);
+}
+.home-card-hero {
+  padding: 20px;
+  background: linear-gradient(135deg, rgba(20, 30, 50, 0.85) 0%, rgba(8, 14, 24, 0.85) 100%);
+  border-color: rgba(255, 218, 130, 0.40);
+  box-shadow: 0 4px 24px rgba(255, 218, 130, 0.10);
+}
+.home-card-hero:hover {
+  border-color: rgba(255, 218, 130, 0.70);
+}
+.card-hero-eyebrow {
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  color: #ffd680;
+  font-weight: bold;
+}
+.card-hero-title {
+  font-size: 28px;
+  letter-spacing: 3px;
+  font-weight: bold;
+  color: #fff;
+  margin: 2px 0 6px 0;
+}
+.card-hero-sub {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.4;
+}
+.card-hero-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.home-cta-btn {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 13px;
+  letter-spacing: 2px;
+  font-weight: bold;
+  background: linear-gradient(180deg, #ffd680, #e8a945);
+  color: #18120c;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 8px rgba(255, 218, 130, 0.25);
+}
+.home-cta-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 218, 130, 0.40);
+}
+.home-cta-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid rgba(120, 200, 255, 0.40);
+  box-shadow: none;
+}
+.home-cta-secondary:hover {
+  background: rgba(120, 200, 255, 0.12);
+}
+
+/* Tile row — Skirmish / Custom / Daily */
+.home-tile-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.home-card-tile {
+  align-items: center;
+  text-align: center;
+  padding: 16px 8px;
+  gap: 2px;
+  background: rgba(8, 14, 24, 0.55);
+}
+.home-card-tile .tile-icon {
+  font-size: 24px;
+  line-height: 1;
+  color: #aef;
+  margin-bottom: 4px;
+}
+.home-card-tile .tile-title {
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  font-weight: bold;
+  color: #fff;
+}
+.home-card-tile .tile-sub {
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.4px;
+}
+.home-card-locked {
+  opacity: 0.55;
+  cursor: pointer;
+}
+.home-card-locked .tile-icon {
+  color: var(--text-secondary);
+}
+
+/* Quick-link row — Service Hall / Memorial / About */
+.home-link-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 4px;
+}
+.home-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: rgba(8, 14, 24, 0.50);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.home-link:hover {
+  color: #aef;
+  border-color: rgba(120, 200, 255, 0.40);
+}
+.link-icon {
+  font-size: 13px;
+}
+
+/* ---- Bottom nav ---- */
+.home-bottom-nav {
+  display: flex;
+  background: linear-gradient(180deg, rgba(8, 14, 24, 0.92), rgba(4, 8, 14, 0.96));
+  border-top: 1px solid rgba(120, 200, 255, 0.18);
+  flex-shrink: 0;
+  height: 64px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.home-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  border-top: 2px solid transparent;
+}
+.home-nav-btn:hover { color: var(--text-primary); }
+.home-nav-btn.active {
+  color: #aef;
+  border-top-color: #6cf;
+  background: rgba(120, 200, 255, 0.10);
+}
+.home-nav-btn .nav-icon { font-size: 18px; line-height: 1; }
+.home-nav-btn .nav-label {
+  font-size: 9.5px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+}
+
+/* ---- Nav panel overlay (STORE / EVENTS / MORE / DAILY) ---- */
+.home-nav-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 64px;
+  background: linear-gradient(180deg, rgba(8, 14, 24, 0.97), rgba(4, 8, 14, 0.99));
+  display: flex;
+  flex-direction: column;
+  z-index: 5;
+  transform: translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+.home-nav-panel.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.home-nav-panel[aria-hidden="true"] { display: none; }
+.home-nav-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.18);
+}
+.home-nav-panel-back {
+  background: rgba(120, 200, 255, 0.10);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.30);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.home-nav-panel-header h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 2.4px;
+  color: #fff;
+  font-weight: bold;
+}
+.home-nav-panel-spacer { flex: 1; }
+.home-nav-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+/* Coming-soon panel content. */
+.store-coming-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 20px 0;
+  max-width: 520px;
+  margin: 0 auto;
+}
+.store-icon {
+  font-size: 56px;
+  color: #aef;
+  text-shadow: 0 0 18px rgba(120, 200, 255, 0.45);
+}
+.store-coming-soon h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 2.5px;
+  color: #fff;
+}
+.store-coming-soon p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 380px;
+  line-height: 1.5;
+}
+.store-coming-tag {
+  font-size: 10px;
+  letter-spacing: 2.5px;
+  color: #fc6 !important;
+  font-weight: bold;
+  margin-top: 12px !important;
+}
+.store-card-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+  width: 100%;
+}
+.store-card {
+  background: rgba(8, 14, 24, 0.65);
+  border: 1px solid rgba(120, 200, 255, 0.20);
+  border-radius: 6px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+.store-card-locked {
+  opacity: 0.65;
+}
+.store-card-eyebrow {
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  color: #fc6;
+  font-weight: bold;
+}
+.store-card-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.6px;
+}
+.store-card-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.store-card-cta {
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  text-align: center;
+}
+
+/* Achievements grid (Tier 43). */
+.achievements-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+@media (min-width: 720px) {
+  .achievements-grid { grid-template-columns: 1fr 1fr; }
+}
+.achievement-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(8, 14, 24, 0.65);
+  border: 1px solid rgba(120, 200, 255, 0.18);
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+.achievement-card.unlocked {
+  border-color: rgba(255, 218, 130, 0.55);
+  background: rgba(255, 218, 130, 0.06);
+  box-shadow: 0 0 16px rgba(255, 218, 130, 0.10);
+}
+.achievement-card.locked {
+  opacity: 0.55;
+}
+.ach-icon {
+  font-size: 26px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 14, 24, 0.7);
+  border-radius: 50%;
+  flex-shrink: 0;
+  color: #aef;
+}
+.achievement-card.unlocked .ach-icon {
+  color: #ffd680;
+  text-shadow: 0 0 12px rgba(255, 218, 130, 0.55);
+  border: 1.5px solid rgba(255, 218, 130, 0.5);
+}
+.ach-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ach-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.6px;
+}
+.ach-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+.ach-reward {
+  flex-shrink: 0;
+  text-align: right;
+}
+.ach-reward-chip {
+  display: inline-block;
+  padding: 3px 8px;
+  background: rgba(255, 198, 102, 0.16);
+  color: #fc6;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  border-radius: 12px;
+}
+.ach-unlocked-tag {
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+  color: #ffd680;
+}
+
+/* MORE list rows. */
+.home-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 520px;
+  margin: 0 auto;
+}
+.home-more-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: rgba(8, 14, 24, 0.65);
+  border: 1px solid rgba(120, 200, 255, 0.18);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+.home-more-row:hover {
+  border-color: rgba(120, 200, 255, 0.55);
+  background: rgba(120, 200, 255, 0.10);
+}
+.more-icon {
+  font-size: 16px;
+  color: #aef;
+  width: 24px;
+  text-align: center;
+}
+.more-label {
+  flex: 1;
+  font-size: 13px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+}
+.more-chev {
+  color: var(--text-secondary);
+  font-size: 18px;
+}
+
+/* Mobile tuning. */
+@media (max-width: 480px) {
+  .home-currency-chip { padding: 4px 8px; font-size: 11px; }
+  .home-avatar-icon { width: 32px; height: 32px; }
+  .home-card-tile { padding: 12px 6px; }
+  .home-card-tile .tile-icon { font-size: 20px; }
+  .home-link { padding: 6px 10px; font-size: 10px; }
+}
+
+/* ==========================================================
+   Tier 44 — Play Hub + Skirmish Config sub-screens
+   ========================================================== */
+
+.menu-playhub, .menu-skirmish {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0 !important;
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.playhub-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(8, 14, 24, 0.85);
+  border-bottom: 1px solid rgba(120, 200, 255, 0.18);
+  flex-shrink: 0;
+}
+.playhub-back {
+  background: rgba(120, 200, 255, 0.10);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.30);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.playhub-back:hover {
+  background: rgba(120, 200, 255, 0.25);
+  color: #fff;
+}
+.playhub-header h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 2.4px;
+  color: #fff;
+  font-weight: bold;
+}
+.playhub-spacer { flex: 1; }
+
+.playhub-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+.playhub-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: rgba(8, 14, 24, 0.72);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  font-family: inherit;
+  text-align: left;
+  color: var(--text-primary);
+}
+.playhub-card:hover {
+  border-color: rgba(120, 200, 255, 0.55);
+  background: rgba(8, 14, 24, 0.85);
+  transform: translateY(-1px);
+}
+.playhub-card-frontier {
+  background: linear-gradient(135deg, rgba(20, 30, 50, 0.85) 0%, rgba(8, 14, 24, 0.85) 100%);
+  border-color: rgba(255, 218, 130, 0.45);
+  box-shadow: 0 4px 24px rgba(255, 218, 130, 0.10);
+}
+.playhub-card-frontier:hover {
+  border-color: rgba(255, 218, 130, 0.75);
+}
+.playhub-card-locked {
+  opacity: 0.55;
+  cursor: default;
+}
+.playhub-card-icon {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgba(120, 200, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: #aef;
+}
+.playhub-card-frontier .playhub-card-icon {
+  background: rgba(255, 218, 130, 0.16);
+  color: #ffd680;
+  text-shadow: 0 0 12px rgba(255, 218, 130, 0.5);
+  border: 1.5px solid rgba(255, 218, 130, 0.45);
+}
+.playhub-card-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.playhub-card-eyebrow {
+  font-size: 9.5px;
+  letter-spacing: 1.8px;
+  color: var(--text-secondary);
+  font-weight: bold;
+}
+.playhub-card-frontier .playhub-card-eyebrow { color: #ffd680; }
+.playhub-card-title {
+  font-size: 18px;
+  letter-spacing: 2.4px;
+  font-weight: bold;
+  color: #fff;
+}
+.playhub-card-sub {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.playhub-card-tag {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  background: rgba(255, 218, 130, 0.15);
+  color: #ffd680;
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+  border-radius: 10px;
+  align-self: flex-start;
+}
+.playhub-card-tag-active {
+  background: rgba(110, 230, 153, 0.15);
+  color: #9ed;
+}
+.playhub-card-tag-locked {
+  background: rgba(160, 160, 160, 0.15);
+  color: var(--text-secondary);
+}
+.playhub-card-cta {
+  padding: 10px 18px;
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  font-weight: bold;
+  background: rgba(120, 200, 255, 0.18);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.40);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.playhub-card-cta:hover:not(:disabled) {
+  background: rgba(120, 200, 255, 0.32);
+  color: #fff;
+}
+.playhub-card-cta:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.playhub-card-frontier .playhub-card-cta {
+  background: linear-gradient(180deg, #ffd680, #e8a945);
+  color: #18120c;
+  border: none;
+  box-shadow: 0 2px 8px rgba(255, 218, 130, 0.25);
+}
+.playhub-card-frontier .playhub-card-cta:hover {
+  box-shadow: 0 4px 12px rgba(255, 218, 130, 0.40);
+}
+/* CTA stack — primary RESUME on top, small "+ NEW CAREER" beneath. */
+.playhub-card-cta-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+.playhub-card-cta-secondary {
+  padding: 6px 12px;
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+  background: transparent;
+  color: rgba(255, 218, 130, 0.85);
+  border: 1px solid rgba(255, 218, 130, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+.playhub-card-cta-secondary:hover {
+  background: rgba(255, 218, 130, 0.10);
+  color: #fff;
+  border-color: rgba(255, 218, 130, 0.65);
+}
+
+/* Skirmish config form. */
+.skirmish-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 18px 24px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 560px;
+  width: 100%;
+  margin: 0 auto;
+}
+.skirmish-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skirmish-section-title {
+  font-size: 10px;
+  letter-spacing: 2.2px;
+  color: var(--text-secondary);
+  font-weight: bold;
+}
+.skirmish-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.skirmish-chip {
+  flex: 1 1 80px;
+  padding: 10px 12px;
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+  background: rgba(8, 14, 24, 0.55);
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.skirmish-chip:hover {
+  background: rgba(120, 200, 255, 0.12);
+  color: #fff;
+}
+.skirmish-chip.active {
+  background: rgba(120, 200, 255, 0.22);
+  color: #fff;
+  border-color: rgba(120, 200, 255, 0.55);
+  box-shadow: 0 0 8px rgba(120, 200, 255, 0.30);
+}
+.skirmish-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.skirmish-step-btn {
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+  background: rgba(120, 200, 255, 0.12);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.32);
+  border-radius: 50%;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: bold;
+}
+.skirmish-step-btn:hover {
+  background: rgba(120, 200, 255, 0.28);
+  color: #fff;
+}
+.skirmish-slider-track {
+  flex: 1;
+  position: relative;
+  height: 36px;
+  background: rgba(40, 60, 80, 0.6);
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(120, 200, 255, 0.22);
+}
+.skirmish-slider-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(120, 200, 255, 0.25), rgba(120, 200, 255, 0.40));
+  transition: width 0.18s ease;
+}
+.skirmish-slider-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  letter-spacing: 1px;
+  font-weight: bold;
+  color: #fff;
+  pointer-events: none;
+}
+.skirmish-footer {
+  padding: 14px 18px 18px 18px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.skirmish-deploy-btn {
+  width: 100%;
+  max-width: 360px;
+  padding: 14px 20px;
+  font-size: 14px;
+  letter-spacing: 2.8px;
+  font-weight: bold;
+  background: linear-gradient(180deg, #ffd680, #e8a945);
+  color: #18120c;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(255, 218, 130, 0.25);
+  transition: all 0.15s ease;
+}
+.skirmish-deploy-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 218, 130, 0.40);
+}
+
 /* -----------------------------------------------------------
    About screen — readable body copy beneath the title.
    ----------------------------------------------------------- */
@@ -1313,6 +3234,7 @@ html, body {
    rows. Each row: rank · callsign · epitaph. Result colour-codes
    the row border (gold for wins, dim red for losses). */
 .menu-memorial {
+  flex-direction: column;   /* base .menu-screen.active is flex; force column */
   align-items: center;
 }
 .memorial-list {
@@ -1681,6 +3603,15 @@ html, body {
   padding: 32px;
   min-width: 360px;
   max-width: 90vw;
+  /* Cap height to the viewport and scroll internally so long cards
+     (event choices, promotion/perk picks, dossiers) never run off a
+     short mobile screen with their buttons unreachable. Per-panel rules
+     below can override. */
+  max-height: 90svh;
+  max-height: 90vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   position: relative;
   clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
   display: flex;
@@ -2115,17 +4046,23 @@ html, body {
 }
 
 .custom-team-remove {
-  width: 22px;
-  height: 22px;
+  /* Mobile touch target — was 22×22 (way below 44px guideline).
+   * Bumped to 32×32 visible; tap area extended via padding-region
+   * trick so a thumb-sized tap still lands cleanly. */
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   background: rgba(80, 30, 30, 0.85);
   border: 1px solid rgba(255, 120, 100, 0.45);
   color: #fcc;
-  font-size: 14px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
   font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .custom-team-remove:hover {
@@ -2142,8 +4079,12 @@ html, body {
 .custom-team-races .chip-item {
   flex: 1 1 0;
   min-width: 60px;
-  font-size: 10px;
-  padding: 4px 6px;
+  /* Mobile touch target — was 21px tall total (4+10+4+border) which
+   * is far below the 44px Apple guideline. Bumped padding to keep
+   * the chip readable but tappable at ~36-40px. */
+  font-size: 12px;
+  padding: 10px 8px;
+  min-height: 36px;
 }
 
 .custom-team-sliders {
@@ -2705,6 +4646,68 @@ html, body {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+/* Event RESULT view — the outcome of a choice. Makes consequences
+   obvious: flavor line + coloured resource-delta chips. */
+.event-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 440px;
+  animation: menu-fade-in 0.25s ease;
+}
+.event-result-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  text-align: center;
+}
+.event-result-deltas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.event-delta {
+  padding: 5px 12px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.event-delta.delta-gain {
+  color: #b6f0bd;
+  background: rgba(40, 110, 60, 0.35);
+  border: 1px solid #3f7f4f;
+}
+.event-delta.delta-loss {
+  color: #f2b8b8;
+  background: rgba(120, 40, 40, 0.35);
+  border: 1px solid #7a3030;
+}
+.event-delta.delta-none {
+  color: var(--text-muted);
+  background: rgba(60, 70, 90, 0.3);
+  border: 1px solid rgba(120, 140, 170, 0.3);
+  font-weight: 500;
+}
+.overlay-continue-btn {
+  padding: 12px 28px;
+  background: linear-gradient(180deg, #2f6a3f, #1f4a2c);
+  border: 1.5px solid #4f9f5f;
+  border-radius: 6px;
+  color: #dffbe2;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: filter 0.15s ease;
+}
+.overlay-continue-btn:hover { filter: brightness(1.15); }
 
 /* -----------------------------------------------------------
    18. Base button classes
@@ -3887,9 +5890,838 @@ html, body {
 /* -----------------------------------------------------------
    12b. Promotion Overlay (between acts)
    ----------------------------------------------------------- */
-.menu-promotion {
+.menu-promotion, .menu-preamble, .menu-dispatch, .menu-runstats, .menu-captaindetail, .menu-careerdetail, .menu-servicehall, .menu-newcareer-confirm {
+  flex-direction: column;   /* base .menu-screen.active is flex with no direction */
   align-items: center;
   justify-content: center;
+}
+
+/* New-Career Confirm Overlay — guard rail before abandoning an
+   active Frontier officer for a new start. */
+.newcareer-confirm-panel {
+  min-width: 360px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 28px 24px;
+  text-align: center;
+}
+.ncc-eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: rgba(255, 218, 130, 0.85);
+  font-weight: bold;
+}
+.ncc-title {
+  font-size: 18px;
+  letter-spacing: 2px;
+  margin: 0;
+}
+.ncc-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+}
+.ncc-active {
+  width: 100%;
+  padding: 12px 14px;
+  background: rgba(120, 200, 255, 0.08);
+  border: 1px solid rgba(120, 200, 255, 0.25);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+.ncc-active-eyebrow {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: rgba(120, 200, 255, 0.85);
+  font-weight: bold;
+}
+.ncc-active-name {
+  font-size: 16px;
+  letter-spacing: 1.5px;
+  color: #fff;
+  font-weight: bold;
+}
+.ncc-active-sub {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--text-secondary);
+}
+.ncc-warn {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: rgba(255, 140, 140, 0.85);
+  margin: 0;
+}
+.ncc-footer {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+.ncc-cancel {
+  flex: 1;
+}
+.ncc-confirm {
+  flex: 1;
+  background: linear-gradient(180deg, #ff8a6a, #c4543a);
+  color: #1a0a06;
+  border: none;
+  box-shadow: 0 2px 8px rgba(255, 140, 110, 0.25);
+}
+.ncc-confirm:hover {
+  box-shadow: 0 4px 12px rgba(255, 140, 110, 0.40);
+}
+
+/* Service Hall (Tier 38) — meta-progression spending screen. */
+.servicehall-panel {
+  min-width: 480px;
+  max-width: 600px;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 28px;
+  text-align: center;
+}
+.svchall-eyebrow {
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: #fc6;
+  font-weight: bold;
+}
+.servicehall-panel h2 {
+  font-size: 22px;
+  margin: 0;
+  color: #fff;
+  letter-spacing: 2px;
+}
+.svchall-points-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(255, 198, 102, 0.10);
+  border: 1px solid rgba(255, 198, 102, 0.32);
+  border-radius: 3px;
+  margin-bottom: 4px;
+}
+.svchall-points-label {
+  font-size: 10px;
+  letter-spacing: 1.6px;
+  color: var(--text-secondary);
+  font-weight: bold;
+}
+.svchall-points-value {
+  font-size: 18px;
+  color: #ffd680;
+  font-weight: bold;
+  letter-spacing: 0.6px;
+}
+.svchall-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.svchall-row {
+  padding: 10px 12px;
+  background: rgba(8, 14, 24, 0.55);
+  border-left: 3px solid #aef;
+  border-radius: 3px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.svchall-row.maxed {
+  border-left-color: #fc6;
+  opacity: 0.85;
+}
+.svchall-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.svchall-name {
+  font-size: 13px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.4px;
+}
+.svchall-rank {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: var(--text-secondary);
+}
+.svchall-desc {
+  font-size: 11.5px;
+  color: var(--text-primary);
+  font-style: italic;
+  line-height: 1.4;
+}
+.svchall-pips-row {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0;
+}
+.svchall-pip {
+  width: 12px;
+  height: 6px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 2px;
+}
+.svchall-pip.filled {
+  background: linear-gradient(90deg, #fa6, #fc6);
+}
+.svchall-buy-btn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  background: rgba(120, 200, 255, 0.18);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.40);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.svchall-buy-btn:hover:not(:disabled) {
+  background: rgba(120, 200, 255, 0.28);
+  color: #fff;
+}
+.svchall-buy-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Career Detail overlay (Tier 35). Opens from memorial wall clicks.
+   Shows full epitaph + final stats grid + complete career log. */
+.careerdetail-panel {
+  min-width: 480px;
+  max-width: 620px;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 28px;
+  text-align: center;
+}
+.cardtl-eyebrow {
+  font-size: 10px;
+  letter-spacing: 3px;
+  font-weight: bold;
+}
+.cardtl-eyebrow.career-won  { color: #ffd680; }
+.cardtl-eyebrow.career-lost { color: #fdb; }
+.careerdetail-panel h2 {
+  font-size: 22px;
+  margin: 0;
+  color: #fff;
+  letter-spacing: 1.8px;
+}
+.cardtl-rank {
+  font-size: 11px;
+  letter-spacing: 1.8px;
+  color: var(--text-secondary);
+}
+.cardtl-epitaph {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-style: italic;
+  line-height: 1.45;
+  max-width: 480px;
+  margin: 6px 0 2px 0;
+}
+.cardtl-section {
+  width: 100%;
+  margin-top: 10px;
+  text-align: left;
+}
+.cardtl-section-title {
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.cardtl-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+  background: rgba(8, 14, 24, 0.45);
+  border-radius: 3px;
+  padding: 8px 12px;
+}
+.cardtl-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.cardtl-stat-label {
+  color: var(--text-secondary);
+}
+.cardtl-stat-value {
+  color: #fff;
+  font-weight: bold;
+}
+.cardtl-log {
+  list-style: none;
+  padding: 8px 12px;
+  margin: 0;
+  background: rgba(8, 14, 24, 0.45);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.cardtl-log-line {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid #555;
+  line-height: 1.4;
+}
+.cardtl-log-act {
+  display: inline-block;
+  font-weight: bold;
+  color: var(--text-primary);
+  letter-spacing: 0.6px;
+  margin-right: 4px;
+}
+.cardtl-log-boss      { border-left-color: #fc6; }
+.cardtl-log-rival     { border-left-color: #f57; }
+.cardtl-log-ace       { border-left-color: #ec7; }
+.cardtl-log-arc       { border-left-color: #6cf; }
+.cardtl-log-promotion { border-left-color: #aef; }
+.cardtl-log-note      { border-left-color: #888; }
+.cardtl-log-empty {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+  list-style: none;
+}
+
+/* Memorial row hover affordance — make rows visibly clickable. */
+.memorial-clickable {
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+.memorial-clickable:hover {
+  background: rgba(120, 200, 255, 0.08);
+  transform: translateX(2px);
+}
+.memorial-row-hint {
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  color: rgba(120, 200, 255, 0.55);
+  margin-top: 6px;
+  text-align: right;
+}
+
+/* Captain Detail overlay (Tier 32). */
+.captaindetail-panel {
+  min-width: 420px;
+  max-width: 520px;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 28px;
+  text-align: center;
+}
+.cdtl-eyebrow {
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: #fc6;
+  font-weight: bold;
+}
+.captaindetail-panel h2 {
+  font-size: 22px;
+  margin: 0;
+  color: #fff;
+  letter-spacing: 1.5px;
+}
+
+/* Rename row — ship name / captain + pencil button. */
+.cdtl-namerow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+.cdtl-rename-btn {
+  background: rgba(120, 200, 255, 0.10);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.30);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.cdtl-rename-btn:hover {
+  background: rgba(120, 200, 255, 0.25);
+  color: #fff;
+  transform: scale(1.1);
+}
+.cdtl-class {
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  color: var(--text-secondary);
+}
+.cdtl-variant {
+  color: #fc6;
+  font-weight: bold;
+  letter-spacing: 1.2px;
+}
+.cdtl-divider {
+  width: 60%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 6px 0;
+}
+.cdtl-captain {
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.4px;
+}
+.cdtl-trait-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+.cdtl-trait {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  background: rgba(120, 200, 255, 0.16);
+  color: #aef;
+  border-radius: 2px;
+  padding: 2px 8px;
+  font-weight: bold;
+}
+.cdtl-title {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  color: #fc6;
+  font-style: italic;
+}
+.cdtl-trait-blurb {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.4;
+  max-width: 380px;
+  margin-top: 4px;
+}
+.cdtl-effect {
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 6px;
+  background: rgba(120, 200, 255, 0.10);
+  border-left: 3px solid #aef;
+  border-radius: 3px;
+  font-size: 11.5px;
+  color: #cef;
+  text-align: left;
+  line-height: 1.4;
+}
+.cdtl-effect-label {
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  color: #aef;
+  font-weight: bold;
+  margin-right: 6px;
+}
+.cdtl-section {
+  width: 100%;
+  margin-top: 8px;
+  text-align: left;
+}
+.cdtl-section-title {
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  color: var(--text-secondary);
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+.cdtl-xp-row, .cdtl-hp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+}
+.cdtl-level {
+  font-weight: bold;
+  color: #fc6;
+  letter-spacing: 1.2px;
+}
+.cdtl-xp-text, .cdtl-hp-text {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.cdtl-xp-bar-bg, .cdtl-hp-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.cdtl-xp-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #fa6, #fc6);
+  transition: width 0.3s ease;
+}
+.cdtl-hp-bar-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.cdtl-hp-bar-fill.hp-high { background: #6e9; }
+.cdtl-hp-bar-fill.hp-mid  { background: #fc6; }
+.cdtl-hp-bar-fill.hp-low  { background: #f66; }
+.cdtl-bonus {
+  font-size: 12px;
+  color: #aef;
+  font-weight: bold;
+  letter-spacing: 0.4px;
+}
+
+/* Per-capital behavior chips (Tier 37). */
+.cdtl-behavior-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.cdtl-behavior-chip {
+  flex: 1 0 auto;
+  min-width: 60px;
+  padding: 6px 8px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  background: rgba(8, 14, 24, 0.55);
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+.cdtl-behavior-chip:hover {
+  background: rgba(120, 200, 255, 0.12);
+  color: #fff;
+}
+.cdtl-behavior-chip.active {
+  background: rgba(120, 200, 255, 0.22);
+  color: #fff;
+  border-color: rgba(120, 200, 255, 0.55);
+}
+.cdtl-behavior-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.35;
+}
+
+/* Run-stats overlay (Tier 27) — scrollable stat blocks per category.
+   Opened from the run-map STATS button. */
+.runstats-panel {
+  min-width: 460px;
+  max-width: 580px;
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 28px;
+  text-align: left;
+}
+.runstats-eyebrow {
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: #9df;
+  font-weight: bold;
+}
+.runstats-panel h2 {
+  font-size: 24px;
+  margin: 0;
+  color: #fff;
+  letter-spacing: 2px;
+}
+.runstats-handle {
+  width: 100%;
+  font-size: 14px;
+  color: var(--text-secondary);
+  font-style: italic;
+  letter-spacing: 0.6px;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.runstats-body {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.runstats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(8, 14, 24, 0.55);
+  border-left: 3px solid #5cf;
+  border-radius: 3px;
+}
+.runstats-section-title {
+  font-size: 10px;
+  letter-spacing: 1.6px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.runstats-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+}
+.runstats-label {
+  color: var(--text-secondary);
+}
+.runstats-value {
+  color: #fff;
+  font-weight: bold;
+}
+.runstats-sub {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: normal;
+  margin-left: 6px;
+}
+
+/* End-run stats block on the match-over panel. Tighter than the
+   live runstats overlay; renders as a 2-column grid. */
+.endstats-block {
+  width: 100%;
+  max-width: 520px;
+  margin-top: 10px;
+}
+.endstats-section-title {
+  font-size: 10px;
+  letter-spacing: 2.2px;
+  font-weight: bold;
+  color: #9df;
+  margin-bottom: 6px;
+  text-align: center;
+}
+.endstats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+}
+.endstats-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.endstats-label {
+  color: var(--text-secondary);
+}
+.endstats-value {
+  color: #fff;
+  font-weight: bold;
+}
+
+/* Achievements unlocked block on the AAR end-screen (Tier 43). */
+.endstats-ach-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.endstats-ach-row {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  color: #ffd680;
+  padding: 4px 10px;
+  background: rgba(255, 218, 130, 0.10);
+  border-left: 2px solid #ffd680;
+  border-radius: 2px;
+}
+
+.stats-btn {
+  background: rgba(120, 200, 255, 0.18);
+  color: #aef;
+  border: 1px solid rgba(120, 200, 255, 0.4);
+}
+
+/* Dispatch overlay (Tier 17) — radio-comm feel. Tighter panel,
+   monospace flavor, blinking dot. Border tint is keyed off the
+   .dispatch-{speaker} modifier so the visual matches the source. */
+.dispatch-panel {
+  min-width: 420px;
+  max-width: 560px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 32px;
+  border: 1px solid rgba(120, 200, 255, 0.32);
+  background: rgba(8, 16, 28, 0.85);
+}
+.dispatch-static-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.dispatch-static-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6cf;
+  box-shadow: 0 0 8px #6cf;
+  animation: dispatch-blink 1.2s ease-in-out infinite;
+}
+@keyframes dispatch-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.25; }
+}
+.dispatch-eyebrow {
+  font-size: 10px;
+  letter-spacing: 3.5px;
+  color: #6cf;
+  font-weight: bold;
+}
+.dispatch-panel h2 {
+  font-size: 22px;
+  margin: 0;
+  color: #d8eaf6;
+  letter-spacing: 2.4px;
+}
+.dispatch-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  max-width: 480px;
+  margin: 4px 0 0 0;
+  font-style: italic;
+  text-align: center;
+}
+/* Speaker tints */
+.dispatch-command    { border-color: rgba(120, 200, 255, 0.45); }
+.dispatch-command    .dispatch-static-dot,
+.dispatch-command    .dispatch-eyebrow { color: #6cf; background: #6cf; box-shadow: 0 0 8px #6cf; }
+.dispatch-command    .dispatch-eyebrow { color: #8df; background: transparent; box-shadow: none; }
+.dispatch-friend     { border-color: rgba(120, 230, 160, 0.45); }
+.dispatch-friend     .dispatch-static-dot { background: #8e9; box-shadow: 0 0 8px #8e9; }
+.dispatch-friend     .dispatch-eyebrow { color: #aef; }
+.dispatch-ally       { border-color: rgba(240, 200, 120, 0.5); }
+.dispatch-ally       .dispatch-static-dot { background: #fc8; box-shadow: 0 0 8px #fc8; }
+.dispatch-ally       .dispatch-eyebrow { color: #fda; }
+.dispatch-intercept  { border-color: rgba(190, 190, 190, 0.4); }
+.dispatch-intercept  .dispatch-static-dot { background: #bbb; box-shadow: 0 0 8px #bbb; }
+.dispatch-intercept  .dispatch-eyebrow { color: #ccc; }
+.dispatch-voidsworn  { border-color: rgba(200, 130, 240, 0.55); }
+.dispatch-voidsworn  .dispatch-static-dot { background: #c8f; box-shadow: 0 0 8px #c8f; }
+.dispatch-voidsworn  .dispatch-eyebrow { color: #daf; }
+.dispatch-engineering{ border-color: rgba(150, 220, 230, 0.4); }
+.dispatch-engineering .dispatch-static-dot { background: #9de; box-shadow: 0 0 8px #9de; }
+.dispatch-engineering .dispatch-eyebrow { color: #aef; }
+
+/* Jump-encounter overlay — reuses dispatch styling but tighter; the
+   encounter is a quick mid-jump beat, not a formal transmission. */
+.jumpencounter-panel {
+  min-width: 380px;
+  max-width: 500px;
+}
+.jumpencounter-reward {
+  margin-top: 10px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.8px;
+  color: #aef;
+  background: rgba(120, 200, 255, 0.10);
+  border-radius: 3px;
+  display: none;
+}
+.preamble-panel {
+  min-width: 460px;
+  max-width: 620px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px;
+}
+.preamble-eyebrow {
+  font-size: 10px;
+  letter-spacing: 4px;
+  color: #fc8;
+  font-weight: bold;
+}
+.preamble-panel h2 {
+  font-size: 26px;
+  margin: 0;
+  color: #f6f0e0;
+  letter-spacing: 2.5px;
+  text-shadow: 0 0 16px rgba(255, 220, 160, 0.35);
+}
+.preamble-lines {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 4px 0;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.preamble-lines li {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.45;
+  text-align: center;
+}
+.preamble-lines li:last-child {
+  color: #ffd5a0;
+  font-style: italic;
+  border-top: 1px solid rgba(255, 200, 130, 0.18);
+  padding-top: 8px;
+  margin-top: 2px;
 }
 .promotion-panel {
   min-width: 480px;
@@ -3954,10 +6786,74 @@ html, body {
   font-weight: bold;
   color: #cef;
   letter-spacing: 1px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(8, 14, 24, 0.45);
+  border-left: 3px solid #cef;
+  border-radius: 3px;
+  text-align: left;
+}
+.promotion-addition-head {
+  font-weight: bold;
+  color: #cef;
+}
+.promotion-ship-name {
+  color: #fff;
+  letter-spacing: 0.6px;
+}
+.promotion-addition-captain {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+  letter-spacing: 0.4px;
 }
 .promotion-addition-empty {
   color: var(--text-secondary);
   font-style: italic;
+}
+
+/* Capital variant picker (Tier 40) — 2 chips per capital row. */
+.promotion-variant-chips {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.promotion-variant-chip {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: rgba(8, 14, 24, 0.55);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+.promotion-variant-chip:hover {
+  background: rgba(120, 200, 255, 0.12);
+}
+.promotion-variant-chip.active {
+  background: rgba(120, 200, 255, 0.22);
+  border-color: rgba(120, 200, 255, 0.55);
+  box-shadow: 0 0 8px rgba(120, 200, 255, 0.25);
+}
+.variant-label {
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  color: #fff;
+}
+.variant-blurb {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.35;
 }
 
 /* Inter-act war bulletin — 3 news-ticker headlines shown on the
@@ -4113,6 +7009,117 @@ html, body {
   text-align: center;
   margin-top: 4px;
 }
+/* Ace variant: amber rim, slightly smaller name — reads as "named
+   threat, but not the act finale". Reuses .boss-briefing layout. */
+.boss-briefing.ace-briefing {
+  border-color: rgba(255, 200, 80, 0.55);
+}
+.boss-briefing.ace-briefing .boss-briefing-name {
+  font-size: 18px;
+}
+
+/* Fleet doctrine picker (Tier 34) — three chips above FLY/COMMAND.
+   Picked stance applies to every blue capital at spawn time. */
+.battle-doctrine {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  width: 100%;
+  max-width: 480px;
+}
+.doctrine-label {
+  font-size: 9px;
+  letter-spacing: 2.2px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.doctrine-chips {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.doctrine-chip {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+  background: rgba(8, 14, 24, 0.55);
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+.doctrine-chip:hover {
+  background: rgba(120, 200, 255, 0.10);
+  color: #fff;
+}
+.doctrine-chip.active {
+  background: rgba(120, 200, 255, 0.20);
+  color: #fff;
+  border-color: rgba(120, 200, 255, 0.55);
+  box-shadow: 0 0 8px rgba(120, 200, 255, 0.30);
+}
+.doctrine-chip[data-doctrine="press"].active    { border-color: rgba(255, 130, 100, 0.65); box-shadow: 0 0 10px rgba(255, 130, 100, 0.30); }
+.doctrine-chip[data-doctrine="hold"].active     { border-color: rgba(170, 230, 255, 0.65); box-shadow: 0 0 10px rgba(170, 230, 255, 0.30); }
+.doctrine-chip[data-doctrine="skirmish"].active { border-color: rgba(150, 220, 150, 0.65); box-shadow: 0 0 10px rgba(150, 220, 150, 0.30); }
+.doctrine-desc {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+  min-height: 16px;
+}
+
+/* Battle banter — short comms lines stacked above the briefing.
+   Each line has a SPEAKER label (3-letter chip) + text. Left-border
+   tint is keyed off the speaker class so command/wingman/voidsworn
+   read as distinct sources. */
+.battle-banter {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 8px 0;
+  max-width: 480px;
+}
+.banter-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 9px;
+  background: rgba(8, 16, 28, 0.55);
+  border-left: 3px solid #555;
+  border-radius: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+}
+.banter-speaker {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-weight: bold;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 56px;
+}
+.banter-text {
+  color: var(--text-primary);
+  font-style: italic;
+}
+.banter-command   { border-left-color: #5cf; }
+.banter-command   .banter-speaker { color: #8df; }
+.banter-wingman   { border-left-color: #6e9; }
+.banter-wingman   .banter-speaker { color: #9ed; }
+.banter-ally      { border-left-color: #ec7; }
+.banter-ally      .banter-speaker { color: #fda; }
+.banter-voidsworn { border-left-color: #b6f; }
+.banter-voidsworn .banter-speaker { color: #d9f; }
+.banter-intercept { border-left-color: #aaa; }
+.banter-intercept .banter-speaker { color: #ccc; }
 
 .battle-actions {
   display: flex;
@@ -4165,6 +7172,66 @@ html, body {
   color: var(--text-secondary);
   text-align: center;
   margin-bottom: 4px;
+}
+
+/* Vendor personality block — sits at the top of the resupply panel.
+   Per-archetype border tint via .vendor-{key} modifier. */
+.resupply-vendor {
+  width: 100%;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  border-left: 3px solid #9df;
+  background: rgba(8, 14, 24, 0.55);
+  border-radius: 3px;
+  text-align: left;
+}
+.vendor-archetype {
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 2.4px;
+  margin-bottom: 4px;
+}
+.vendor-name {
+  font-size: 16px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.8px;
+}
+.vendor-pitch {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-style: italic;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.vendor-tag {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 8px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  background: rgba(120, 200, 255, 0.16);
+  color: #aef;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+.vendor-quartermaster { border-left-color: #9df; }
+.vendor-blackmarket   { border-left-color: #f8a; }
+.vendor-blackmarket .vendor-tag { background: rgba(255, 130, 170, 0.16); color: #fbd; }
+.vendor-engineer      { border-left-color: #fc6; }
+.vendor-engineer .vendor-tag { background: rgba(255, 200, 100, 0.16); color: #fda; }
+.vendor-salvager      { border-left-color: #ac9; }
+.vendor-salvager .vendor-tag { background: rgba(170, 200, 150, 0.16); color: #ceb; }
+.vendor-priest        { border-left-color: #c8f; }
+.vendor-priest .vendor-tag { background: rgba(200, 130, 240, 0.16); color: #daf; }
+
+.repair-subtitle {
+  display: block;
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin-top: 1px;
 }
 
 .resupply-section {
@@ -4295,7 +7362,10 @@ html, body {
   margin-top: 4px;
 }
 
-#resupply-boons {
+/* Legacy #resupply-boons grid layout — superseded by the .resupply-v2
+   sectioned panes rebuild in Tier 45. Scoped via :not(.resupply-v2 ...)
+   so any non-v2 callers (none currently) still see the old grid. */
+.menu-resupply:not(.resupply-v2) #resupply-boons {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
@@ -4805,25 +7875,27 @@ html, body {
   box-shadow: 0 0 4px #fff;
 }
 
-/* Size classes */
+/* Size classes — capitals bumped slightly so Polish 8's ring outline
+   has room to read. Small craft stay small so a 200-ship brawl
+   doesn't clog the minimap viewport. */
 .dot-size-station {
+  width: 10px;
+  height: 10px;
+}
+
+.dot-size-carrier {
+  width: 9px;
+  height: 9px;
+}
+
+.dot-size-battleship {
   width: 8px;
   height: 8px;
 }
 
-.dot-size-carrier {
-  width: 7px;
-  height: 7px;
-}
-
-.dot-size-battleship {
+.dot-size-cruiser {
   width: 6px;
   height: 6px;
-}
-
-.dot-size-cruiser {
-  width: 5px;
-  height: 5px;
 }
 
 .dot-size-bomber {
@@ -4995,6 +8067,67 @@ html, body {
 }
 
 /* -----------------------------------------------------------
+   Section 9.5: Captain comms strip (Tier 39)
+   ----------------------------------------------------------- */
+.captain-comms {
+  position: absolute;
+  left: 20px;
+  bottom: 140px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 8;
+}
+.comm-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  background: rgba(8, 14, 24, 0.78);
+  border-left: 3px solid #6cf;
+  border-radius: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  transition: opacity 0.4s ease;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.comm-speaker {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  font-weight: bold;
+  color: #aef;
+  flex-shrink: 0;
+}
+.comm-ship {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+  font-style: italic;
+  flex-shrink: 0;
+}
+.comm-text {
+  color: var(--text-primary);
+  font-style: italic;
+}
+/* On mobile, push the strip down so it doesn't clip the joysticks. */
+@media (max-width: 720px) {
+  .captain-comms {
+    bottom: 90px;
+    left: 10px;
+    max-width: calc(100vw - 220px);
+    font-size: 11px;
+  }
+  .comm-line {
+    font-size: 11px;
+    padding: 3px 8px;
+  }
+}
+
+/* -----------------------------------------------------------
    Section 10: Spectate / Respawn / Match-over panels
    ----------------------------------------------------------- */
 .spectate-pill {
@@ -5067,6 +8200,13 @@ html, body {
   border-radius: 10px;
   padding: 32px 60px;
   text-align: center;
+  /* Cap + scroll: the AAR (losses / destroyed / captured / promotion)
+     can run tall on a phone. */
+  max-width: 92vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   clip-path: polygon(12px 0%, calc(100% - 12px) 0%, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0% calc(100% - 12px), 0% 12px);
   opacity: 0;
   transition: opacity 0.3s ease;
@@ -5086,6 +8226,161 @@ html, body {
   font-size: 14px;
   margin-top: 8px;
 }
+
+/* -----------------------------------------------------------
+   In-depth battle report (all modes). Rendered inside
+   .matchover-aar via renderBattleReportHTML (hud.js). The panel
+   already caps height + scrolls, so this can run long.
+   ----------------------------------------------------------- */
+.bstat-report { width: 100%; max-width: 540px; margin: 16px auto 0; text-align: left; }
+.bstat-title {
+  font-size: 13px; font-weight: bold; letter-spacing: 1px;
+  color: #cfe3f5; text-align: center; margin-bottom: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12); padding-top: 12px;
+}
+.bstat-duration { font-weight: normal; color: #89a; margin-left: 8px; font-size: 11px; }
+.bstat-blue { color: #6cf; }
+.bstat-red { color: #f77; }
+.bstat-section-title {
+  font-size: 10px; font-weight: bold; letter-spacing: 1px; color: #9ab;
+  margin: 13px 0 5px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 3px;
+}
+/* Head-to-head: blue value | label | red value */
+.bstat-cmp { display: flex; flex-direction: column; gap: 1px; }
+.bstat-cmp-row {
+  display: grid; grid-template-columns: 1fr 1.5fr 1fr;
+  align-items: center; font-size: 12px; padding: 2px 0;
+}
+.bstat-cmp-row .bstat-b { text-align: right; color: #adf; font-weight: bold; font-variant-numeric: tabular-nums; }
+.bstat-cmp-row .bstat-r { text-align: left;  color: #fbb; font-weight: bold; font-variant-numeric: tabular-nums; }
+.bstat-cmp-row .bstat-lbl { text-align: center; color: #9ab; font-size: 11px; }
+.bstat-cmp-head .bstat-b { color: #6cf; }
+.bstat-cmp-head .bstat-r { color: #f77; }
+.bstat-cmp-head span { font-size: 10px; letter-spacing: 1px; }
+/* Per-side fleet columns */
+.bstat-cols { display: flex; gap: 16px; }
+.bstat-col { flex: 1; min-width: 0; }
+.bstat-fleet-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 2px 0; }
+.bstat-fleet-k { color: #cde; white-space: nowrap; }
+.bstat-fleet-v { color: #9ab; text-align: right; }
+/* MVP */
+.bstat-mvp {
+  display: flex; align-items: center; gap: 10px; margin-top: 13px; padding: 7px 10px;
+  background: rgba(255, 214, 128, 0.1); border: 1px solid rgba(255, 214, 128, 0.32);
+  border-radius: 5px; font-size: 12px;
+}
+.bstat-mvp-label { color: #ffd680; font-weight: bold; white-space: nowrap; }
+.bstat-mvp-name { color: #fff; font-weight: bold; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bstat-mvp-stat { color: #cda; white-space: nowrap; }
+/* Per-capital + strike-craft lists */
+.bstat-cap-list, .bstat-sc-list { display: flex; flex-direction: column; gap: 1px; }
+.bstat-cap-row {
+  display: grid; grid-template-columns: 1.7fr 0.8fr 1.1fr 0.85fr;
+  gap: 6px; align-items: center; font-size: 11px; padding: 2px 0;
+}
+.bstat-cap-name { color: #dfe; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bstat-cap-klass { color: #89a; text-transform: capitalize; }
+.bstat-cap-kd { color: #bcd; text-align: right; font-variant-numeric: tabular-nums; }
+.bstat-cap-fate { text-align: right; font-size: 10px; }
+.bstat-fate-lost .bstat-cap-fate { color: #f77; }
+.bstat-fate-surrendered .bstat-cap-fate { color: #fc6; }
+.bstat-fate-alive .bstat-cap-fate { color: #6e9; }
+.bstat-fate-lost .bstat-cap-name { opacity: 0.55; text-decoration: line-through; }
+.bstat-sc-row { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 2px 0; }
+.bstat-sc-lbl { color: #cde; min-width: 60px; }
+.bstat-sc-v { color: #9ab; }
+.bstat-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.bstat-dot-blue { background: #6cf; }
+.bstat-dot-red { background: #f77; }
+
+/* After-action report — three columns: LOST / DESTROYED / REINFORCEMENTS.
+   Reads under the subtitle on Frontier matches. */
+.matchover-aar {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  width: 100%;
+  max-width: 540px;
+  display: none;
+}
+.matchover-aar .aar-row {
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+.matchover-aar .aar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(8, 14, 24, 0.45);
+  border-radius: 4px;
+  border-left: 3px solid #555;
+  text-align: left;
+  min-width: 0;
+}
+.matchover-aar .aar-label {
+  font-size: 9px;
+  letter-spacing: 1.6px;
+  font-weight: bold;
+  color: var(--text-secondary);
+}
+.matchover-aar .aar-value {
+  font-size: 12px;
+  color: #fff;
+  line-height: 1.35;
+}
+.matchover-aar .aar-note {
+  font-size: 10px;
+  font-style: italic;
+  color: #fdb;
+  margin-top: 2px;
+  line-height: 1.3;
+}
+.matchover-aar .aar-lost    { border-left-color: #f57; }
+.matchover-aar .aar-killed  { border-left-color: #6cf; }
+.matchover-aar .aar-reward  { border-left-color: #aef; }
+.matchover-aar .aar-captured { border-left-color: #9af0c8; }
+.matchover-aar .aar-captured .aar-note { color: #9af0c8; }
+
+/* Promotion block — narrative beat above the kill/loss tallies. */
+.matchover-aar .aar-promo {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 4px;
+  border-left: 3px solid #aef;
+  background: rgba(8, 14, 24, 0.55);
+  text-align: left;
+}
+.matchover-aar .aar-promo-headline {
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 2.2px;
+  color: #fc6;
+  margin-bottom: 4px;
+}
+.matchover-aar .aar-promo-body {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  font-style: italic;
+  line-height: 1.45;
+}
+.matchover-aar .aar-promo-rewards {
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: bold;
+  color: #aef;
+  letter-spacing: 0.8px;
+}
+/* Per-archetype border tint. */
+.matchover-aar .aar-promo-recruit         { border-left-color: #aef; }
+.matchover-aar .aar-promo-salvage         { border-left-color: #fc6; }
+.matchover-aar .aar-promo-volunteer-bomber{ border-left-color: #6e9; }
+.matchover-aar .aar-promo-commission      { border-left-color: #fda; box-shadow: 0 0 18px rgba(255, 218, 130, 0.18); }
+.matchover-aar .aar-promo-commendation    { border-left-color: #ffd; }
+.matchover-aar .aar-promo-defector        { border-left-color: #c9f; }
+.matchover-aar .aar-promo-transfer        { border-left-color: #8df; }
 
 .matchover-prompt {
   font-size: 12px;
@@ -5201,12 +8496,57 @@ html, body {
 
 .admiral-panel.active { opacity: 1; }
 
+/* Header row — title + minimise/restore button. */
+.admiral-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+}
 .admiral-title {
   font-size: 10px;
   font-weight: bold;
   color: #a89878;
   text-align: center;
   letter-spacing: 1.5px;
+}
+.admiral-min-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 200, 255, 0.35);
+  background: rgba(20, 40, 60, 0.85);
+  color: #cdf;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.admiral-min-btn:hover { filter: brightness(1.2); }
+.admiral-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Minimised — collapse to just the header bar so the battle is
+   visible. The title gains a "tap to expand" affordance. */
+.admiral-panel.minimized {
+  width: min(280px, 70vw);
+  padding-bottom: 8px;
+  gap: 0;
+}
+.admiral-panel.minimized .admiral-body { display: none; }
+.admiral-panel.minimized .admiral-title::after {
+  content: " ▸ tap to expand";
+  color: #6a7a90;
+  font-weight: 400;
 }
 
 /* ---- Master command bar ------------------------------------------- */
@@ -5364,6 +8704,14 @@ html, body {
 .posture-hold.active  { background: rgba(150, 40, 40, 0.88); border-color: rgba(255, 110, 80, 0.85); color: #fff; }
 .posture-free.active  { background: rgba(30, 80, 110, 0.88); border-color: rgba(140, 220, 255, 0.85); color: #fff; }
 .posture-press.active { background: rgba(30, 120, 60, 0.88); border-color: rgba(150, 240, 170, 0.85); color: #fff; }
+/* 5-stance set (in-battle admiral grid). engage=cyan, charge=red,
+   standoff=blue, hold=amber, fallback=grey, focus=orange. */
+.posture-engage.active   { background: rgba(30, 80, 110, 0.88);  border-color: rgba(140, 220, 255, 0.85); color: #fff; }
+.posture-charge.active   { background: rgba(150, 50, 40, 0.9);   border-color: rgba(255, 130, 90, 0.9);  color: #fff; }
+.posture-standoff.active { background: rgba(40, 90, 140, 0.9);   border-color: rgba(130, 180, 255, 0.9); color: #fff; }
+.posture-fallback.active { background: rgba(70, 75, 90, 0.9);    border-color: rgba(170, 185, 210, 0.85); color: #fff; }
+.focus-toggle.active     { background: rgba(150, 95, 30, 0.92);  border-color: rgba(255, 195, 110, 0.9); color: #fff; }
+.master-focus.active     { background: rgba(150, 95, 30, 0.92);  border-color: rgba(255, 195, 110, 0.9); color: #fff; }
 .missile-toggle.active {
   background: rgba(150, 40, 40, 0.85);
   border-color: rgba(255, 110, 80, 0.85);
@@ -5477,7 +8825,30 @@ html, body {
     z-index: 1;
   }
   .side-left  { /* override desktop `left: 12px` */ left: 50%; }
-  .side-right { /* override desktop `right: 12px` */ right: auto; top: 34px; }
+  /* FRIENDLY row sits at top:6 and is ~38px tall (22px glyph + 10px count
+     + padding). The old top:34 put ENEMY only 28px down, so the two rows
+     overlapped by ~10px. Drop it clear of the first row. */
+  .side-right { /* override desktop `right: 12px` */ right: auto; top: 48px; }
+  /* SETTINGS / QUIT pills — desktop pins them top-right next to the
+     side strips. On mobile EVERY top-edge slot is claimed already:
+     side strips top-centre (~y58), minimap top-right (y64-y184),
+     target panel top-left (y78+). Drop the pills below the minimap
+     on the right edge so nothing fights for the same band. */
+  .battle-top-right {
+    top: 192px;
+    right: 8px;
+    z-index: 2;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .battle-top-right .battle-pill {
+    /* Compact pill — single row of pills was wide enough to bleed
+       off the right edge after we stacked vertically. */
+    padding: 5px 10px;
+    min-width: 64px;
+    text-align: center;
+  }
   .side-strip .side-title {
     font-size: 9px;
     flex-shrink: 0;
@@ -5606,15 +8977,27 @@ html, body {
      panel stays narrow enough to clear the centred title pills and
      the top-right SPECTATE button. */
   .target-panel {
-    width: 140px;
-    /* Bumped from top:12 to top:64 so the new mobile fleet strips
-       (~58px tall at top-centre) don't overlap the target panel. */
-    top: 64px;
+    /* Bumped to 168px because the new Polish 2 ship-silhouette icon
+       in the header (32px + 8px gap) ate enough horizontal space that
+       "Voidsworn Fighter" was being clipped at 140px. */
+    width: 168px;
+    /* Bumped from top:12 to top:78 so the new mobile fleet strips
+       AND the now-pushed-down settings/quit pills don't overlap. */
+    top: 78px;
     left: 8px;
     bottom: auto;
     padding: 6px 8px;
     font-size: 9px;
   }
+  /* Target header on mobile — let the name wrap to a second line and
+     keep the icon a touch smaller so 168px is enough breathing room. */
+  .target-panel .target-header {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .target-panel .target-icon { width: 24px; height: 24px; }
+  .target-panel .target-icon .class-icon { width: 22px; height: 22px; }
+  .target-panel .target-name { flex: 1 0 100%; }
 
   /* Spectate pill on mobile drops below the top row so it stops sitting
      on top of the target panel + battle-top-right pill. */
@@ -5748,6 +9131,506 @@ html, body {
 }
 
 /* -----------------------------------------------------------
+   Tier 45 — Frontier screens mobile-first restructure
+   ----------------------------------------------------------- */
+
+/* Run Setup v2 ---------------------------------------------- */
+.menu-runsetup.runsetup-v2 {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.runsetup-v2 .runsetup-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 12px 16px;
+  border-bottom: 1px solid rgba(120, 180, 220, 0.18);
+  background: rgba(8, 14, 24, 0.55);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.runsetup-v2 .runsetup-header h2 {
+  margin: 0;
+  flex: 1;
+  text-align: center;
+  font-size: 18px;
+  letter-spacing: 2.5px;
+  color: var(--text-primary);
+}
+
+.runsetup-v2 .runsetup-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 20px 24px 20px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.runsetup-v2 .runsetup-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 22px 18px 20px 18px;
+  background: linear-gradient(180deg, rgba(20, 32, 50, 0.95) 0%, rgba(12, 20, 32, 0.85) 100%);
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  clip-path: polygon(10px 0%, calc(100% - 10px) 0%, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0% calc(100% - 10px), 0% 10px);
+}
+
+.runsetup-v2 .runsetup-crest {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+.runsetup-v2 .runsetup-crest-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 200, 255, 0.55);
+  box-shadow: 0 0 18px rgba(92, 204, 255, 0.35), inset 0 0 12px rgba(92, 204, 255, 0.18);
+}
+.runsetup-v2 .runsetup-crest-inner {
+  position: relative;
+  font-size: 32px;
+  color: #cef;
+  text-shadow: 0 0 12px rgba(120, 200, 255, 0.6);
+}
+
+.runsetup-v2 .runsetup-hero-eyebrow {
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: #5ab;
+  font-weight: bold;
+}
+.runsetup-v2 .runsetup-hero-title {
+  font-size: 22px;
+  letter-spacing: 2px;
+  font-weight: bold;
+  color: #fff;
+  margin-top: 2px;
+}
+.runsetup-v2 .runsetup-hero-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  margin: 8px 0 4px 0;
+  max-width: 420px;
+}
+.runsetup-v2 .runsetup-stakes {
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #fc8;
+  border: 1px solid rgba(255, 200, 120, 0.45);
+  border-radius: 2px;
+}
+
+.runsetup-v2 .runsetup-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.runsetup-v2 .runsetup-section-title {
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  font-weight: bold;
+  color: #5ab;
+}
+
+.runsetup-v2 .runsetup-callsign-field {
+  background: rgba(0, 0, 0, 0.55);
+  border: 1.5px solid rgba(120, 180, 220, 0.45);
+  color: #fff;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  text-align: center;
+  padding: 12px 14px;
+  width: 100%;
+  text-transform: uppercase;
+}
+.runsetup-v2 .runsetup-callsign-field:focus {
+  outline: none;
+  border-color: #7df;
+  box-shadow: 0 0 0 2px rgba(120, 200, 255, 0.25);
+}
+.runsetup-v2 .runsetup-callsign-field::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+  letter-spacing: 1.5px;
+  font-weight: normal;
+  text-transform: none;
+}
+
+.runsetup-v2 .runsetup-perk-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.runsetup-v2 .runsetup-perk-chip {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 120px;
+  background: rgba(20, 26, 36, 0.85);
+  border: 1.5px solid rgba(120, 180, 220, 0.3);
+  color: #a89878;
+  padding: 10px 12px;
+  font: bold 11px/1.2 inherit;
+  letter-spacing: 0.5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+.runsetup-v2 .runsetup-perk-chip:hover {
+  border-color: rgba(180, 220, 255, 0.7);
+  filter: brightness(1.1);
+}
+.runsetup-v2 .runsetup-perk-chip.active {
+  background: rgba(60, 110, 160, 0.7);
+  border-color: #5cf;
+  color: #fff;
+  box-shadow: 0 0 8px rgba(92, 204, 255, 0.35);
+}
+.runsetup-v2 .runsetup-perk-desc {
+  font-size: 11px;
+  color: #8a7a5a;
+  line-height: 1.45;
+  min-height: 30px;
+  padding: 8px 12px;
+  background: rgba(8, 14, 24, 0.55);
+  border-left: 2px solid rgba(120, 180, 220, 0.35);
+  border-radius: 2px;
+}
+
+.runsetup-v2 .runsetup-footer {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 18px calc(14px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(8, 14, 24, 0) 0%, rgba(8, 14, 24, 0.92) 35%);
+  display: flex;
+  justify-content: center;
+  z-index: 2;
+}
+.runsetup-v2 .runsetup-footer .skirmish-deploy-btn {
+  width: 100%;
+  max-width: 460px;
+}
+
+/* Resupply v2 ----------------------------------------------- */
+.menu-resupply.resupply-v2 {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.resupply-v2 .resupply-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(120, 180, 220, 0.18);
+  background: rgba(8, 14, 24, 0.55);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.resupply-v2 .resupply-header h2 {
+  margin: 0;
+  flex: 0 1 auto;
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--text-primary);
+}
+.resupply-v2 .resupply-header .playhub-spacer {
+  flex: 1;
+}
+
+.resupply-v2 .resupply-creds-chip,
+.resupply-v2 .resupply-fuel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 0.6px;
+  border: 1px solid rgba(255, 220, 140, 0.35);
+  background: rgba(40, 30, 12, 0.7);
+  color: #fe8;
+}
+.resupply-v2 .resupply-fuel-chip {
+  border-color: rgba(120, 200, 255, 0.4);
+  background: rgba(12, 26, 40, 0.7);
+  color: #aef;
+}
+.resupply-v2 .resupply-creds-icon,
+.resupply-v2 .resupply-fuel-icon {
+  font-size: 12px;
+}
+
+.resupply-v2 .resupply-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 14px 24px 14px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.resupply-v2 .resupply-vendor-card {
+  padding: 12px 14px;
+  border-left: 3px solid #9df;
+  background: rgba(8, 14, 24, 0.55);
+  border-radius: 3px;
+}
+.resupply-v2 .resupply-vendor-card.vendor-blackmarket { border-left-color: #f8a; }
+.resupply-v2 .resupply-vendor-card.vendor-engineer    { border-left-color: #fc6; }
+.resupply-v2 .resupply-vendor-card.vendor-salvager    { border-left-color: #ac9; }
+.resupply-v2 .resupply-vendor-card.vendor-priest      { border-left-color: #c8f; }
+.resupply-v2 .resupply-vendor-card .vendor-archetype {
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 2.4px;
+  margin-bottom: 4px;
+}
+.resupply-v2 .resupply-vendor-card .vendor-name {
+  font-size: 15px;
+  font-weight: bold;
+  color: #fff;
+  letter-spacing: 0.6px;
+}
+.resupply-v2 .resupply-vendor-card .vendor-pitch {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-style: italic;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.resupply-v2 .resupply-vendor-card .vendor-tag {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 8px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-weight: bold;
+  background: rgba(120, 200, 255, 0.16);
+  color: #aef;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+.resupply-v2 .resupply-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(120, 180, 220, 0.18);
+  background: rgba(12, 18, 28, 0.55);
+  border-radius: 3px;
+}
+.resupply-v2 .resupply-pane-title {
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  font-weight: bold;
+  color: #5ab;
+  margin-bottom: 2px;
+}
+
+.resupply-v2 .resupply-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.resupply-v2 .resupply-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(34, 28, 22, 0.7);
+  border: 1px solid rgba(120, 180, 220, 0.2);
+  border-radius: 3px;
+  width: 100%;
+  font-family: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.resupply-v2 .resupply-row.resupply-boon-row {
+  background: rgba(40, 24, 56, 0.7);
+  border-color: rgba(200, 140, 240, 0.4);
+}
+.resupply-v2 .resupply-row.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.resupply-v2 .resupply-row-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.resupply-v2 .resupply-row-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--text-primary);
+  letter-spacing: 0.4px;
+}
+.resupply-v2 .resupply-row-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.resupply-v2 .repair-hp-bar {
+  width: 100%;
+  max-width: 200px;
+  height: 5px;
+  background: rgba(40, 60, 80, 0.85);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+.resupply-v2 .repair-hp-fill {
+  height: 100%;
+  background: #5cf;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.resupply-v2 .resupply-action-btn {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 0.6px;
+  background: rgba(40, 32, 24, 0.92);
+  border: 1.5px solid #9cf;
+  color: #cdf;
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 3px;
+  transition: filter 0.15s ease;
+  white-space: nowrap;
+}
+.resupply-v2 .resupply-action-btn:hover {
+  filter: brightness(1.15);
+}
+.resupply-v2 .resupply-action-btn:disabled,
+.resupply-v2 .resupply-action-btn.disabled {
+  background: rgba(40, 40, 55, 0.85);
+  border-color: #566;
+  color: #866;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.resupply-v2 .resupply-action-btn.boon-cost {
+  border-color: #c9f;
+  background: rgba(50, 30, 70, 0.92);
+  color: #fcf;
+}
+
+.resupply-v2 .resupply-shop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.resupply-v2 .resupply-shop-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px 10px 8px;
+  background: rgba(20, 28, 40, 0.85);
+  border: 1.5px solid rgba(120, 180, 220, 0.35);
+  border-radius: 4px;
+  font-family: inherit;
+  color: #cdf;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.resupply-v2 .resupply-shop-tile:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+.resupply-v2 .resupply-shop-tile:disabled,
+.resupply-v2 .resupply-shop-tile.disabled {
+  background: rgba(40, 40, 55, 0.85);
+  border-color: #566;
+  color: #866;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.resupply-v2 .shop-tile-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.resupply-v2 .shop-tile-name {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  font-weight: bold;
+}
+.resupply-v2 .shop-tile-cost {
+  font-size: 12px;
+  font-weight: bold;
+  color: #fe8;
+  letter-spacing: 0.4px;
+}
+
+.resupply-v2 .resupply-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 6px 4px;
+}
+
+.resupply-v2 .resupply-footer {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 18px calc(14px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(8, 14, 24, 0) 0%, rgba(8, 14, 24, 0.92) 35%);
+  display: flex;
+  justify-content: center;
+  z-index: 2;
+}
+.resupply-v2 .resupply-footer .skirmish-deploy-btn {
+  width: 100%;
+  max-width: 460px;
+}
+
+/* Compact tweaks for narrow mobile widths. */
+@media (max-width: 420px) {
+  .runsetup-v2 .runsetup-hero-title { font-size: 19px; }
+  .runsetup-v2 .runsetup-hero-body { font-size: 12px; }
+  .resupply-v2 .resupply-header h2 { font-size: 13px; }
+  .resupply-v2 .resupply-shop-grid { gap: 6px; }
+  .resupply-v2 .shop-tile-icon { font-size: 18px; }
+}
+
+/* -----------------------------------------------------------
    Section 17: z-index documentation
    -----------------------------------------------------------
    Battle HUD layer stack (bottom to top within battle-root):
@@ -5784,3 +9667,1790 @@ html, body {
      z-index 30  — .node-tooltip
      z-index 40  — .jump-confirm
    ----------------------------------------------------------- */
+
+/* ============================================================
+   SHIPYARD — design-your-own-ship meta-progression store.
+   Two panes (overview + per-slot category). Sits on top of home
+   as a fullscreen overlay. Same z-index as other menu screens.
+   ============================================================ */
+
+/* Home-screen card pointing at the Shipyard. Sits between the
+   tile row and the link row. */
+.home-shipyard-card {
+  width: 100%;
+  margin: 0;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #1c2840 0%, #131c2e 100%);
+  border: 1px solid #2c4670;
+  border-radius: 12px;
+  color: #cfe;
+  text-align: left;
+  cursor: pointer;
+  display: block;
+  transition: border-color 0.15s, transform 0.06s;
+}
+.home-shipyard-card:hover { border-color: #5cf; }
+.home-shipyard-card:active { transform: scale(0.985); }
+.shipyard-card-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: #7df;
+  margin-bottom: 6px;
+}
+.shipyard-card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.shipyard-card-info { display: flex; flex-direction: column; gap: 2px; }
+.shipyard-card-name {
+  font-weight: 600;
+  font-size: 17px;
+  color: #fff;
+}
+.shipyard-card-hull {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: #9bd;
+}
+.shipyard-card-right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+}
+.shipyard-card-credits {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fc8;
+}
+.shipyard-card-credits .cr {
+  font-size: 11px;
+  color: #d9c;
+  font-weight: 400;
+  margin-left: 2px;
+}
+.shipyard-card-cta {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: #7df;
+}
+
+/* ---- Overlay screen ---- */
+.menu-shipyard {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  background: linear-gradient(180deg, #04080f 0%, #0a1224 100%);
+}
+.shipyard-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #1f2c44;
+  background: #060c18;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.shipyard-back {
+  width: 36px; height: 36px;
+  background: transparent;
+  border: 1px solid #2c4670;
+  border-radius: 8px;
+  color: #cfe;
+  font-size: 20px;
+  cursor: pointer;
+}
+.shipyard-back:active { background: #1c2840; }
+.shipyard-header h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  color: #cfe;
+}
+.shipyard-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid #c84;
+  border-radius: 20px;
+  background: rgba(96, 64, 28, 0.25);
+}
+.shipyard-balance-value { color: #fc8; font-weight: 600; font-size: 16px; }
+.shipyard-balance-unit  { color: #d9c; font-size: 11px; }
+
+.shipyard-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+  padding-bottom: 80px;
+}
+.shipyard-pane { display: none; }
+.shipyard-pane.active { display: block; }
+
+/* ---- Overview pane ---- */
+.shipyard-ship-card {
+  background: linear-gradient(180deg, #122036 0%, #0a1424 100%);
+  border: 1px solid #2c4670;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.shipyard-ship-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: #7df;
+  margin-bottom: 8px;
+}
+.shipyard-ship-name-row { margin-bottom: 8px; }
+.shipyard-ship-name-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: #060c18;
+  border: 1px solid #2c4670;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+}
+.shipyard-ship-name-input:focus {
+  outline: none;
+  border-color: #5cf;
+}
+.shipyard-ship-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.shipyard-ship-hull-label {
+  color: #fc8;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+}
+.shipyard-ship-divider { color: #468; }
+.shipyard-ship-stats { color: #9bd; }
+
+.shipyard-section-title {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: #7df;
+  margin: 16px 0 8px;
+}
+
+.shipyard-hull-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.shipyard-hull-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 8px;
+  background: #0a1424;
+  border: 1px solid #2c4670;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #cfe;
+}
+.shipyard-hull-card.equipped {
+  background: linear-gradient(180deg, #1c3f5c 0%, #0a1f30 100%);
+  border-color: #5cf;
+  box-shadow: 0 0 0 1px #5cf inset;
+}
+.shipyard-hull-card.owned   { border-color: #468; }
+.shipyard-hull-card.buyable { border-color: #c84; }
+.shipyard-hull-card.locked  { opacity: 0.45; cursor: not-allowed; }
+.hull-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.hull-card-tag {
+  font-size: 10px;
+  margin-top: 4px;
+  color: #9bd;
+}
+.shipyard-hull-card.equipped .hull-card-tag { color: #5cf; }
+.shipyard-hull-card.buyable  .hull-card-tag { color: #fc8; }
+.shipyard-hull-card.locked   .hull-card-tag { color: #678; }
+
+.shipyard-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.shipyard-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #0a1424;
+  border: 1px solid #1f2c44;
+  border-radius: 8px;
+  color: #cfe;
+  cursor: pointer;
+  text-align: left;
+}
+.shipyard-slot-row:hover { border-color: #2c4670; }
+.shipyard-slot-row:active { background: #122036; }
+.slot-row-kind {
+  flex: 0 0 130px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: #7df;
+}
+.slot-row-comp {
+  flex: 1;
+  font-size: 13px;
+  color: #fff;
+}
+.slot-row-chev {
+  color: #468;
+  font-size: 18px;
+}
+
+.shipyard-footer {
+  margin-top: 24px;
+}
+.shipyard-deploy-btn {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(180deg, #c84 0%, #a62 100%);
+  border: 1px solid #fc8;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+}
+.shipyard-deploy-btn:active { transform: scale(0.985); }
+
+/* ---- Category pane ---- */
+.shipyard-cat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.shipyard-cat-back {
+  width: 32px; height: 32px;
+  background: transparent;
+  border: 1px solid #2c4670;
+  border-radius: 8px;
+  color: #cfe;
+  font-size: 18px;
+  cursor: pointer;
+}
+.shipyard-cat-header h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.16em;
+  color: #cfe;
+}
+.shipyard-cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shipyard-cat-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  background: #0a1424;
+  border: 1px solid #1f2c44;
+  border-radius: 8px;
+  color: #cfe;
+  cursor: pointer;
+}
+.shipyard-cat-item.equipped {
+  background: linear-gradient(180deg, #1c3f5c 0%, #0a1f30 100%);
+  border-color: #5cf;
+}
+.shipyard-cat-item.owned   { border-color: #468; }
+.shipyard-cat-item.buyable { border-color: #c84; }
+.shipyard-cat-item.locked  { opacity: 0.5; cursor: not-allowed; }
+.cat-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.cat-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+.cat-item-tag {
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  color: #9bd;
+}
+.shipyard-cat-item.equipped .cat-item-tag { color: #5cf; }
+.shipyard-cat-item.buyable  .cat-item-tag { color: #fc8; }
+.shipyard-cat-item.locked   .cat-item-tag { color: #678; }
+.cat-item-blurb {
+  font-size: 12px;
+  color: #9bd;
+  line-height: 1.4;
+}
+
+/* Shipyard credit breakdown on the run-end AAR panel.
+   Distinct from the regular endstats so the credit payout reads as
+   "this is what you walk away with into the next run". */
+.endstats-shipyard {
+  margin-top: 8px;
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+.endstats-shipyard .endstats-row {
+  padding: 3px 8px;
+  background: rgba(255, 180, 100, 0.06);
+  border-left: 2px solid rgba(255, 180, 100, 0.35);
+  border-radius: 2px;
+}
+.endstats-shipyard .endstats-value {
+  color: #fc8;
+}
+.endstats-shipyard .endstats-warbonus {
+  background: rgba(255, 200, 100, 0.18);
+  border-left-color: #fc8;
+}
+.endstats-shipyard .endstats-warbonus .endstats-label,
+.endstats-shipyard .endstats-warbonus .endstats-value {
+  color: #fed;
+  font-weight: bold;
+  letter-spacing: 1.2px;
+}
+.endstats-shipyard-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 10px;
+  padding: 6px 10px;
+  background: linear-gradient(90deg, rgba(255,180,100,0.10), rgba(255,180,100,0.18));
+  border: 1px solid rgba(255, 200, 120, 0.45);
+  border-radius: 4px;
+  font-size: 12px;
+  letter-spacing: 1.4px;
+  font-weight: bold;
+  color: #fc8;
+}
+.endstats-shipyard-total-value {
+  color: #fed;
+  font-size: 16px;
+}
+.endstats-shipyard-balance {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #9bd;
+}
+.endstats-shipyard-balance-value {
+  color: #fc8;
+  font-weight: bold;
+}
+
+/* Shipyard component-picker stat deltas. Inline chips below the
+   component blurb showing how the candidate compares to currently
+   equipped (e.g. "+30 shield", "-0.05s cycle"). Green/red tint
+   indicates strictly-better vs strictly-worse on that axis — players
+   skim the colors to spot upgrade vs sidegrade vs downgrade. */
+.cat-item-deltas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.cat-delta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+}
+.cat-delta-label {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  opacity: 0.72;
+}
+.cat-delta-better {
+  background: rgba(120, 220, 130, 0.14);
+  border: 1px solid rgba(120, 220, 130, 0.45);
+  color: #afe6b0;
+}
+.cat-delta-worse {
+  background: rgba(240, 110, 110, 0.12);
+  border: 1px solid rgba(240, 110, 110, 0.40);
+  color: #f3b0b0;
+}
+/* Hide deltas on the equipped row — they'd always be empty there
+   but keep a clean visual contract regardless. */
+.shipyard-cat-item.equipped .cat-item-deltas { display: none; }
+
+/* Shipyard paint editor — primary + trim color pickers + reset button.
+   Uses the native <input type=color> for cross-platform compatibility
+   on mobile (Capacitor iOS/Android both render the system color picker). */
+.shipyard-paint-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  background: #0a1424;
+  border: 1px solid #1f2c44;
+  border-radius: 8px;
+}
+.shipyard-paint-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.shipyard-paint-swatch .paint-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #7df;
+}
+.shipyard-paint-swatch input[type="color"] {
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 2px solid #2c4670;
+  border-radius: 8px;
+  background: #060c18;
+  cursor: pointer;
+  /* Strip the native swatch padding so the colored fill goes edge-to-edge. */
+}
+.shipyard-paint-swatch input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.shipyard-paint-swatch input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
+.shipyard-paint-swatch input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
+.shipyard-paint-reset {
+  margin-left: auto;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px solid #2c4670;
+  border-radius: 6px;
+  color: #9bd;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  cursor: pointer;
+}
+.shipyard-paint-reset:active { background: #1c2840; }
+
+/* Shipyard ship preview — SVG hull silhouette with clickable module
+   hotspots. The SVG fills the stage; hotspots are absolute-positioned
+   buttons over the top. Per-category tint + glyph so the player reads
+   "this is my weapon" / "this is my shield" at a glance. */
+/* ---- Shipyard ship preview — BLUEPRINT SCHEMATIC ---------------------
+   The hull is rendered as a technical draughting plate: cyan grid, line-
+   art hull with a construction ghost outline, centreline axes, station
+   lines, dimension callouts + a title block. Module slots are schematic
+   callout markers wired to the picker. */
+.shipyard-preview {
+  background:
+    radial-gradient(120% 90% at 50% 0%, #0c3057 0%, #07203c 55%, #05172c 100%);
+  border: 1px solid #2a5c8c;
+  border-radius: 12px;
+  padding: 8px 10px 12px;
+  margin-bottom: 18px;
+  box-shadow: inset 0 0 0 1px rgba(120, 220, 255, 0.06),
+              0 4px 18px rgba(0, 0, 0, 0.45);
+}
+.preview-hint {
+  font-family: "Courier New", ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: #8fd6ff;
+  text-align: center;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.preview-hint .preview-hint-doc {
+  border: 1px solid #3a7bb0;
+  border-radius: 2px;
+  padding: 1px 5px;
+  margin-right: 6px;
+  color: #cfeaff;
+  letter-spacing: 0.22em;
+}
+.preview-stage {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  margin: 0 auto;
+  aspect-ratio: 14 / 9;
+}
+.preview-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.preview-svg.blueprint-svg {
+  filter: drop-shadow(0 0 5px rgba(90, 200, 255, 0.22));
+}
+/* Schematic ink — most line work is one cyan; the hull main outline is
+   tinted by the player's trim paint (set inline). */
+.blueprint-svg .bp-bg        { fill: #082341; }
+.blueprint-svg .bp-frame     { fill: none; stroke: #3a7bb0; stroke-width: 1; }
+.blueprint-svg .bp-corner    { fill: none; stroke: #8fd6ff; stroke-width: 1.4; }
+.blueprint-svg .bp-axis      { stroke: #4f9fd0; stroke-width: 0.7; stroke-dasharray: 6 2 1 2; opacity: 0.7; }
+.blueprint-svg .bp-stations line { stroke: #3f86bd; stroke-width: 0.6; opacity: 0.55; }
+.blueprint-svg .bp-hull-ghost { fill: none; stroke: #5fa8da; stroke-width: 0.8; stroke-dasharray: 3 3; opacity: 0.6; }
+.blueprint-svg .bp-hull      { stroke-width: 2; stroke-linejoin: round; filter: drop-shadow(0 0 2px rgba(140, 230, 255, 0.5)); }
+.blueprint-svg .bp-tick      { stroke: #bfeaff; stroke-width: 0.9; }
+.blueprint-svg .bp-dim line,
+.blueprint-svg .bp-dim path  { stroke: #7cc6f0; stroke-width: 0.7; fill: none; }
+.blueprint-svg .bp-dim text  { fill: #aee0ff; font-family: "Courier New", monospace; font-size: 6.5px; letter-spacing: 0.08em; }
+.blueprint-svg .bp-titleblock rect { fill: rgba(8, 32, 58, 0.78); stroke: #3a7bb0; stroke-width: 0.8; }
+.blueprint-svg .bp-titleblock line { stroke: #3a7bb0; stroke-width: 0.6; }
+.blueprint-svg .bp-tb-main   { fill: #d6f1ff; font-family: "Courier New", monospace; font-size: 6.5px; letter-spacing: 0.06em; font-weight: bold; }
+.blueprint-svg .bp-tb-sub    { fill: #8fc8ee; font-family: "Courier New", monospace; font-size: 5.5px; letter-spacing: 0.04em; }
+
+/* Module callout markers — small schematic nodes (squared diamonds) with
+   a monospace label tag, instead of the old round chips. */
+.preview-hotspot {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: rgba(7, 28, 52, 0.92);
+  border: 1.4px solid #5fa8da;
+  border-radius: 3px;
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #cfeaff;
+  box-shadow: 0 0 0 3px rgba(8, 35, 65, 0.55), 0 0 6px rgba(90, 200, 255, 0.25);
+  transition: transform 0.08s, border-color 0.12s, box-shadow 0.12s;
+  z-index: 2;
+}
+.preview-hotspot:hover, .preview-hotspot:active {
+  transform: translate(-50%, -50%) scale(1.18);
+  border-color: #bfeaff;
+  box-shadow: 0 0 0 3px rgba(8, 35, 65, 0.7), 0 0 10px rgba(140, 230, 255, 0.5);
+}
+.preview-hotspot .hot-num {
+  font-size: 12px;
+  line-height: 1;
+  font-weight: bold;
+  font-family: "Courier New", monospace;
+}
+/* Secondary mount markers — extra physical mounts of a numbered slot (PD
+   turret ring, second engine, broadside pair). Small unnumbered nodes so
+   they show on the hull where the in-game turrets are, without cluttering
+   the numbered legend. */
+.preview-hotspot.preview-marker {
+  width: 12px;
+  height: 12px;
+  border-width: 1.2px;
+  box-shadow: 0 0 0 2px rgba(8, 35, 65, 0.5), 0 0 4px rgba(90, 200, 255, 0.22);
+}
+.preview-hotspot.preview-marker:hover,
+.preview-hotspot.preview-marker:active {
+  transform: translate(-50%, -50%) scale(1.25);
+}
+/* Parts legend — the numbered key beneath the plate. */
+.preview-legend {
+  list-style: none;
+  margin: 12px 2px 0;
+  padding: 8px 4px 0;
+  border-top: 1px dashed #2f6391;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+}
+.preview-leg-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  padding: 3px 4px;
+  border-radius: 3px;
+  font-family: "Courier New", monospace;
+  transition: background 0.1s;
+}
+.preview-leg-row:hover, .preview-leg-row:active { background: rgba(90, 200, 255, 0.1); }
+.preview-leg-row .leg-num {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.2px solid #5fa8da;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: bold;
+  color: #cfeaff;
+  background: rgba(7, 28, 52, 0.8);
+}
+.preview-leg-row .leg-cat {
+  flex: none;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: #6fa8d0;
+  width: 52px;
+}
+.preview-leg-row .leg-name {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: #d6f1ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Legend rows inherit the category accent on their number balloon. */
+.preview-leg-row.hot-weapon    .leg-num { border-color: #ff9a9a; }
+.preview-leg-row.hot-pd        .leg-num { border-color: #ffc98a; }
+.preview-leg-row.hot-missile   .leg-num { border-color: #ff9ad6; }
+.preview-leg-row.hot-shield    .leg-num { border-color: #8fcaff; }
+.preview-leg-row.hot-armor     .leg-num { border-color: #cdddee; }
+.preview-leg-row.hot-engine    .leg-num { border-color: #9af0c8; }
+.preview-leg-row.hot-hangar    .leg-num { border-color: #ffc0c0; }
+.preview-leg-row.hot-shield-gen .leg-num { border-color: #5cf0e0; color: #5cf0e0; }
+.preview-leg-row.hot-torpedo   .leg-num { border-color: #f0c040; color: #f0c040; }
+/* Fixed built-in module rows — no hover interaction, dimmed to read as
+   informational rather than selectable. */
+.preview-leg-row.preview-leg-fixed {
+  cursor: default;
+  opacity: 0.72;
+}
+.preview-leg-row.preview-leg-fixed:hover,
+.preview-leg-row.preview-leg-fixed:active { background: none; }
+/* Per-category tints — each module class reads with its own accent while
+   staying within the cyan blueprint family. */
+.preview-hotspot.hot-weapon    { border-color: #ff9a9a; color: #ffdede; }
+.preview-hotspot.hot-pd        { border-color: #ffc98a; color: #ffeccd; }
+.preview-hotspot.hot-missile   { border-color: #ff9ad6; color: #ffdef4; }
+.preview-hotspot.hot-shield    { border-color: #8fcaff; color: #dfefff; }
+.preview-hotspot.hot-armor     { border-color: #cdddee; color: #ffffff; }
+.preview-hotspot.hot-engine    { border-color: #9af0c8; color: #dbffec; }
+.preview-hotspot.hot-hangar    { border-color: #ffc0c0; color: #ffe0e0; }
+/* Fixed built-in hardware — teal for shield generators, gold for torpedoes. */
+.preview-hotspot.preview-fixed {
+  position: absolute;
+  width: 12px; height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px dashed;
+  pointer-events: none;
+  opacity: 0.7;
+}
+.preview-hotspot.preview-fixed.hot-shield-gen { border-color: #5cf0e0; background: rgba(92,240,224,0.10); }
+.preview-hotspot.preview-fixed.hot-torpedo    { border-color: #f0c040; background: rgba(240,192,64,0.10); }
+
+/* Ship-class icon polish (Polish 1).
+   The classIconSvg helper drops an inline <svg.class-icon> into every
+   roster cell / slider chip / admiral cell glyph. These rules size +
+   tint them so they read as silhouettes against the chrome. */
+.class-icon {
+  display: inline-block;
+  vertical-align: middle;
+  /* Use currentColor for both fill + stroke so each container can tint
+     the icon via CSS color without touching the SVG markup. */
+  color: inherit;
+}
+.roster-cell .cell-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  /* Override the legacy 8px font-size text — icon owns the box now. */
+  font-size: 0;
+}
+.roster-cell .cell-glyph .class-icon {
+  color: #a89878;
+}
+.roster-cell.empty .cell-glyph .class-icon { opacity: 0.55; }
+.admiral-cell-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+}
+.admiral-cell-glyph .class-icon { color: #cfe; }
+.slider-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+}
+.slider-glyph .class-icon { color: #9bd; }
+/* Smaller-viewport override — the legacy rule made the glyph 6px-text. */
+@media (max-width: 420px) {
+  .roster-cell .cell-glyph { font-size: 0; height: 18px; }
+  .roster-cell .cell-glyph .class-icon { width: 18px; height: 18px; }
+}
+
+/* Polish 2 — target panel ship-class silhouette + action cluster icons. */
+.target-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.target-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  color: #fdb;            /* enemy faction tint */
+}
+.target-icon .class-icon { width: 30px; height: 30px; }
+
+/* Action-cluster inline SVG icons — replace the emoji codepoints with
+   crisp SVG that respects currentColor + scales to any DPR. */
+.action-btn .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: inherit;
+}
+.action-btn .btn-icon svg { display: block; }
+
+/* Polish 3 — boot splash. Full-screen overlay that paints the brand
+   while the engine initialises + sprite-prerender completes. Fades out
+   on the second RAF after first paint so the player sees the menu
+   underneath when the curtain lifts.
+   Z-index sits above everything else (menu = 15, battle HUD = 20,
+   menu widgets = 25) so nothing leaks through during the fade. */
+#boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: radial-gradient(ellipse at center, #0a1424 0%, #04060e 70%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.55s ease;
+}
+#boot-splash.fade-out { opacity: 0; pointer-events: none; }
+.boot-splash-inner {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+  animation: boot-fade-in 0.6s ease;
+}
+.boot-splash-icon {
+  width: 128px;
+  height: 128px;
+  border-radius: 28px;
+  box-shadow: 0 8px 24px rgba(92, 200, 255, 0.25),
+              0 0 60px rgba(92, 200, 255, 0.15);
+}
+.boot-splash-title {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  color: #cfe;
+  margin-top: 12px;
+  text-shadow: 0 0 16px rgba(92, 200, 255, 0.45);
+}
+.boot-splash-subtitle {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.48em;
+  color: #7df;
+}
+.boot-splash-loader {
+  display: inline-flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.boot-splash-loader span {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #5cf;
+  animation: boot-pulse 1.2s ease-in-out infinite;
+  opacity: 0.4;
+}
+.boot-splash-loader span:nth-child(2) { animation-delay: 0.15s; }
+.boot-splash-loader span:nth-child(3) { animation-delay: 0.30s; }
+@keyframes boot-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50%      { opacity: 1.0; transform: scale(1.15); }
+}
+@keyframes boot-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Polish 4 — memorial entry insignia + result badge layout.
+   Override the legacy 3-column grid to a vertical stack so the new
+   header row (insignia + identity + badge) reads as the top band
+   and epitaph + memoir flow underneath. */
+.memorial-list .memorial-row {
+  display: flex !important;
+  flex-direction: column;
+  gap: 8px;
+}
+.memorial-row-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.memorial-rank-insignia {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 218, 130, 0.08);
+  border: 1px solid rgba(255, 218, 130, 0.30);
+  border-radius: 6px;
+  color: #ffd680;
+  flex-shrink: 0;
+}
+.memorial-row.lost .memorial-rank-insignia {
+  background: rgba(240, 110, 110, 0.06);
+  border-color: rgba(240, 110, 110, 0.30);
+  color: #f3b0b0;
+}
+.memorial-row-identity {
+  flex: 1;
+  min-width: 0;
+}
+.memorial-row-identity .memorial-row-rank,
+.memorial-row-identity .memorial-row-callsign {
+  margin: 0;
+}
+.memorial-result-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.memorial-result-badge.won {
+  background: rgba(120, 220, 130, 0.14);
+  border: 1px solid rgba(120, 220, 130, 0.45);
+  color: #afe6b0;
+}
+.memorial-result-badge.lost {
+  background: rgba(240, 110, 110, 0.12);
+  border: 1px solid rgba(240, 110, 110, 0.40);
+  color: #f3b0b0;
+}
+
+/* Empty-state polish — memorial without careers gets an illustrated
+   placeholder card with helpful copy + a star-field backdrop. */
+.memorial-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 40px 24px;
+  background: radial-gradient(ellipse at center, rgba(92,200,255,0.06) 0%, transparent 65%);
+  border: 1px dashed rgba(124, 220, 255, 0.30);
+  border-radius: 14px;
+  color: #9bd;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.memorial-empty::before {
+  content: "";
+  display: block;
+  width: 56px;
+  height: 56px;
+  background-image: url("/app-icon.svg");
+  background-size: cover;
+  border-radius: 12px;
+  box-shadow: 0 0 28px rgba(92, 200, 255, 0.30);
+  opacity: 0.85;
+}
+
+/* Polish 6 — overlay fade-in. When a menu screen becomes active, the
+   children fade in over 0.18s for a less jarring transition than the
+   raw display:flip. Avoid animating the .menu-screen itself (display
+   transitions don't animate); animate the panel inside instead. */
+.menu-screen.active > * {
+  animation: menu-fade-in 0.20s ease;
+}
+@keyframes menu-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* Card-bottom-sheet style for the shipyard category list — slides up
+   from below when the player taps a slot. */
+.shipyard-pane-category.active {
+  animation: shipyard-cat-slide 0.22s ease;
+}
+@keyframes shipyard-cat-slide {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Empty states — illustrated cards for sections with no content yet.
+   Memorial empty handled above. Add a Shipyard "no credits yet" hint
+   and a generic empty-card style for future use. */
+.shipyard-empty-credits {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px dashed rgba(255, 200, 120, 0.30);
+  border-radius: 10px;
+  background: rgba(255, 200, 120, 0.05);
+  color: #fc8;
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.55;
+}
+.shipyard-empty-credits::before {
+  content: "✦";
+  font-size: 22px;
+  color: #fc8;
+  opacity: 0.8;
+}
+
+/* Polish 7 — settings toggle redesign. Icon + label + sliding-pill
+   switch. Existing `.off` class still flips the value text + the new
+   knob position. */
+.settings-toggle {
+  display: grid !important;
+  grid-template-columns: 32px 1fr 48px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+}
+.toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: #cfe;
+}
+.settings-toggle.off .toggle-icon { color: #678; opacity: 0.5; }
+.toggle-switch {
+  position: relative;
+  width: 46px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(120, 220, 130, 0.30);
+  border: 1px solid rgba(120, 220, 130, 0.55);
+  transition: background 0.18s, border-color 0.18s;
+  flex-shrink: 0;
+}
+.toggle-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 22px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #afe6b0;
+  transition: left 0.18s ease, background 0.18s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.settings-toggle.off .toggle-switch {
+  background: rgba(140, 140, 160, 0.20);
+  border-color: rgba(140, 140, 160, 0.40);
+}
+.settings-toggle.off .toggle-switch-knob {
+  left: 2px;
+  background: #8d99af;
+}
+/* The legacy `.toggle-value` text becomes redundant with the switch;
+   keep it as a screen-reader-friendly companion but visually subtle. */
+.settings-toggle .toggle-value {
+  display: none;
+}
+
+/* Volume sliders — independent MUSIC + SFX channels. Row layout:
+   icon | label | slider (flex) | % readout. Native range input styled
+   to match the green accent of the rest of the settings chrome. */
+.settings-slider-row {
+  display: grid;
+  grid-template-columns: 32px 54px 1fr 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border: 1px solid rgba(120, 220, 130, 0.30);
+  border-radius: 12px;
+  background: rgba(120, 220, 130, 0.06);
+}
+.settings-slider-row.muted {
+  border-color: rgba(200, 90, 90, 0.45);
+  background: rgba(200, 90, 90, 0.07);
+}
+.settings-slider-row .toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: #cfe;
+}
+.settings-slider-row.muted .toggle-icon { color: #c88; }
+.settings-slider-row .toggle-label {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: #cfe;
+  font-weight: 600;
+}
+.settings-vol-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  text-align: right;
+  color: #afe6b0;
+}
+.settings-slider-row.muted .settings-vol-value { color: #d99; }
+
+/* Range input — full-width track + a tall, touch-friendly thumb. */
+.settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 26px;            /* tall hit zone for touch */
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+.settings-slider:focus { outline: none; }
+.settings-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(to right,
+    rgba(120, 220, 130, 0.85) var(--fill, 60%),
+    rgba(140, 150, 165, 0.25) var(--fill, 60%));
+}
+.settings-slider-row.muted .settings-slider::-webkit-slider-runnable-track {
+  background: linear-gradient(to right,
+    rgba(200, 90, 90, 0.70) var(--fill, 0%),
+    rgba(140, 150, 165, 0.25) var(--fill, 0%));
+}
+.settings-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(140, 150, 165, 0.25);
+}
+.settings-slider::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(120, 220, 130, 0.85);
+}
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -8px;        /* centre the 22px thumb on the 6px track */
+  border-radius: 50%;
+  background: #afe6b0;
+  border: 1px solid rgba(0,0,0,0.35);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+}
+.settings-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #afe6b0;
+  border: 1px solid rgba(0,0,0,0.35);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+}
+.settings-slider-row.muted .settings-slider::-webkit-slider-thumb { background: #d08a8a; }
+.settings-slider-row.muted .settings-slider::-moz-range-thumb { background: #d08a8a; }
+
+/* Polish 8 — battle minimap upgrade. Capitals get a ring outline so
+   they read as substantial vs small craft; player blip pulses; the
+   viewport gets a subtle grid background so positions register
+   against the playfield. */
+.minimap-viewport {
+  background:
+    linear-gradient(0deg, rgba(92, 200, 255, 0.06) 1px, transparent 1px) 0 0 / 20px 20px,
+    linear-gradient(90deg, rgba(92, 200, 255, 0.06) 1px, transparent 1px) 0 0 / 20px 20px,
+    rgba(4, 8, 16, 0.85);
+}
+/* Capital classes get a 1px ring outline so they read as substantial
+   pieces of the battlefield, not just slightly-bigger dots. */
+.dot-size-cruiser,
+.dot-size-battleship,
+.dot-size-carrier,
+.dot-size-station {
+  box-shadow: 0 0 0 1px currentColor;
+  color: rgba(255, 255, 255, 0.45);
+}
+.dot-blue.dot-size-cruiser,
+.dot-blue.dot-size-battleship,
+.dot-blue.dot-size-carrier,
+.dot-blue.dot-size-station {
+  color: rgba(92, 200, 255, 0.85);
+}
+.dot-red.dot-size-cruiser,
+.dot-red.dot-size-battleship,
+.dot-red.dot-size-carrier,
+.dot-red.dot-size-station {
+  color: rgba(255, 96, 96, 0.85);
+}
+/* Carrier + station get an additional outer halo to feel "big". */
+.dot-size-carrier,
+.dot-size-station {
+  box-shadow:
+    0 0 0 1px currentColor,
+    0 0 6px 1px currentColor;
+}
+/* Player dot — gentle pulse so it stays the eye anchor on the map. */
+.dot-player {
+  animation: minimap-player-pulse 1.4s ease-in-out infinite;
+}
+@keyframes minimap-player-pulse {
+  0%, 100% { box-shadow: 0 0 4px #fff, 0 0 0 0 rgba(255,255,255,0.5); }
+  50%      { box-shadow: 0 0 6px #fff, 0 0 0 4px rgba(255,255,255,0.0); }
+}
+
+/* Polish 9 — promotion overlay rank-reveal animation. The insignia
+   scales up from 0 with a soft glow, while rays fan out from behind
+   it on a separate keyframe. Re-triggers per rank change via the
+   `revealing` class toggle in _syncPromotion. */
+.promotion-insignia-stage {
+  position: relative;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 12px auto 18px;
+}
+.promotion-insignia-rays {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, rgba(255, 218, 130, 0.35) 0%, transparent 55%),
+    conic-gradient(from 0deg,
+      rgba(255, 218, 130, 0.0) 0deg,   rgba(255, 218, 130, 0.4) 12deg,
+      rgba(255, 218, 130, 0.0) 24deg,  rgba(255, 218, 130, 0.4) 36deg,
+      rgba(255, 218, 130, 0.0) 48deg,  rgba(255, 218, 130, 0.4) 60deg,
+      rgba(255, 218, 130, 0.0) 72deg,  rgba(255, 218, 130, 0.4) 84deg,
+      rgba(255, 218, 130, 0.0) 96deg,  rgba(255, 218, 130, 0.4) 108deg,
+      rgba(255, 218, 130, 0.0) 120deg);
+  mask-image: radial-gradient(circle at center, white 25%, transparent 65%);
+  opacity: 0;
+  pointer-events: none;
+}
+.promotion-insignia {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #2c4670 0%, #122036 100%);
+  border: 2px solid rgba(255, 218, 130, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffd680;
+  box-shadow: 0 0 24px rgba(255, 218, 130, 0.35), inset 0 0 12px rgba(255, 218, 130, 0.18);
+  opacity: 0;
+  transform: scale(0.4) rotate(-12deg);
+}
+.promotion-insignia svg {
+  width: 56px;
+  height: 56px;
+}
+/* Reveal — kicks off when .revealing is applied. The rays spin behind
+   the insignia; the chip scales up with a bounce + glow flash. */
+.promotion-insignia.revealing {
+  animation: rank-insignia-reveal 0.85s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.promotion-insignia.revealing ~ .promotion-insignia-rays,
+.promotion-insignia-stage .promotion-insignia.revealing + .promotion-insignia-rays {
+  /* Sibling-selector won't reach behind in this DOM order — use a
+     wrapper-state class on the stage instead. */
+}
+.promotion-insignia.revealing {
+  /* Combined reveal: bounce-scale + glow flash. */
+  animation: rank-insignia-reveal 0.85s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.promotion-insignia-stage:has(.promotion-insignia.revealing) .promotion-insignia-rays {
+  animation: rank-rays-spin 1.5s ease-out forwards;
+}
+@keyframes rank-insignia-reveal {
+  0%   { opacity: 0; transform: scale(0.4) rotate(-12deg); }
+  60%  { opacity: 1; transform: scale(1.18) rotate(2deg); box-shadow: 0 0 48px rgba(255, 218, 130, 0.8), inset 0 0 18px rgba(255, 218, 130, 0.5); }
+  100% { opacity: 1; transform: scale(1.0)  rotate(0deg);  box-shadow: 0 0 24px rgba(255, 218, 130, 0.35), inset 0 0 12px rgba(255, 218, 130, 0.18); }
+}
+@keyframes rank-rays-spin {
+  0%   { opacity: 0; transform: rotate(0deg)   scale(0.4); }
+  40%  { opacity: 1; }
+  100% { opacity: 0; transform: rotate(180deg) scale(2.0); }
+}
+
+/* Match-over VICTOR / KIA stamp animation when a Frontier run ends.
+   Triggered by the .runend-stamp class added by _syncMatchOver. */
+.matchover-title.runend-stamp {
+  animation: runend-stamp 0.6s cubic-bezier(0.18, 1.4, 0.42, 1.05) forwards;
+}
+@keyframes runend-stamp {
+  0%   { opacity: 0; transform: scale(2.4) rotate(-8deg); letter-spacing: 0.30em; }
+  60%  { opacity: 1; transform: scale(0.95) rotate(2deg);  letter-spacing: 0.20em; }
+  100% { opacity: 1; transform: scale(1.0)  rotate(0deg);  letter-spacing: 0.18em; }
+}
+
+/* Polish — BOOST button charge state + active visual.
+   Cooldown overlay shares the missile button's conic-gradient
+   pattern (--cooldown-angle CSS var). Active class lights the
+   button up bright when the player is actively boosting. */
+.boost-btn .btn-cooldown {
+  /* Inherit base .btn-cooldown styles; just need to declare it
+     positioned correctly. Inherited via tag selector below. */
+}
+.boost-btn.boost-empty {
+  opacity: 0.55;
+}
+.boost-btn.pressed {
+  background: rgba(124, 220, 255, 0.30);
+  box-shadow: 0 0 18px rgba(124, 220, 255, 0.55);
+}
+.boost-btn.pressed .btn-icon {
+  color: #cff;
+  filter: drop-shadow(0 0 4px rgba(124, 220, 255, 0.8));
+}
+
+/* Frontier KIA respawn panel — when the survival roll fails, the panel
+   stays up but reads "KIA — CAREER ENDED" instead of a respawn timer.
+   Red tint distinguishes it from the standard reinforcements wait. */
+.respawn-panel.kia {
+  background: rgba(60, 12, 12, 0.88);
+  border-color: rgba(240, 110, 110, 0.65);
+  color: #f3b0b0;
+}
+.respawn-panel.kia .respawn-label {
+  color: #f3b0b0;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  text-shadow: 0 0 12px rgba(240, 110, 110, 0.45);
+}
+
+/* Battle Plan — pre-flight orders screen. Mobile-first column layout
+   mirroring the Shipyard chrome (header / scrollable body / sticky
+   footer with launch button). */
+.menu-screen.menu-battleplan {
+  flex-direction: column !important;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  background: linear-gradient(180deg, #04080f 0%, #0a1224 100%);
+  width: 100%;
+  max-width: 100%;
+}
+.battleplan-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #1f2c44;
+  background: #060c18;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.battleplan-back {
+  width: 36px; height: 36px;
+  background: transparent;
+  border: 1px solid #2c4670;
+  border-radius: 8px;
+  color: #cfe;
+  font-size: 20px;
+  cursor: pointer;
+}
+.battleplan-header h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  color: #cfe;
+}
+.battleplan-node-tag {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #fc8;
+  padding: 4px 8px;
+  border: 1px solid #c84;
+  border-radius: 4px;
+}
+.battleplan-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+  padding-bottom: 100px;
+}
+.battleplan-section {
+  margin-bottom: 18px;
+}
+.battleplan-section-title {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: #7df;
+  margin-bottom: 8px;
+}
+
+/* Enemy roster */
+.battleplan-enemy {
+  background: rgba(60, 12, 12, 0.40);
+  border: 1px solid rgba(240, 110, 110, 0.40);
+  border-radius: 10px;
+  padding: 12px;
+}
+.bp-enemy-faction {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.bp-enemy-boss {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f3b0b0;
+  margin-bottom: 4px;
+}
+.bp-enemy-boss-desc {
+  font-size: 12px;
+  color: #d9aeae;
+  font-style: italic;
+  margin-bottom: 8px;
+}
+.bp-enemy-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+.bp-enemy-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: rgba(8, 14, 24, 0.6);
+  border: 1px solid rgba(240, 110, 110, 0.30);
+  border-radius: 6px;
+  min-width: 44px;
+}
+.bp-enemy-icon {
+  color: #f3b0b0;
+}
+.bp-enemy-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fed;
+}
+
+/* Capital + wing rows */
+.bp-cap-row, .bp-wing-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #0a1424;
+  border: 1px solid #1f2c44;
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.bp-cap-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: #5cf;
+  flex-shrink: 0;
+}
+.bp-cap-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bp-cap-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bp-cap-captain {
+  font-size: 10px;
+  color: #9bd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bp-cap-postures {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.bp-posture-chip {
+  padding: 5px 9px;
+  background: transparent;
+  border: 1px solid #2c4670;
+  border-radius: 4px;
+  color: #9bd;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.bp-posture-chip.active {
+  background: #1c3f5c;
+  border-color: #5cf;
+  color: #cff;
+}
+
+.bp-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: #9bd;
+  border: 1px dashed rgba(124, 220, 255, 0.30);
+  border-radius: 8px;
+}
+
+/* Multi-wing: section header + add button + per-wing controls */
+.bp-wings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 6px;
+}
+.bp-wings-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #9bd;
+}
+.bp-add-wing {
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid #2c4670;
+  border-radius: 4px;
+  color: #5cf;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.bp-add-wing:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.bp-wing-row {
+  flex-wrap: wrap;
+}
+.bp-wing-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.bp-wing-cmds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.bp-wing-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 2px;
+  padding: 4px 6px;
+  background: rgba(0, 8, 24, 0.6);
+  border-radius: 4px;
+}
+.bp-wing-sub-empty {
+  padding: 4px 8px;
+  background: transparent;
+  font-size: 10px;
+  color: #9bd;
+  font-style: italic;
+}
+.bp-wing-sub-chip {
+  padding: 3px 7px;
+  background: transparent;
+  border: 1px solid #1f3050;
+  border-radius: 3px;
+  color: #9bd;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.bp-wing-sub-chip.active {
+  background: #1c3f5c;
+  border-color: #5cf;
+  color: #cff;
+}
+.bp-wing-count-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: #0a1424;
+  border: 1px solid #2c4670;
+  border-radius: 3px;
+  color: #5cf;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.bp-wing-count-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.bp-wing-commander {
+  font-size: 11px;
+  color: #fda;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+/* Grudge warning — Marked enemy faction throws heavier resistance. */
+.bp-grudge {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #ffb0b0;
+  background: rgba(120, 30, 30, 0.35);
+  border: 1px solid #6a2828;
+  border-radius: 6px;
+  text-align: center;
+}
+/* Allied reinforcements — friendly factions sending ships to your side. */
+.bp-reinf {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(20, 48, 30, 0.45);
+  border: 1px solid #2f6a3f;
+  border-radius: 6px;
+}
+.bp-reinf-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #9be8a8;
+  margin-bottom: 5px;
+}
+.bp-reinf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+.bp-reinf-faction { color: #cfe; font-weight: 600; }
+.bp-reinf-standing { color: #7fbf8f; font-weight: 400; font-size: 10px; }
+.bp-reinf-ships { color: #afe6b0; white-space: nowrap; }
+
+/* Captured-ship prize styling — amber-tinted row + tag. */
+.bp-cap-captured {
+  border-color: #6a5320;
+  background: linear-gradient(180deg, rgba(40, 30, 8, 0.55), rgba(20, 16, 6, 0.4));
+}
+.bp-captured-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #1a1206;
+  background: #d9a23a;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.bp-wing-trait {
+  color: #9bd;
+  font-weight: 400;
+  font-style: italic;
+}
+.bp-wing-count {
+  display: inline-block;
+  min-width: 60px;
+  text-align: center;
+  margin: 0 4px;
+}
+.bp-wing-remove {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid #4a2030;
+  border-radius: 3px;
+  color: #c66;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+}
+.bp-wing-remove:hover { background: #2a0c14; }
+
+.battleplan-footer {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 16px env(safe-area-inset-bottom);
+  background: #060c18;
+  border-top: 1px solid #1f2c44;
+  z-index: 2;
+}
+.battleplan-launch-btn {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(180deg, #c84 0%, #a62 100%);
+  border: 1px solid #fc8;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+}
+.battleplan-launch-btn:active { transform: scale(0.985); }
+
+/* --- Fleet Plan overlay (all non-Frontier modes) --------------------- */
+/* Reuses the Battle Plan header/body/footer + bp-* chrome. The screen
+   itself needs the explicit column direction (CLAUDE.md flex trap) and a
+   cooler blue launch button to distinguish it from Frontier's amber. */
+.menu-screen.menu-fleetplan {
+  flex-direction: column !important;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  background: linear-gradient(180deg, #04080f 0%, #0a1224 100%);
+  width: 100%;
+  max-width: 100%;
+}
+.menu-fleetplan .battleplan-node-tag {
+  color: #8cf;
+  border-color: #4680c8;
+}
+.menu-fleetplan .battleplan-launch-btn {
+  background: linear-gradient(180deg, #2b6da8 0%, #1c4c84 100%);
+  border-color: #8cf;
+}
+.fp-enemy-unknown {
+  font-size: 12px;
+  color: #8aa;
+  line-height: 1.5;
+  padding: 4px 2px;
+}
+/* Command rows (capitals + wings share the same 3-axis layout) */
+.fp-classes { display: flex; flex-direction: column; gap: 8px; }
+.fp-cmd-row {
+  padding: 8px 10px;
+  background: rgba(12, 22, 40, 0.7);
+  border: 1px solid #1c2c48;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.fp-cmd-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+}
+.fp-class-name {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: #cfe;
+  flex: 1;
+}
+.fp-class-count { font-size: 11px; color: #7f9; }
+.fp-wing-count-ctl { display: flex; align-items: center; gap: 4px; }
+
+/* One axis = a label + its chip row */
+.fp-order { display: flex; flex-direction: column; gap: 4px; }
+.fp-axis {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.fp-axis-lbl {
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  color: #678;
+  width: 56px;
+  flex-shrink: 0;
+}
+.fp-sub-axis { padding-left: 60px; }
+.fp-sub-empty { font-size: 10px; color: #678; font-style: italic; }
+.fp-chip {
+  padding: 3px 7px;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  background: rgba(20, 32, 54, 0.9);
+  border: 1px solid #2a3c5c;
+  border-radius: 5px;
+  color: #9ab;
+  cursor: pointer;
+}
+.fp-chip.active {
+  background: rgba(30, 80, 110, 0.95);
+  border-color: rgba(140, 220, 255, 0.85);
+  color: #fff;
+}
+.fp-chip.fp-stance.active {
+  background: rgba(40, 110, 150, 0.95);
+  border-color: #8df;
+}
+.fp-chip.fp-sub.active {
+  background: rgba(150, 90, 30, 0.9);
+  border-color: #fc8;
+}
+.fp-section-missile { margin-left: auto; }

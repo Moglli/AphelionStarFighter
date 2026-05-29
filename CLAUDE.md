@@ -1,1180 +1,899 @@
 # CLAUDE.md — Session notes for Aphelion Star Fighter
 
-This file records context for future Claude (or human) sessions: what
-the project is, where things live, and what's been changed recently.
-**When you make non-trivial changes in a session, append a new entry to
-the Changelog at the bottom so the next session can pick up the
-narrative.**
+Context for future Claude/human sessions: what the project is, where
+things live, the load-bearing gotchas, and a condensed change history.
+**When you make non-trivial changes, append a Changelog entry** — date
++ headline + only the *non-obvious* gotchas. No file lists, no
+verification logs, no methodology asides; `git log` has those.
 
 ---
 
 ## Project at a glance
 
-- **Aphelion Star Fighter** — 2D canvas space combat. The repo plans
-  to ship to iOS/Android via Capacitor.
-- **Stack**: Vite + vanilla JS (ES modules) + Capacitor. No
-  TypeScript, no framework. Rendering is plain `CanvasRenderingContext2D`.
-- **Entry points**:
-  - `index.html` → loads `src/main.js`.
-  - `src/main.js` — sets up canvas, fixed-timestep loop, draw order.
-  - `src/game.js` — match lifecycle, damage rules, per-tick update.
-- **Tooling**:
-  - `npm run dev` — Vite dev server.
-  - `npm run build` — production build → `dist/`.
-  - `npm run cap:sync` — build + sync to native platforms.
+- **Aphelion Star Fighter** — 2D canvas space combat, shipping to
+  iOS/Android via Capacitor.
+- **Stack**: Vite + vanilla JS (ES modules) + Capacitor. No TypeScript,
+  no framework. `CanvasRenderingContext2D` for rendering; DOM+CSS
+  overlays for UI.
+- **Entry points**: `index.html` → `src/main.js` (canvas, fixed-step
+  loop, draw order) → `src/game.js` (match lifecycle, damage, update).
+- **Tooling**: `npm run dev`, `npm run build`, `npm run cap:sync`.
+- **Test hooks**: `window.game`, `window.input`, `window.saveStore`,
+  `window.audio` exposed for Playwright probes (`/tmp/aphel-*.mjs`).
+  Don't remove them.
 
 ## Module layout (`src/`)
 
 | File | Role |
 |---|---|
-| `main.js` | RAF loop, canvas/camera, draw order. |
-| `game.js` | `createGame`/`startGame`/`update`/`restart`, damage resolution, score, match-end logic. |
-| `ship.js` | `createShip`, `updateShip` (movement + weapons), `drawShip`. Hull polygons + visual extras live here. |
-| `ai.js` | Per-ship AI: target selection, throttle, fire decisions. |
-| `projectile.js` | Cannon + missile entities, including homing missile logic. |
-| `wreckage.js` | Persistent map litter — destroyed-ship hulks + impact debris. |
-| `arena.js` | Arena bounds + starfield + map size presets. |
-| `classes.js` | Base per-class ship specs + `SIDES` color palette. |
+| `main.js` | RAF loop, canvas/camera, draw order, event→audio wiring, run-choice routing. |
+| `game.js` | `createGame`/`startGame`/`update`/`restart`, `spawnRoster`, `applyDamage`, surrender/capture, spectate, match-end. |
+| `ship.js` | `createShip`, `updateShip` (movement + all weapon fire paths), `drawShip`, `HULLS[race][klass]`, `getHull`. |
+| `ai.js` | Per-ship AI: target/aim, throttle, fire, escort leash, admiral posture, pack/carrier AI. |
+| `classes.js` | Base per-class specs + `SIDES` palette. |
 | `races.js` | Per-race overrides + rosters. `resolveSpec(race, klass)` deep-merges. |
-| `input.js` | Touch/mouse/keyboard input, on-screen joysticks, start menu, hangar entry. |
-| `hud.js` | In-game HUD (minimap, score, beams). |
-| `audio.js` | Web Audio synth + event subscribers. |
-| `events.js` | Tiny pub/sub bus shared across the game. |
-| `save.js` | Versioned localStorage SaveStore (schema-migrated). |
+| `modules.js` | Destructible module layouts (`buildModules(klass, spec, poly)`), per-turret PD, aim priority. |
+| `components.js` | Shipyard library, `applyDesign`, multi-mount aggregation, `computeDeltas`, `SLOT_VISUALS`. |
+| `shipyard.js` | Credit economy (`computeRunPayout`/`bankRunPayout`), buy/equip/setHull/paint, tier scaling. |
+| `ship-icons.js` | `classIconSvg` — SVG silhouettes from hull polygons. |
+| `projectile.js` | Cannon + missile entities, homing + cluster-bloom. |
+| `particles.js` | Impact/damage VFX. |
+| `sprites.js` | Pre-rendered hull sprites; cell grid (`buildCells`), `snapOffsetToLiveCell`, `snapModulesSymmetric`, `projectileBlockHit`. |
+| `wreckage.js` | Persistent hulks + impact debris. |
+| `arena.js` | Arena bounds, starfield, map presets. |
+| `input.js` | Touch/mouse/keyboard, virtual sticks, menu-state builder, overlay flags + callbacks. |
+| `menus.js` | DOM menu/overlay rendering (`StartMenu`). |
+| `starmap.js` | Frontier run-map: scrollable starmap, node art, tab bar, fleet/dossier panels. |
+| `hud.js` | In-game HUD (minimap, vitals, target panel, action cluster, AAR). |
+| `audio.js` | Web Audio synth — procedural SFX voices + UI tap audio. |
+| `events.js` | Pub/sub bus (Set-backed). |
+| `save.js` | Versioned localStorage SaveStore (`CURRENT_SCHEMA_VERSION`, `MIGRATIONS`, `mergeWithDefaults`). |
+| `roguelite.js` | Frontier campaign: run state, acts, detour-graph, events, traits/boons, capture, reputation. |
+| `modes/*.js` | Mode hooks: `setup`/`tick`/`checkEnd`. `modes/index.js` is the registry. |
+| `energy.js` | F2P energy/stamina gating. |
+| `rally.js` | Minimap rally-point command layer. |
 | `cosmetics.js`, `hangar.js`, `progression.js` | Meta-progression + cosmetics. |
-| `modes/{arena,waves,daily}.js` | Mode hooks: `setup`, `tick`, `checkEnd`. |
-| `modes/index.js` | Mode registry. |
-| `types.js` | JSDoc typedefs (no runtime exports). |
-| `vec.js` | Tiny 2D vector helpers. |
+| `types.js`, `vec.js` | JSDoc typedefs; 2D vector helpers. |
 
 ## Key conventions
 
-- **No framework.** Plain ES modules, exported functions, no classes
-  unless there's clear lifecycle (e.g. `SaveStore`, `EventBus`,
-  `StartMenu`, `InputManager`).
-- **Comments**: the codebase favors `//` block comments above
-  non-obvious logic, explaining *why* (gameplay intent, math
-  reasoning, perf concerns) rather than *what*.
-- **Event bus**: gameplay code in `game.js`/`ship.js` emits domain
-  events (`weaponFired`, `hit`, `shipDestroyed`, etc). `audio.js`,
-  `progression.js`, and others subscribe. Don't reach across modules
-  directly — emit/subscribe.
-- **Save schema**: `save.js` has `CURRENT_SCHEMA_VERSION` and a
-  `MIGRATIONS` registry. `mergeWithDefaults` deep-merges so
-  *additive* fields to `menuSelection` / `settings` / etc. don't
-  need an explicit migration step. Bumping the version is only
-  needed when the *shape* changes incompatibly.
-- **Damage layers**: shield → armor (capitals only) → hull. Implemented
-  in `applyDamage` in `game.js`. Missiles bypass shields. Lasers and
-  fighter cannons cost only 50% from the shield bank. Armor wears at
-  `spec.armor.wearRate`.
-- **Fixed timestep**: `main.js` accumulates real time and steps
-  `update(game, 1/60)` until the accumulator drains. Don't sleep, poll
-  `performance.now()`, or assume `dt` varies wildly.
-- **Coordinate space**: world is in pixels; arena bounds set by
-  `setArenaSize`. Camera follows player (or spectate target) and is
-  scaled by `ZOOM` (0.5) in `main.js`.
-- **Hull polygons**: defined in `src/ship.js` as `HULLS[race][klass]`,
-  vertex coords in unit space scaled by `spec.radius` at draw time.
-  `getHull(race, klass)` is exported so `wreckage.js` can reuse them.
-- **Ship state mutability**: `ship.controller` is updated each frame
-  from input/AI; the rest of the ship is mutated by `updateShip`.
-  Avoid stashing extra state on ships unless it has a clear owner.
+- **No framework.** Plain ES modules; classes only for clear lifecycle.
+- **Comments explain *why***, above non-obvious logic.
+- **Event bus, not cross-module reach.** Gameplay emits domain events;
+  `audio.js`, `progression.js`, `main.js` subscribe.
+- **Save schema**: additive fields ride `mergeWithDefaults` (deep-merge).
+  Bump version only on incompatible *shape* changes. `unlockedFactions`,
+  `ownedComponents`, `ownedHulls` union-merge.
+- **Damage layers**: shield → armor (capitals only) → module → hull.
+  Missiles bypass shields; lasers + fighter cannons cost 50% from shield.
+  Module step routes hits to nearest node; overflow continues to hull.
+- **Fixed timestep**: `update(game, 1/60)`. No `performance.now()` polling.
+- **Coordinate space**: world in pixels; camera `ZOOM=0.5`. Pinch/scroll
+  zoom only in spectate + admiral.
+- **Spec mutation hazard**: `resolveSpec` returns **shallow-merged refs**.
+  Per-ship patches (`applyWingCommanderEffect`, `applyBoonPatches`,
+  `applyTraitFleetPatches`, `applyDesign`, captain traits, perks) **must
+  clone on descent** (`spec.x = {...spec.x}`) before mutating, or they
+  poison every other ship of that race/class.
+- **CSS overlay trap**: every `.menu-screen.active` overlay with a
+  centered panel needs explicit `flex-direction: column` (base rule
+  is `display:flex` with no direction → row). Recurring bug. Global
+  `box-sizing: border-box` reset at top of `style.css`.
+- **SVG class writes**: use `setAttribute("class", …)` / `classList`,
+  never `.className` (read-only on SVG elements).
 
-## Render order (main.js draw)
+## Render order (`main.js#draw`)
 
-1. Arena background + starfield.
-2. Camera transform applied.
-3. Arena bounds.
-4. **Wrecks** (under live ships).
-5. Live ships.
-6. **Debris** (on top of ships).
-7. Projectiles.
-8. Beams (HUD module).
-9. Restore transform; HUD; virtual sticks.
+Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
+→ projectiles → beams → restore → HUD → virtual sticks.
 
-## Things to know before changing rendering
-
-- All world-space draws happen inside the camera transform applied in
-  `main.js#draw`. HUD draws after `ctx.restore()` so screen-space
-  layout is unaffected by camera scale.
-- `drawShip` applies its own `ctx.save/translate/rotate/restore` so
-  per-ship sub-draws can use ship-local coords directly.
-- `getHull(race, klass)` returns unit-space polygon vertices in
-  `[[x, y], ...]` form, ranges roughly `[-1, 1]`. Multiply by
-  `ship.spec.radius` to scale to world units.
+- World draws inside camera transform; HUD after `ctx.restore()`.
+- `drawShip` owns its save/translate/rotate/restore.
+- `getHull(race, klass)` → unit-space polygon (~[-1,1]); scale by
+  `spec.radius`. Hull polygons are CCW + y-symmetric.
 
 ## Subsystem cheat sheet
 
-- **Carrier replenishment**: every `spec.replenish.fighter` and
-  `spec.replenish.bomber` seconds, the carrier launches a new escort.
-- **PD turrets**: ring of N positions on the hull (see
-  `pdTurretOffset`); each picks: missile → bomber → fighter → nearest.
-- **Pack AI**: `game.packs` is rebuilt each tick from ships with a
-  matching `packId`. Each pack picks a target by role
-  (`hunt-fighter`, `strike-capital`, `skirmish-frigate`), with bombers
-  pulling rank over the role preference.
+- **Modules**: `buildModules(klass, spec, poly)` walks per-class
+  `LAYOUTS` with `requires(spec)` predicates — pass the **fully
+  resolved** spec (race + override + boons + traits + design). Every
+  subsystem (gun, cannon, broadside-{port,stbd}-{0..2}, laser-{fore,aft},
+  missile-*, hangar, torpedo-tube-*, shield-generator-*, engine-N,
+  per-turret pd-N) gates its fire path on its module.
+- **Multi-mount weapons**: `spec.weapon` stays **scalar** (primary, read
+  by ai/hud/game/roguelite); extra mounts go in `spec.weaponExtras[]`.
+  `spec.missilePods`/`spec.heavyLaser` accept scalar OR array;
+  createShip flattens to `ship.weapons[]`/`podSpecs[]`/`laserSpecs[]`
+  with per-mount state + legacy aliases (`ship.cooldown`, etc.).
+- **Carrier replenishment**: launches an escort every
+  `spec.replenish.{fighter,bomber}` sec; reinforcements inherit boons.
+- **Pack AI**: `game.packs` rebuilt each tick from `packId`. Bombers
+  outrank role pref. Escort leash (`escortOf`) covers fighters + bombers;
+  picks threats relative to escorted capital.
+- **Surrender/capture**: capitals strike at (≥75% weapons + ≥65% blocks)
+  OR (≥50% engines + ≤35% hull) — added blocks-loss gate prevents
+  weapon-loss-only surrender, hullThreshold prevents engine-only
+  surrender of a healthy armed capital. Small craft surrender on
+  engine-only. `neverSurrender` flag opts out. Surrendered =
+  untargetable + drifts; **every target-picker must skip `o.surrendered`
+  independently** (no chokepoint). Pre-locked missiles still land on
+  surrendered ships (no immortality from in-flight ordnance); only NEW
+  acquisitions skip hulks. Frontier captures surrendered enemy capitals
+  preserving race.
+- **Player/commander model (Frontier)**: NO respawn. Death drops to
+  spectate; `game.playerKIA` (failed survival roll) is the *only* KIA
+  signal — never sniff ship state. Voluntary spectate hands ship to AI;
+  `exitSpectate` re-takes if alive, else eliminated — never spawns fresh.
+
+## Shipyard / design pipeline
+
+- Persistent player ship built between runs from in-run credits
+  (`KILL_VALUES` + node/act/boss/war-won bonuses). `DEFAULT_PLAYER_DESIGN`
+  === stock Terran fighter byte-for-byte. `createShip(..., {design,
+  boons, fleetTraits})` applies design last. `promotePlayer` reads
+  `design.hull` to spawn at any class. **`promotePlayer` is idempotent**
+  — legacy modes double-called it and span ghost fighters.
+- Tier scaling: enemy quantity + class scale with player tier
+  (`applyTierScalingToRoster`); bosses get class ensures but damped
+  quantity. `run.playerTier` locked at run start.
+- **Shipyard blueprint** derives dot positions from `buildModules`
+  (single source of truth, post-snap), grouping by category (weapon/
+  missile/pd/engine/hangar). Abstract slots (shield, armor) fall back
+  to `SLOT_VISUALS`.
+
+## Frontier campaign (`roguelite.js`)
+
+- Terran officer career: 5 acts = 5 ranks. One defeat ends the run
+  (`run.endReason` set on any non-blue `matchEnded`). Starter fleet is
+  tiny (4 fighters, no capitals); capitals join via `PROMOTION_FLEET[act]`.
+- **Detour-graph acts**: `COLS_PER_ACT=6`. Combat spine (cols 1..4,
+  mandatory) + green detours at fractional cols (+0.5, extra jump/fuel).
+  Boss bypasses `scaleRoster`.
+- **Fuel** drains 1/jump in-act, no combat refund; `applyPromotion`
+  tops to `ACT_REFIT_FUEL=8` (Math.max, never `+=`). `isStranded` ends
+  the run on 0 fuel + no affordable edge.
+- **Reputation**: `battleReputationPreview` is the single source for
+  preview + spawn. Allied reinforcements (rival faction at Friendly+)
+  spawn blue tagged `alliedReinforcement` — **must not persist**
+  (recount skips them). Grudge scales red roster. Coalition excluded.
+- **Wings**: per-class multi-wing, bounds 2–5. Commands (free/hold/
+  press/defend-capital/target-class) stamped on spawned ships, drive
+  ai.js. Named commanders carry stat-mutating traits.
+- **Commander perks**: capitals + wing commanders share one XP/level
+  track. `COMMANDER_PERK_LEVELS=[2,3,4,5]` grant one pick each from
+  `COMMANDER_PERKS` (8 perks). Picks spent in COMMANDERS dossier tab;
+  applied at spawn via `applyCommanderPerks` (clone-on-descent).
+- **Event-choice results** show resource-delta panel; stamp
+  `_lastEventResult` *after* `refresh()`.
 
 ---
 
-## Changelog
-
-Newest entries first. When you make changes, add a section with date,
-a one-line summary, file pointers, and any non-obvious decisions.
-
-### 2026-05-22 — Frontier content expansion: traits, event cards, boss briefings, memorial wall, perks
-
-Six-tier content padding pass for the Frontier campaign. Each tier
-was scoped + verified via Playwright probes (`/tmp/aphel-tier*.mjs`)
-before the next started. Net additions:
-
-- **Tier 1 — Officer traits at promotion.** Every rank-up rolls a
-  3-trait random draw (4 with Decorated Pilot perk, +1 with the Act 1
-  drill-officer event card). Traits stack across the run; max 4 by
-  end of Act 5. Six starter traits ship: Steady Hand, Trauma Surgeon,
-  Reckless, Defensive Driver, Eagle Eyes, Iron Hull — all patch the
-  player fighter spec via `playerOverride(effectiveSpec)`. Trait
-  effects chain through the effective spec at startGame time so two
-  traits touching the same field (Steady Hand + Defensive Driver on
-  weapon.damage) stack multiplicatively instead of overwriting.
-- **Tier 2 — 7 new Act 1+2 event cards** with flag-setting choices.
-  Cards: wingman-down, pilots-lounge, drill-officer, voss-briefing,
-  junior-defector, captured-pirate, plus the Voss thread (Captain
-  Mara Voss of the *Sparrowhawk* — named NPC reused across acts).
-  `flags.bonusTraitNext` from drill-officer bumps the next promotion's
-  trait draw size +1; consumed at the next applyPromotion. Other
-  flags (voss, geneva, hegDefector, warCriminalStart, etc.) feed
-  Tier 3/6 callbacks.
-- **Tier 3 — Boss briefing + war bulletin.** Battle-choice screen
-  rebuilt for boss nodes: named-boss dossier (name + description +
-  faction-tinted accent) replaces the generic "ENEMY SPOTTED" strip.
-  Promotion overlay grew a 3-line WAR BULLETIN section keyed on the
-  act + run.flags — third line is flag-conditional, so Voss/wingman/
-  wounded-warlord choices show up as wire pickups at the next rank-up.
-  Exposes `BOSSES` from roguelite.js.
-- **Tier 4 — Memorial wall** on the home screen. Lists the last 10
-  completed careers (wins + losses) from `meta.memorial` with rank +
-  callsign + a `writeEpitaph(run, won)`-generated one-liner that
-  reads from the same flags. Won careers show a gold border; lost
-  careers show red. NPC roster panel deferred to a follow-up (the
-  NPCs already accumulate in `run.flags` — just needs a sidebar UI
-  in starmap.js).
-- **Tier 5 — 3 new starter perks.** Wealthy Family (+100 credits,
-  needs runsCompleted ≥ 2), Decorated Pilot (+1 trait choice each
-  promotion, runsCompleted ≥ 5), War College Top of Class (start at
-  Act 2 with Pilot Officer's promotion fleet pre-attached, runsWon
-  ≥ 2). New PERKS hooks: `creditsBonus`, `traitDrawBonus`,
-  `startAct`. Boon refactor deferred — wiring boons into per-class
-  ship specs needs its own pass (createShip → modeConfig → spec
-  patches).
-- **Tier 6 — 8 new Act 3-5 event cards** with `precondition(run)`
-  gating. Act 3: black-auriga-sighting, defector-carrier,
-  memorial-service. Act 4: voidsworn-manifesto, hegemony-coalition
-  (precondition: voss === "served-under"). Act 5: voss-cameo
-  (precondition: voss flag), wounded-warlord-returns (precondition:
-  executed/sparedWoundedCapital flag — branches reward/punish in
-  the apply), the-last-letter (pure narrative beat). `generateAct`
-  now filters the event pool through both actTags + precondition.
-
-Plus a pre-existing bug surfaced + fixed during Tier 1: the
-promotion overlay's auto-open was chicken-and-egg gated — sync only
-ran when `showPromotion=true`, but `showPromotion=true` was set
-inside `_syncPromotion`. Moved the auto-open above the gate in
-`input.js#draw` so the overlay reliably appears the frame after a
-boss clear.
-
-**Files touched**
-
-| File | What |
-|---|---|
-| `src/roguelite.js` | `TRAITS` table + `rollTraitDraw` + `selectPromotionTrait`. `BOSSES` exported. 15 new EVENT_CARDS. `generateBulletin` + `writeEpitaph`. `applyPromotion` enriched with traitDraw + bulletin. `recordRunEnd` records losses too. `startNewRun` accepts perk hooks (creditsBonus, startAct). `rollTraitDraw` stacks traitDrawBonus perk + bonusTraitNext flag. `isRunOver` added `isStranded`. 3 new PERKS. `generateAct` filters by precondition. |
-| `src/game.js` | Imports TRAITS + deepMerge. `startGame` resolves `_traitKeys` by chaining each trait's `playerOverride(effectiveSpec)` for multiplicative stacking. |
-| `src/modes/roguelite.js` | Act 5 boss carrier marked at setup. `tick` hook edge-detects 66%/33% hull and spawns reinforcement waves (frigates+fighters at p1, cruiser+fighters+bombers at p2). |
-| `src/input.js` | TRAITS + BOSSES imported. `_buildMenuState` enriches promotion.traitDraw + builds boss-briefing battleState + supplies memorial entries. Promotion auto-open moved above sync gate. `onPromotionTraitSelect` + `onHomeMemorial`/`onMemorialBack` callbacks. `runSetup.perks` for the starter-perk picker. |
-| `src/main.js` | `handleRunChoice("select-trait", ...)` routes to selectPromotionTrait. Forwards `perkKey` to startNewRun. |
-| `src/menus.js` | Promotion overlay extended with `.promotion-bulletin` + `.promotion-traits` sections. `_syncPromotion` populates trait chips, gates PROCEED on selection, renders bulletin. `_buildRunSetup` perk picker. `_syncBattleChoice` swaps to boss-briefing block when `node.bossName` is set. `_buildMemorial` + `_syncMemorial`. New `onHomeMemorial` callback wired. |
-| `style.css` | `.promotion-bulletin`, `.promotion-traits`, `.promotion-trait-chip`, `.runsetup-perk-section/chips/desc`, `.boss-briefing`, `.menu-memorial` + `.memorial-row` styles. Disabled-state styling for `.menu-btn.start-btn:disabled`. |
-| `src/classes.js` | (Pre-existing change kept — bomber autocannon nerf 3 → 2.4 from earlier today.) |
-| `src/ai.js` | (Earlier today's changes — cruiser cannon turret, frigate hull-clearance, bomber PD avoidance.) |
-| `src/ship.js` | (Earlier today's changes — cruiser cannon visual + slewCannonAim, trait `cannonAimAngle` state on createShip.) |
-| `src/hud.js` | (Earlier today's changes — fleet status strips on mobile, clearer class glyphs.) |
-
-**Design decisions / gotchas**
-
-- **Trait stacking via chained effective spec.** Each trait's
-  `playerOverride(effectiveSpec)` reads the CURRENT effective spec
-  (base + prior traits applied via deepMerge), not the base. So
-  Steady Hand → Defensive Driver leaves weapon.damage at
-  `base × 1.10 × 0.95`, not `base × 0.95` (last-write-wins). If a
-  future trait wants to read the base instead, it needs to be added
-  before this chain or use additive multipliers.
-- **`bonusTraitNext` consumed inline, `traitDrawBonus` permanent.**
-  Drill-officer's flag is a one-shot bump cleared the moment
-  rollTraitDraw reads it; Decorated Pilot's perk is checked every
-  call from `loadMeta()`. Both stack additively with the default
-  TRAIT_DRAW_SIZE = 3.
-- **Precondition is a filter, not a guarantee.** A card with a
-  precondition still rolls only when the precondition is true at
-  generateAct time — if the player rerolls the act graph (e.g. via
-  a future feature), the same precondition is re-evaluated. Flag-
-  setting choices in Act 2 fix the gate's state for Act 5 cards.
-- **Memorial entries cap at 10.** `recordRunEnd` unshifts (newest
-  first) and slices to 10. Both wins and losses count — the wall
-  reads as a full career roll, not just honor.
-- **Boss-phase reinforcements spawn at the red zone, not adjacent
-  to the boss.** Visual "warp-in from the edge" reads cleaner than
-  ships appearing on top of the moving carrier.
-- **Auto-open gate fix is load-bearing.** The chicken-and-egg I
-  hit during Tier 1 was a pre-existing latent bug — it only became
-  visible because my Playwright tests force a fresh save with a
-  pending promotion. In organic play the bug also exists but is
-  masked by the first frame's `showRunMap=false` (sync runs, auto-
-  open fires) before the run-map transitions in. Don't revert the
-  auto-open lift.
-- **War College Top of Class folds Act 2's promotion fleet into the
-  starter inventory.** Player gets the frigate + 4 fighters + 1
-  bomber that would normally arrive at the Lieutenant rank-up, but
-  doesn't get the trait pick (no choice was made — no promotion
-  overlay fired). First trait pick is the Act 2→3 rank-up.
-
-**Verified via Playwright (Galaxy S9+ UA)**: All six tiers passed
-their per-tier probes. Trait pick persists across save+reload + builds
-modeConfig.\_traitKeys correctly. New event cards present in
-EVENT_CARDS pool with right actTags. Bulletin generates 3 lines with
-flag-conditional third line. Memorial screen renders 3 rows from
-seeded memorial entries. Perk hooks (Wealthy Family +100 credits,
-War College act=2 + frigate, Decorated Pilot 4-card draw) all fire.
-Precondition filter excludes voss-cameo from the pool when the voss
-flag isn't "served-under".
-
-### 2026-05-22 — Frontier mechanical-depth pass: starter perks, fuel-stranded, phased Apheliotrope
-
-Three follow-ups from the 2026-05-22 story pass that the previous
-session deferred. Each is small, independent, and verified via direct
-Playwright probes (`/tmp/aphel-frontier2.mjs`).
-
-- **Starter perk pick on BEGIN CAREER.** The screen now has a
-  `STARTER PERK` row with "(NONE)" + one chip per unlocked perk in
-  `meta.unlockedPerks`. Selection is stamped onto `meta.activePerkKey`
-  by `startNewRun`, so the existing perk-apply chain
-  (`applyToFleet`, `playerOverride`, `creditMultiplier`) picks it up
-  unchanged. Verified: selecting Aggressive Engineer → run starts
-  with 6 fighters (4 starter + 2 from perk).
-- **Fuel-stranded detection.** `isRunOver` now calls a new
-  `isStranded(run)` helper that returns true when fuel is 0, every
-  outgoing edge is unaffordable, and the current node can't sell a
-  refuel. Stamps `run.endReason = "stranded"` so the existing flavor
-  branch fires ("…stranded between jumps. Search-and-rescue found
-  nothing."). Verified: fuel=0+credits=0 → isRunOver true,
-  endReason "stranded".
-- **Phased Apheliotrope (Act 5 boss).** `modes/roguelite.js` now
-  identifies the boss carrier at setup time (run.act === 5 + node.type
-  === "boss"), stamps `ship.isBoss = true`, and runs a tick hook that
-  spawns reinforcement waves when the boss hull crosses 66% and 33%.
-  Phase 1 = 2 frigates + 4 fighters; phase 2 = 1 cruiser + 6 fighters
-  + 2 bombers. Edge-detected (`phasedAt.p1` / `.p2`) so each wave
-  fires exactly once. Verified synthetic: hp 60% → +6 ships; hp 30%
-  → +9 more.
-
-**Files touched**
-
-| File | What |
-|---|---|
-| `src/roguelite.js` | `startNewRun` accepts `opts.perkKey` and writes through to `meta.activePerkKey`. `isRunOver` calls new `isStranded`. |
-| `src/modes/roguelite.js` | `setup` marks the Act 5 boss carrier; `tick(game, dt)` edge-detects 66%/33% thresholds and spawns reinforcement waves at the red spawn zone via `createShip`. |
-| `src/menus.js` | `_buildRunSetup` adds a `.runsetup-perk-section` block (chip row + desc); `_syncRunSetup` populates chips from `menuState.runSetup.perks` and tracks the selected key on `this._runsetupSelectedPerk`. |
-| `src/input.js` | `_buildMenuState` builds `runSetup.perks` from `meta.unlockedPerks`. `onRunSetupSelect` forwards `perkKey` through `onRunChoice("new-run", ...)`. |
-| `src/main.js` | `handleRunChoice("new-run", ...)` forwards `perkKey` into `startNewRun`. |
-| `style.css` | `.runsetup-perk-section/chips/chip/desc` styles. Active state uses the same accent blue as the carousel chips. |
-
-**Design decisions / gotchas**
-
-- **Starter perks reuse the existing `meta.activePerkKey` slot** —
-  there's already a perk-apply chain (applyToFleet / playerOverride /
-  creditMultiplier) that reads from this single field. Adding a new
-  "perPerk per run" field would have split the contract. The down-
-  side: the picker overwrites the meta-persistent active perk, so
-  cross-run "remember my last pick" is implicit (the previous run's
-  pick is the default for the next run).
-- **`(NONE)` is always the first chip**, even when no perks are
-  unlocked. Fresh saves see one chip + "No perk — earn one by
-  surviving a career." in the desc line, so the UI doesn't look
-  empty / broken.
-- **Stranded check guards against false positives at boss/end-of-act
-  nodes** — those have `reachableEdges.length === 0` because the
-  graph ends there. The early return for 0-edge nodes means a
-  0-fuel boss-win doesn't trip stranded; the existing win-path
-  (`run.endReason = "war-won"`) still fires from `completeNode`.
-  Also handles refuel-at-resupply: 30 credits buys 1 fuel, so the
-  check skips when the player can self-rescue.
-- **Apheliotrope boss-ship pick prefers carrier → battleship → biggest**
-  — the named flagship is a carrier per the BOSSES table, but if a
-  future tuning pass changes that class, the fallback chain keeps
-  the phase tracking working without a code change.
-- **Reinforcement waves spawn at the red zone**, not adjacent to the
-  boss. Visually they "warp in from the edge" rather than appearing
-  on top of a moving ship — much less jarring. Each ship gets a
-  small random scatter (80-220u from the zone centre) so the wave
-  reads as a fleet arrival, not a stack.
-- **Phase reinforcements bypass `escortOf` assignment** — they don't
-  go through `spawnRoster`/`assignEscortPacks`, so they're free
-  small-craft / capitals with their default AI. Carrier-pulling
-  fighters as wingmen would be nice but isn't worth the spawn
-  routing complexity for two waves.
-
-### 2026-05-22 — Frontier campaign story pass: career arc, 5 acts, promotions, run-end flavor
-
-**What changed**
-
-The Frontier roguelite was a faction-agnostic procedural skirmish-
-chain. It now tells a **Terran officer's career story** from cadet to
-admiral, in 5 acts, each one a rank-up. One defeat ends the career.
-
-1. **Faction locked to Terran.** Run-setup screen rebuilt as "BEGIN
-   CAREER" — Pilot Officer commission briefing, callsign text input,
-   single TERRAN FRONTIER SERVICE card, REPORT FOR DUTY button. The
-   old 4-card faction grid is gone; `_syncRunSetup` is a no-op now
-   that the screen is static. `startNewRun(faction, seed, opts)`
-   takes an optional `{callsign}`; randomly picks from a stock list
-   if blank.
-2. **3 acts → 5 acts.** `ACTS_PER_RUN: 3 → 5`. New per-act rank
-   table `ACT_RANKS[1..5]`: Pilot Officer → Lieutenant → Lt Commander
-   → Captain → Admiral, with a `promotionBlurb` line that drives the
-   promotion screen.
-3. **Starter fleet shrinks dramatically.** Old `STARTER_FLEET` =
-   16 fighters + 3 bombers + 2 frigates + cruiser + carrier from
-   minute one. New starter = 4 fighters, 0 bombers, **no capitals**
-   — the player and 3 AI wingmen. Capitals join the line at act
-   transitions via `PROMOTION_FLEET[act]`:
-   - → Act 2: +1 frigate, +4 fighters, +1 bomber
-   - → Act 3: +1 frigate +1 cruiser, +4 fighters, +2 bombers
-   - → Act 4: +1 carrier +1 battleship, +6 fighters, +2 bombers
-   - → Act 5: +1 battleship +1 carrier, +8 fighters, +3 bombers
-4. **Named bosses per act.** `BOSSES[1..5]` table replaces the
-   per-faction `BOSS_ROSTERS` keyed lookup. Each act's boss has a
-   `name`, `description`, faction lock, and a **hand-tuned roster
-   that bypasses `scaleRoster`** — the numbers in the table are
-   exactly what the player faces, not a 1x baseline to multiply.
-   Bosses: Crimson Talon (Reavers) → ITN Severance (Hegemony) →
-   Black Auriga (Reavers) → ITN Eclipse (Voidsworn) →
-   Apheliotrope (Voidsworn).
-5. **Trash + elite per-act rosters.** `ACT_TRASH_BASE[act]` and
-   `ACT_ELITE_BASE[act]` replace the single hardcoded `{fighter: 8,
-   bomber: 2, frigate: 1}` shapes. Act 1 trash is pure small-craft
-   (no frigates) because a fresh Pilot Officer with no capitals
-   would be paste against a frigate at col 0. Act 5 trash has a
-   battleship. Trash faction roll excludes Terran AND mostly
-   excludes the boss faction (30% mix-in for familiarity).
-6. **Act-tagged event cards.** `EVENT_CARDS` get an optional
-   `actTags: [N, ...]` field. New per-rank cards added:
-   - Act 1: `rookie-hazing`, `first-kill`
-   - Acts 2-3: `convoy-distress`, `defector-captain`
-   - Acts 3-4: `wounded-warlord` (stamps `run.flags.executedWoundedCapital`
-     / `sparedWoundedCapital` for future Act 5 callbacks),
-     `intel-drop`
-   - Acts 4-5: `coalition-flagship`, `saboteur-aboard`
-   - Act 5: `rally-the-fleet`
-   `generateAct` filters cards by `actTags.includes(actIndex)`,
-   falls back to the full pool only if no acted-tagged cards roll
-   (which can't happen with the catalogue above, but defensive).
-7. **Promotion screen between acts.** New DOM overlay
-   `.menu-promotion` in `menus.js`. Auto-opens when `run.pendingPromotion`
-   is non-null and the run-map overlay is showing. Shows new rank,
-   title, blurb, and a bullet list of capitals/fighters/bombers
-   joining the line. PROCEED button calls
-   `onRunChoice("dismiss-promotion")` → `clearPendingPromotion`.
-   `completeNode` stamps `pendingPromotion` via the new
-   `applyPromotion(run, newAct)` helper, which mutates capitals +
-   smallCraft AND returns a summary descriptor for the UI.
-8. **Career-end summary panel.** Match-over panel now reads
-   `game.runSummary` for Frontier matches. If the run ended (won or
-   lost), it shows:
-   - "WAR WON" or "CAREER ENDED"
-   - `<rank> <callsign>` as the headline subject
-   - Flavor blurb keyed on `run.endReason` (kia / fleet-lost /
-     defeat / stranded / war-won) — `endReasonFlavor(run)` in
-     `roguelite.js`
-   - "Act X/5 · N jumps" progress line
-   Instead of "DEFEAT / Tap to continue".
-9. **Broader loss conditions.** `isRunOver(run)` now returns true if
-   `run.endReason` is set OR (`capitals.length === 0` AND `act >= 2`).
-   Act 1 special case: no capitals exist by design, so only a flagged
-   endReason can end an Act 1 career. main.js's `matchEnded` handler
-   tags `endReason`:
-   - winner !== "blue" + player KIA → `kia`
-   - winner !== "blue" + all capitals dead + act >= 2 → `fleet-lost`
-   - winner !== "blue" + otherwise → `defeat`
-   - winner === "blue" + player KIA (heroic last stand) → `kia`
-10. **Memorial wall seed.** Save `meta.memorial` now grows by 1
-    entry per Frontier win (callsign + rank + timestamp). Capped at
-    10. Ready for a title-screen "Memorial" view in a follow-up.
-
-**Files touched**
-
-| File | What |
-|---|---|
-| `src/roguelite.js` | `ACTS_PER_RUN`: 3 → 5. `STARTER_FLEET` shrunk to fighter-only. New `PROMOTION_FLEET` table, `ACT_RANKS` rank ladder, `BOSSES` named-boss table, `ACT_TRASH_BASE` / `ACT_ELITE_BASE` per-act mob rosters. `DEFAULT_CALLSIGNS` pool. `startNewRun(faction, seed, opts)` takes `{callsign}` + initialises `pendingPromotion`/`endReason`/`flags`. `applyPromotion(run, newAct)` helper. `completeNode` calls it on boss-clear and stamps `pendingPromotion`. New exports: `clearPendingPromotion`, `endReasonFlavor`, `ACT_RANKS`. `isRunOver` broadened. `recordRunEnd(run, won, reason)` writes memorial entry on win. `generateAct`: per-act faction lock for boss, per-act trash shape, `actTags`-filtered event pool, bypasses `scaleRoster` for boss rosters. `EVENT_CARDS` gains 9 new rank-tagged cards. |
-| `src/main.js` | Imports `clearPendingPromotion`, `endReasonFlavor`, `ACT_RANKS`. `handleRunChoice` routes `dismiss-promotion` + forwards `callsign` into `startNewRun`. `matchEnded` handler detects player-KIA via `game.ships.find(isPlayer).dead`, tags `run.endReason` for every defeat path. `runEnded` handler stashes `game.runSummary` for the match-over panel and runs `discardRun` on loss. |
-| `src/game.js` | `startGame` clears `game.runSummary`. `restart` clears it too. |
-| `src/hud.js` | `_syncMatchOver`: if `game.runSummary` is present on a Frontier match, render rank + callsign + flavor + progress instead of the generic VICTORY/DEFEAT headline. |
-| `src/menus.js` | `_buildRunSetup` rewritten — static Terran-locked screen with briefing, callsign input, REPORT FOR DUTY. `_syncRunSetup` no-op'd. New `_buildPromotion` + `_syncPromotion` for the act-break overlay. `overlays` list extended with `"promotion"`. |
-| `src/input.js` | New `showPromotion` flag. `_buildMenuState` auto-opens the promotion overlay when `run.pendingPromotion` is set and the run-map is up. `screenName` resolution + `hasSubOverlay` checks include `"promotion"`. `onPromotionDismiss` callback wired. `onRunSetupSelect` forwards `callsign` through to `onRunChoice("new-run", ...)`. |
-| `style.css` | New `.runsetup-briefing`, `.runsetup-callsign-row`, `.runsetup-callsign-input`, `.runsetup-faction-card` for the rebuilt run-setup screen. New `.menu-promotion` + `.promotion-panel` + `.promotion-additions` block for the act-break overlay. |
-
-**Design decisions / gotchas**
-
-- **Single-defeat-ends-career** is enforced via `run.endReason` on
-  any `winner !== "blue"` matchEnded for Frontier mode. Don't try to
-  preserve the old "lose a battle, keep your run" rule — the story
-  beats only work if defeat is final. The match-over panel's "Tap to
-  return to home" copy reinforces this; on dismiss, `activeRun` is
-  null and the menu shows "NEW CAMPAIGN" again.
-- **`pendingPromotion` is one frame ahead of the UI.** `completeNode`
-  stamps it synchronously inside the matchEnded handler, but the
-  promotion overlay only auto-opens when `_buildMenuState` runs the
-  next time the menu draws. Between those, the player taps the
-  match-over panel → `restart(game)` → re-opens the run map. The
-  promotion overlay then renders on top of the (new act's) starmap.
-  Verified by Playwright: act-1 boss → act-2 starts, `pendingPromotion`
-  contains `{ rank: "Lieutenant", title: "Flight Leader", added: {...} }`,
-  fleet now has 1 frigate + 8 fighters + 1 bomber.
-- **Per-act boss faction is locked, trash is random.** Boss faction
-  per act: Reavers, Hegemony, Reavers, Voidsworn, Voidsworn. Trash
-  rolls from the non-Terran pool with a 30% mix-in to the boss
-  faction so the boss feels distinct when you finally meet them.
-  If you ever add a 5th playable race, the trash pool excludes only
-  `run.faction` — boss factions stay hardcoded.
-- **Boss rosters bypass `scaleRoster`.** That used to multiply by
-  `min(diffFor(act, lastCol), 2.5)`, which at act 5 was a 2.5× boost
-  on top of already-tuned numbers — the Apheliotrope would have been
-  35 fighters / 5 BBs at peak. Now the numbers in `BOSSES[act].roster`
-  are exactly what spawns. If you want a harder Apheliotrope, edit
-  the table.
-- **Act 1 has no capitals on purpose.** This collides with the
-  existing `isRunOver` rule (`capitals.length === 0`). New rule:
-  capitals-empty triggers run-over only at act >= 2. Act 1 deaths
-  are gated entirely by `run.endReason` set by main.js. The `kia`
-  branch covers player KIA in Act 1 (the only way to lose Act 1
-  short of running out of fuel).
-- **`run.flags.executedWoundedCapital` is the seed for future
-  Act 5 callbacks.** The `wounded-warlord` event card in Act 3-4
-  stamps either `executedWoundedCapital` or `sparedWoundedCapital`.
-  Act 5 event cards / boss flavor can read these to gate cameos,
-  ally arrivals, or harder boss reinforcements. Wiring those into
-  the run is a follow-up.
-- **The carousel only shows steps 0 + 4 in Frontier mode** — same
-  as before. The Run Setup screen sits behind the chip flow as a
-  separate overlay, opened via the NEW CAMPAIGN button. The
-  carousel auto-skip logic in `_visibleMainSteps` is unchanged.
-- **`saveStore.mergeWithDefaults` does NOT migrate live runs.**
-  Existing players mid-act-3 run will boot the new code with `act:3,
-  graphs.length:3` and the OLD starter fleet still attached. The
-  completeNode for act-3 boss will now apply `PROMOTION_FLEET[4]`
-  (carrier + BB) and extend to act 4 → act 5 → war-won. Fleets will
-  be larger than a fresh new-game run because the old starter was
-  more generous, but no crash. If this turns out to be unbalanced,
-  bump `CURRENT_SCHEMA_VERSION` and add a migration that wipes
-  `roguelite.current`.
-- **Memorial wall is bounded at 10.** Hot-streak save won't grow
-  the metadata blob forever. The save migration treats `memorial`
-  as additive via `mergeWithDefaults` deep-merge of `meta`.
-- **Verified via Playwright** (Galaxy S9+ UA): NEW CAMPAIGN flow
-  reaches BEGIN CAREER screen → enters callsign → starts run with
-  exactly 4 fighters, 0 capitals, fuel 8, act 1 boss = "Crimson
-  Talon" (Reavers) with roster `{fighter: 14, bomber: 3, frigate: 1}`.
-  Boss-clear simulation: act 1 → act 2, fleet now has 1 frigate +
-  8 fighters + 1 bomber, `pendingPromotion.rank === "Lieutenant"`,
-  next-act boss = "ITN Severance" (Hegemony). Full 5-act win
-  simulation completes the run, `meta.runsWon = 1`, `memorial[0] =
-  {callsign:"ADMIRAL", rank:"Admiral"}`, perks auto-unlock. Death-
-  flavor strings render correctly at every rank. `isRunOver` checks
-  pass for: fresh act-1 (false), kia-act-1 (true), no-caps-act-2
-  (true), has-cap-act-2 (false). No pageerrors.
-
-### 2026-05-21 — Starfield zoom-fade + defensive minimap dead-ship filter
-
-Star alpha fades from 1 at zoom ≥ 0.50 to 0 at zoom ≤ 0.22; zoomed-out
-view sits on clean `#02030a` black. Minimap filter widened from
-`!s.dead` to also drop `wreckSpawned` || `hp <= 0`.
-
-- **Fade thresholds bracket DEFAULT_ZOOM and MIN_ZOOM.** 0.22 ≥ 0.15
-  so the ramp completes before the zoom floor.
-- **Background fill unconditional** — only stars fade.
-- **`wreckSpawned` is the right defensive flag** — set the same
-  tick the destruction burst fires, before the line-700 filter
-  strips the ship from `game.ships`.
-
-### 2026-05-21 — Escort fighters sortie on cap-relative threats
-
-`ESCORT_ENGAGE_RANGE: 1700→3500`, `ESCORT_RECALL_RANGE: 2400→5000`.
-Escorts now pick the nearest hostile to their *cap*, not to the
-*fighter*, so they fan out to intercept anything closing on the
-charge.
-
-- **Cap-relative > escort-relative.** Distributes escorts across
-  approach vectors instead of clustering on one side's closest
-  contact.
-- **3500u sized to longest threat reach** — BB main gun (~2000u),
-  bomber pod (~1800u + 1200u closure), cluster bloom (~2400u
-  standoff) all fit with margin.
-- **Bomber-escort fighters get the same rule** because `escortOf`
-  is set on both ring escorts and bomber escorts.
-- **Free fighters unchanged** — gated on `ship.escortOf != null`.
-
-### 2026-05-21 — Corner-stuck small craft + stall watchdog + in-match QUIT
-
-Three connected fixes: (1) `enforceWallEscape` safety net blends
-`wallAvoidance` for every fighter/bomber after the per-class AI
-branches, so escort-station-ring and idle-no-target paths can't
-strand a craft facing a wall. (2) `game.stallTimer` resets on every
-`applyDamage`; >45 s with no damage force-ends the match (winner =
-more live hulls, ties to red). (3) New QUIT pill in
-`.battle-top-right` + Escape key drains `consumeQuitRequest()` in
-main.js → `restart(game)`.
-
-- **Safety net runs unconditionally for fighter/bomber.** Cheaper
-  than predicting which AI branch forgot to apply wall avoidance.
-  Capitals are excluded — their slower turn rate makes hard inward
-  yanks visually wrong.
-- **Stall ties go to red.** Player is blue; ties-to-player would
-  let a corner-camp farm wins.
-- **Escape = quit, no confirm.** Reversible (re-deploy is one tap).
-- **`window.game` is the smoke-test hook**; Playwright tests in
-  /tmp depend on it. Don't remove the export from main.js.
-
-### 2026-05-21 — PLAY + Custom Match carousels + missile-pod anti-fighter purge
-
-PLAY screen rebuilt as a 5-step carousel: MODE → MAP → FACTION →
-FLEET → DEPLOY. Steps auto-skip per mode (Frontier shows just
-MODE+DEPLOY = 2 dots, Custom skips FACTION+FLEET = 3 dots). Custom
-Match overlay rebuilt as a 3-step carousel: FRIENDLY → ENEMY →
-REVIEW. NEXT flips to a green DEPLOY on the last step. Separately:
-`pickPodTarget` and missile `acquireMissileTarget` now skip
-fighter+bomber when `fromKlass !== "fighter"`, so capital missile
-pods stop massacring small craft. Fighter death burst clamps
-intensity ≥ 0.95 and radius ≥ 16 for visible feedback.
-
-- **`_resetOverlayState` gated on `_currentScreen !== name`** —
-  `showScreen` runs every frame; without the gate the carousel
-  pinned to step 0 forever.
-- **Mode switch from a hidden step bounces to the first visible
-  step** via `_syncMainMenuChips` → `_gotoMainStep(visible[0])`.
-- **Pod filter is intentionally aggressive** — a frigate with no
-  friendly capitals nearby will leave its pods idle rather than
-  shred small craft. Ring cannons handle anti-fighter work.
-- **Fighter missiles keep open re-acquire** because dogfight
-  missiles should swap between enemy fighters mid-flight. Cluster
-  *children* inherit parent's `fromKlass` (a capital) so they're
-  filtered.
-
-### 2026-05-21 — Cluster 160° cone + frigates dart + capital crowding
-
-Cluster missiles burst into a 160° angular cone again (revert of
-the line-spacing experiment): `cluster.childSpread = π * 160/180`.
-6 children launch from parent position with headings spanning ±80°
-off the target axis; outer warheads loop back via homing. Frigates
-gain PD-aware orbit (`pdRange + 140` vs capitals, default vs small
-craft) + `bigShipDanger` + new `allyAvoidance` blends. Capitals
-(BB, cruiser, carrier) get `allyAvoidance` (weight 0.55–0.60) to
-stop hulls drifting through each other.
-
-- **`allyAvoidance` ignores fighters/bombers/stations.** A swarm
-  of escorts would otherwise repel each other and never converge.
-- **`bigShipDanger` excludes the frigate's own target** — without
-  the exclude the frigate refuses to attack-run a BB because the
-  target's PD push dominates steering.
-- **Hard activation threshold `1.5 × max(myR, otherR)`** — without
-  it two cruisers 600px apart would push slightly and never
-  converge.
-- **Total cluster damage still 144** (6 × 24).
-
-### 2026-05-21 — Cruiser lead-aim + cluster line spread (precursor to 160°) + escort leash bump
-
-Cruiser forward salvo now lead-aims via `aimPointFor(target)` and
-fires on bow alignment with the lead direction (tolerance 0.88,
-~±28°). Standoff = `aiOrbit × 0.7` so race overrides scale
-proportionally. (Later same day: line spread reverted to angular
-160° cone — see above entry.) `ESCORT_ENGAGE_RANGE: 900→1700`,
-`ESCORT_RECALL_RANGE: 1400→2400` (later bumped to 3500/5000 — see
-two entries above).
-
-- **Lead-aim uses `aimPointFor`** so cruiser fire follows the
-  capital module-priority ladder (PD → broadside → missile bay
-  → laser → hangar).
-- **Fire tolerance 0.88 still gates spectacular misses.** With
-  salvo cooldown 1.8s the cruiser delivers ~1 full volley per
-  orbit pass.
-
-### 2026-05-21 — Broadside salvo aborts when the battery module dies mid-volley
-
-`updateBroadsideFire`'s salvo-continuation block re-checks
-`portLive`/`stbdLive` before each shot in the burst; failed check
-clears `salvoPortShotsLeft` instead of firing. Other per-module
-subsystems (PD, missile pods, heavy laser, engines, hangar) already
-gate correctly — the audit came back clean.
-
-- **Cooldown timers keep ticking on disabled modules** by design —
-  partial repair (if ever shipped) wouldn't need to re-seed timers.
-- **Broadside fire mode (`firingMode: "broadside"`) doesn't aim
-  individual barrels** — hull rotates until target enters arc.
-  Don't animate per-barrel tracking; it would lie about how the
-  weapon works.
-
-### 2026-05-21 — Custom Match supports multi-faction teams (up to 2 per side)
-
-Custom Match overlay supports up to 2 factions per side for a true
-4-faction setup. `+ ADD ALLY` / `+ ADD ENEMY` buttons add a second
-team that auto-picks the first race not already on the side. New
-data model: `customBlueTeams` / `customRedTeams` arrays of
-`{race, counts}`; `consumeCustomRoster` emits both shapes (new
-`blueTeams`/`redTeams` plus legacy `blue`/`red` mirrored from slot
-0). `spawnRoster` resolves in order: multi-team → legacy single →
-race-default.
-
-- **Teams share spawn zone + side ID.** Both factions on blue spawn
-  from `ARENA.spawn.blue` and are allies. True 4-corner FFA would
-  need a side architecture rewrite.
-- **Slot 0 can't be removed** — each side needs at least one
-  faction or the spawn loop drops it entirely.
-- **`consumeCustomRoster` deep-clones counts per team** because
-  the overlay's DOM-edits would otherwise mutate the live roster
-  shared with the game object.
-- **Legacy single-race fields kept as mirrors of slot 0** for any
-  code still reading them (HUD chrome, debug paths).
-
-### 2026-05-21 — Tracking gun turrets + lasers bury into the hull
-
-PD turrets store per-turret aim angle (`ship.pdAimAngles[i]`)
-refreshed every tick from the lead-aim that already runs in
-`updatePDFire`; draw layer renders base disc + rotated barrel +
-muzzle tip. Heavy laser barrel tracks its target every tick (not
-just when ready to fire) via `ship.laserAimAngle`, clamped to
-`heavyLaser.arc`. Beam endpoint in `hud.js#endPoint` stops `targetR
-* 0.5` short of centre so the beam visibly carves into the hull
-silhouette.
-
-- **PD aim updates on cooldown too** so barrels slew smoothly
-  between shots.
-- **Broadside cannons stay fixed perpendicular by design** — hull
-  rotates until target enters arc; per-barrel tracking would
-  misrepresent the weapon.
-- **Laser barrel clamped to `heavyLaser.arc`** so it visibly tries
-  to track but stops at the arc edge.
-
-### 2026-05-21 — +2 missile launchers, cluster cruiser restored, umbrella bloom, bomber shield buff
-
-All non-fighter missile carriers got +2 launchers (bomber 3→5,
-frigate 1→3, cruiser 2→4, BB 4→6). Cruiser cluster pods re-added
-(parent damage 110→60, child 30×4 = 120 bloom). Cluster bloom now
-gates on (a) outside target PD range: `max(spec.bloomDistance,
-target.pd.range + 60)`, and (b) clear of launcher hull:
-`ownerDist ≥ owner.radius + 80`. Bloom VFX = two-ring shockwave +
-fan of sparks along child cone + 4 lateral trim sparks. Bomber
-shields 130/16 → 220/24 (regenDelay 2.2s unchanged).
-
-- **PD-range slack is 60u** — round number that puts the bloom
-  outside the densest PD bubble for every ship (PD ranges 400–560).
-- **`hexToRgba` falls back to white** if a race ever uses non-hex
-  pod colors — keeps shockwave painter safe.
-- **Cluster child total damage 144** (6 × 24 after the 160° cone
-  pass — see earlier entry).
-
-### 2026-05-21 — BB cannon shells + FIRE button dead wiring + tap-to-inspect + escort split
-
-Five user-reported issues fixed together: (1) BB `projectileSpeed
-280→540`, `projectileRadius 10→8`; `drawProjectile` renders
-shells ≥6 radius as oriented ellipses with bright leading tip.
-(2) FIRE/SPC/CHARGE buttons had no DOM listeners since the DOM HUD
-overhaul — wired pointerdown/up/cancel/leave on `#fire-btn`,
-`#boost-btn`, `#missile-btn`. (3) Tap-to-inspect in spectate/admiral:
-`_pendingTap` short-low-movement gesture sets `game.spectateTargetId`
-via `consumeTap()` in main.js; target panel shows SHIELD → ARMOR →
-HULL. (4) Escort spawn split into packs of 5 with separate
-`packId`s. (5) Escort engage leash (later bumped — see above).
-
-- **Tap shares right-half real estate with the right vstick** —
-  when `selectActive` is true, onDown skips `right.start` on right-
-  half touches. Mouse always counts as tap.
-- **BB streak length `radius * 2.6`** — ~21px ellipse at radius 8;
-  small enough that PD rounds (radius 3) still look like dots even
-  if threshold drops.
-- **Cruiser shell radius 7 also streaks** — intentional, cannon
-  shells should read as tracers.
-
-### 2026-05-21 — Admiral camera unmovable + battle HUD clutter
-
-Three intertwined bugs from the COMMAND FLEET flow: (1) Canvas
-`AdmiralPanel.handleClick` swallowed pointers in the entire bottom
-half of the viewport even though the panel had moved to DOM —
-left vstick couldn't capture. Dropped the dead interception.
-(2) DOM admiral grid called `game.setPosture` / `game.setMissiles`
-which were never defined — only the closure on `input.admiralPanel`.
-Lifted closures into `game.setPosture` / `game.setMissiles`.
-(3) New `_syncModeChrome` hides irrelevant HUD per mode (admiral
-hides action cluster, aim stick, damage arcs, compass, reticle,
-respawn, vitals, OBSERVING pill, right stick).
-
-- **Canvas `AdmiralPanel` class is still dead code** — `layout()`
-  still called, `setHooks` still wired. Deletion is a follow-up.
-- **Mode chrome uses `display: none`, not `visibility: hidden`** —
-  hidden buttons would otherwise still claim pointer events.
-- **Left vstick stays on in admiral** — it's the camera-pan input.
-
-### 2026-05-21 — DOM menu persisted on top of every non-Frontier mode
-
-`StartMenu.hide()` (idempotent — gated on `_currentScreen !== null`)
-added; `main.js#draw` calls it on every non-menu frame so
-`menu-root` is torn down on the transition out of menu state.
-Frontier was already correct because `_launchBattle` calls
-`_menuSystem.hideAll()` synchronously before dispatching.
-
-- **Hide wired in draw loop, not `startGame`.** `startGame` is
-  shared by canvas-click, DOM-DEPLOY, post-battle restart, and the
-  Frontier `enter-node` path — putting hide there would race with
-  Frontier's `_launchBattle` cleanup.
-- **Post-battle return works for free** — `restart` flips
-  `game.state` back to `"menu"`, draw loop re-enters menu branch,
-  `showScreen(_baseScreen)` re-mounts.
-
-### 2026-05-21 — Main-menu restructure: HOME → PLAY → mode-relevant options
-
-Three-level main menu: HOME (PLAY / SETTINGS / ABOUT hub) → PLAY
-(mode picker + mode-relevant chips) → ABOUT. `input._baseScreen`
-tri-state (`'home'|'main'|'about'`) tracks the base; overlays still
-override. Energy bar + settings pill key off `name === 'main'`
-instead of "any menu active". `_syncMainMenuChips` toggles
-sections inline per mode (Frontier hides all extras, Custom hides
-race+fleet+sliders).
-
-- **Inline `display` toggle, not class swap** — keeps `.menu-screen`
-  flex-column ordering stable.
-- **Custom keeps MAP SIZE** because `_emitStart` reads
-  `selectedSize` for it.
-- **Post-battle re-open lands on the screen the user came from**
-  (usually PLAY), not HOME.
-
-### 2026-05-21 — Frontier flow: JUMP / stale closure / FLY teardown / event auto-advance
-
-Four bugs in the Frontier loop: (1) JUMP was a no-op because
-`StartMenu.draw` hid `menu-root` whenever `showRunMap` was true;
-`hasSubOverlay = showResupply||showEvent||showBattleChoice` is now
-lifted above the visibility gate. (2) `setStarmapCallbacks`
-captured a stale `run` local; now re-reads `this.runState.run` at
-click time. (3) FLY didn't tear down the starmap because
-`startMenu.draw` stops firing once `game.state` flips to playing;
-new `_launchBattle` helper synchronously hides `showRunMap`,
-destroys starmap, hides `menu-root`, then dispatches `enter-node`.
-(4) `onEventChoice` now dispatches `complete-node-noncombat` after
-`apply-event` so the player actually advances.
-
-- **`_launchBattle` order matters**: cleanup BEFORE dispatch
-  because `enter-node` synchronously calls `startGame` which stops
-  the draw loop calling `startMenu.draw`.
-- **`.behind-canvas` toggle is dead** — `menu-root` z-15 already
-  sits above starmap z-10; dropped from the draw path.
-- **Canvas overlay stubs (`_drawResupply` / `_drawEvent` /
-  `_drawBattleChoice`) are still alive in source** — unreachable
-  via the DOM path; deletion is a follow-up.
-
-### 2026-05-21 — Frontier launch: drop dead `makeGalaxy`, fix SVG className write
-
-Two latent bugs from the DOM/CSS overhaul: (1) `_layoutRunSetup`
-called `makeGalaxy(...)` which had been deleted; click handler
-ReferenceError'd silently. (2) `updateStarmap` had a bare-name
-`edgesSvg = control.edgesSvg` (no `let`/`const`) failing in module
-strict mode, plus `edgeEl.path.className = ...` on an SVG `<path>`
-which raises TypeError (`SVGElement.className` is a read-only
-`SVGAnimatedString` getter).
-
-- **SVG class writes must go through `setAttribute("class", ...)`
-  or `classList`** — HTML `.className = ...` works fine, SVG
-  doesn't. Future SVG `<g>`/`<circle>`/etc. will hit the same gotcha.
-- **Run setup canvas paths left dead** — DOM scrim absorbs canvas
-  clicks; rect-fallback is unreachable.
-
-### 2026-05-21 — Real fix for startup black screen: restore `InputManager.layoutOverlays`
-
-The DOM/CSS menu overhaul deleted `InputManager.layoutOverlays(viewW,
-viewH)` but left the call site in `main.js#resize()`. `resize()`
-fires synchronously during module init, BEFORE the RAF loop starts;
-the missing method raised a TypeError at module top-level, no frame
-ever painted. Restored as a 5-line method delegating to the still-
-existing per-overlay `layout()` methods (missileBtn, fireBtn,
-spectateBtn, startMenu, admiralPanel).
-
-- **Per-overlay `layout()` methods still matter even with DOM HUD**
-  — `onDown` still hit-tests canvas rects on those buttons. Don't
-  delete them thinking "everything is DOM now."
-- **`boostBtn` intentionally NOT in the layout list** — no
-  `layout()` method; adding it would throw the same TypeError.
-- **Companion fix in 3f9e997 (re-mount `startMenu.draw` in the
-  draw loop) is still required** — both fixes together make the
-  page actually work.
-
-### 2026-05-20 — AI targets PD + weapon modules before hull
-
-AI cannon aim now shifts onto live modules in priority order
-(PD → broadside → missile bay/pod → torpedo → laser → hangar);
-fighter targets and capitals with no live modules fall back to
-centre. `pickAimModule` shared with bomber missile homing. New
-`aimPointFor(target)` returns world-space aim; `leadAim` rebuilt
-around it so every AI caller is module-aware for free.
-
-- **Priority order matches `pickBomberAimModule`** — unifying
-  means one place to retune.
-- **Engines deliberately NOT in priority list** — rear-mounted,
-  strafe angle usually clips something else first.
-- **Focus fire is emergent.** Every ship picks the *first* live
-  module — don't randomise inside `pickAimModule`.
-- **Aim only, not target selection** — pack-role + proximity logic
-  still picks WHICH ship to attack.
-- **`pickAimModule` returns the module object** so callers can
-  read `offset` without a second lookup.
-- **`updateRingFire` (frigate ring cannons) also shifts onto the
-  preferred module** when present.
-
-### 2026-05-20 — Frontier UI overhaul: starmap + scrollable galaxy + emblem cards
-
-Run map became a full-screen scrollable starmap with parallax stars,
-procedural nebulae, per-type node art (battle stars, elite stars,
-resupply planets, event anomalies, boss gas giants with faction-
-tinted rings), curved Bezier travel routes with animated dashed-
-flow shimmer, drag-to-pan with 4px tap-vs-drag threshold. Top HUD
-strip (act badge, faction commander, credit/fuel chips), right
-fleet panel with capital silhouettes + HP bars. Run Setup gained
-galaxy backdrop + faction emblem cards.
-
-- **Click deferred to pointer-up for run map only.** Sub-overlays
-  (Battle Choice, Event, Resupply, Run Setup) still route on
-  pointer-down — they're modal.
-- **Drag threshold 4px (squared 16)** distinguishes tap vs pan.
-- **Galaxy + node positions cached on `(run.seed, run.act)`** —
-  changing acts mid-run regenerates both, each act feels like a
-  new region.
-- **Run Setup galaxy uses fixed seed (`0xfd00bea1`)** so the
-  starscape stays consistent across opens. Don't randomise.
-- **`drawFleetMarker` sits 38px ABOVE the current node** with a
-  pip line down — keeps the marker from obscuring the star.
-
----
-
-## Earlier changelog (condensed)
-
-Older entries collapsed to date + headline + key load-bearing gotchas.
-For full context (what changed, files touched, verification steps),
-see `git log` — every entry shipped as its own commit.
-
-### 2026-05-20 — Frontier roguelite campaign (replaces 100-mission campaign)
-
-FTL-style roguelite: branching node maps per act, 3 acts per run,
-capital ships carry hull damage between battles, small craft drip-
-replenish, two currencies (credits + fuel). Loss = all capitals
-destroyed. Mid-run save/resume mandatory. Replaces `src/campaign.js`
-with `src/roguelite.js` + `src/modes/roguelite.js`. Save schema v3.
-
-- **Per-instance capital identity** via `runtimeInstanceId` stamped
-  during spawn. Manifest is an ordered array popped by `spawnRoster`
-  in declaration order; relies on `Object.entries(roster)` iterating
-  capitals before small craft (V8 insertion-order spec).
-- **Only hull persists**, not shields/armor — legible match to the
-  run-map HP readout; persisting regenerating defenses would be
-  invisible to the player.
-- **`MODES.tick` and `MODES.checkEnd` were dead** before this entry;
-  now wired in `update()`. The `matchEnded` event was also subscribed
-  but never emitted — now emitted from `update()` on the edge,
-  gated by `game._matchEndedEmitted`.
-- **Boss-win clears the run synchronously.** `main.js`'s
-  `matchEnded` handler snapshots `runRef` up front because the
-  `runEnded` dispatch nulls out `activeRun` mid-flight.
-- **Energy gate skipped for roguelite battles** — the run itself is
-  the energy commitment. Frontier chip opens an overlay rather than
-  calling `_emitStart`.
-- **`unlockedFactions` is the 5th-race extensibility gate.** Adding
-  a race is data-only: entry in `RACES` + key in
-  `DEFAULT_SAVE.roguelite.meta.unlockedFactions`.
-- **Tunables at top of `src/roguelite.js`**: `STARTER_FLEET`,
-  `FIGHTER_DRIP`, `BOMBER_DRIP`, `REPAIR_RATE`.
-
-### 2026-05-20 — Defensive systems buff pass: shields, armor, PD, stations
-
-Shields ~1.6–1.8× higher max with faster regen. Capital armor max
-~1.5–1.6× with lower wearRate. PD count/range/RoF bumped across the
-line. Stations significantly buffed (base hp 600 → 950, radius 70 →
-80). Station-node weapon templates (`PD_BASE`, `MISSILES_BASE`,
-`LASER_BASE` in races.js) bumped so every race's stations inherit.
-Shield bubble offset factor 0.18 → 0.22 (floor 6 → 8). PD turret
-draw radius 2 → 3.
-
-- **PD anti-ship multiplier `PD_VS_SHIP_MUL = 0.22` untouched.** PD
-  buff is anti-missile, not anti-ship. If PD shreds fighters again,
-  lower the multiplier — don't revert the damage values.
-- **`PD_BASE` change affects every station** because all races layer
-  mods on top. Per-race differentiation requires explicit overrides.
-- **Capital fights are 90–150 s** after this + the HP_TIER_MUL pass.
-  Module destruction is the practical accelerator.
-- **Shield offset floor 6 → 8.** Fighters get a 9px bubble. Preserve
-  the floor — small classes need it.
-
-### 2026-05-20 — Procedural SFX + SFX mute + shield impact visual
-
-Four SFX voices (`sfxCannon`/`sfxMissile`/`sfxHit`/`sfxExplosion`) on a
-separate `sfxGain` bus from music. Gameplay events
-(`weaponFired`/`missileFired`/`hit`/`shipDestroyed`) routed through
-`main.js` with camera-attenuated volume. Shield impact = outward
-ripple + localized arc flare on bubble (up to 6 active flares,
-0.45 s fade, stored ship-local so they ride manoeuvring capitals).
-Settings overlay grew an SFX toggle row.
-
-- **`sfxGain` separate from music compressor** — the whole point of
-  the per-bus mute is independent muting.
-- **Per-frame voice budget = 6.** Events still fire (cheap), only
-  first 6 hit synth each frame. Gates at audio layer, not events.
-- **AI weapon SFX probability-gated at 35%.** Cheapest knob if SFX
-  mix gets too noisy in big brawls.
-- **Player events bypass attenuation** via `isPlayer: true`.
-- **`shieldHits` bounded at 6**, older entries shift out.
-- **`recordShieldHit` localizes by `-ship.heading`** so arcs ride
-  with the turning ship. Don't store world angles.
-
-### 2026-05-20 — Engine fire + hull venting VFX scaling with damage
-
-Engine modules route through `spawnEnginePlumeVFX` — dark smoke +
-flame jets backward along ship heading, severity ramps with HP.
-Below 70% hull HP every ship emits hull-vent smoke from random
-points; above ~55% severity it sparks fire. Module smoke/fire rates
-roughly doubled (`DAMAGED_RATE` 3.5 → 7, `DISABLED_RATE` 12 → 22).
-
-- **Engine vents backward**, not outward — drift along
-  `ship.heading + π`. Reorient via per-engine vector, not in the
-  spawner.
-- **Hull vent points sampled per-frame**, not stored. For "this
-  section breached" effects later, add `ship.ventPoints`.
-- **No off-screen culling.** Poisson rate gate keeps spawn counts
-  manageable; add culling only on real perf regression.
-- **Severity formula `(0.70 - hpFrac) / 0.60`** linear, clamped.
-  Keep trigger at 0.70 — earlier and ships look broken on scratch.
-- **Engine severity floor 0.45** ensures damaged-state engines emit
-  meaningful smoke, not barely-there puffs.
-
-### 2026-05-20 — Pinch zoom + non-linear capital HP + crater-style hull damage
-
-Pinch-zoom (touch) + scroll-wheel (desktop) in spectator + admiral
-only, clamped `[0.15, 2.0]`, default 0.5. `HP_TIER_MUL` table
-(fighter 1.0 → carrier/BB 4.5) applied AFTER race deep-merge in
-`resolveSpec`. Floating rind/orange-rim hull-hole artwork replaced
-with dark sooty craters matching destroyed-module visual language.
-Armor-flake palette muted to gray.
-
-- **Zoom only in spectator + admiral.** Piloting keeps default —
-  aim feel depends on known scale. Don't bolt on without an opt-in.
-- **Pinch baseline drops on finger lift** — next gesture starts
-  fresh, otherwise zoom lurches on re-engage.
-- **HP tier mul AFTER race deep-merge.** Hegemony BB 1500 / Reavers
-  BB 770 preserved proportionally. For race-specific scaling, add
-  `hpMul` to the race spec.
-- **Cell-hull-cost NOT scaled.** Only ~14% of BB hull drainable via
-  cells; rest drains directly in `applyDamage`. Visible damage
-  outpaces HP bar drop on capitals — intentional.
-
-### 2026-05-20 — Custom Match: slider-driven roster redesign
-
-Custom Match overlay rebuilt: wider 460px panels, per-class sliders
-replace +/− buttons (8px visible track, full-row hit zone, tap-to-snap
-+ drag both supported), 1×4 race row, ALLIED/HOSTILE headers.
-
-- **Tap-to-snap + drag are the same gesture.** Pointer-down inside
-  hit-zone sets value AND opens drag.
-- **Slider hit zone is row-tall**, not just the 8px track. Inflated
-  hit-zone is why the redesign earns its keep.
-- **`_customDrag` cleared on CANCEL/START/pointer-up.** Stale drag
-  would re-engage on next open via cached row reference.
-- **`pointerMove`/`pointerUp` only fire while `menuActive`** — early
-  return is gated so virtual-stick handling is untouched.
-- **Race chip click re-seeds counts** to the new race's default
-  roster. Swap race FIRST, then tune.
-
-### 2026-05-20 — HUD polish: unified panel chrome + spectator vitals
-
-`drawPlayerHUD` → `drawVitalsPanel`, reused for spectated ships
-(outside admiral mode — admiral panel owns the bottom). Match-over
-+ respawn now in centered panels with the standard chrome.
-
-- **Spectate vitals suppressed in admiral mode** via `!game.admiralMode`
-  guard in `drawHUD`.
-- **`drawVitalsPanel` only reads fields present on every ship.**
-  Missile block double-gated on `missileBtn && ship.spec.missile`.
-- **Border tint keyed on `ship.isPlayer`, not side** — captured/recycled
-  ships should still read as "me".
-- **Match-over panel accent uses `SIDES[winner].primary`** — red on
-  loss is deliberate.
-
-### 2026-05-20 — Custom Match: player-configurable per-side rosters + races
-
-`startGame` now dispatches via `MODES[mode].setup` with
-`{ spawnRoster, promotePlayer }` helpers. `spawnRoster(game,
-rosterOverride)` accepts per-side overrides. Custom Match overlay
-populates `game.customRoster`.
-
-- **Mode dispatch is dispatch-or-fall-through, not dispatch-only.**
-  Open/defend hit the legacy path. Don't refactor MODES to require a
-  hook.
-- **Fleet-size multiplier bypassed for custom + campaign** — counts
-  are deliberate.
-- **Per-class cap 60.** Raising melts phones; renderer fill-time
-  budget is the real ceiling.
-- **Overlay layout recomputed on open**, not on resize. Reopen
-  fixes stale rects.
-
-### 2026-05-20 — Multi-stage salvos for BB + cruiser; PD damage nerfed vs ships
-
-PD damage scaled to `PD_VS_SHIP_MUL = 0.22` against ships when
-`p.fromKlass === "pd"`. BB broadsides + cruiser forward gained
-`salvo: { shotsPerVolley, intraShotDelay }` — burst at current aim
-instead of single shells. Per-shot heading recomputed for tracking.
-
-- **Salvo continues past `c.firing = false`** — committed-volley
-  feel. AI swapping targets mid-burst still delivers the volley.
-- **`updateBroadsideFire` recomputes `sideVec` each shot** so turning
-  battleships don't spray glued at initial vector.
-- **PD nerf keyed on `p.fromKlass === "pd"`.** Tag any new PD-class
-  source with this — don't introduce a second multiplier.
-- **Cooldown starts at volley start, not end.** Don't drop cooldown
-  below `shotsPerVolley * intraShotDelay` — volleys overlap and
-  double-fire.
-
-### 2026-05-20 — Per-type module art + capital-scale shield standoff
-
-Per-kind module icons (laser barrel + lens, missile silo grid,
-broadside cannon row, animated dual-barrel PD turret, hangar bay
-chevron, torpedo cross-hair, engine nozzle ring). Shield offset
-`Math.max(6, s.radius * 0.18)` — capitals get +28–32 px standoff.
-
-- **PD turret rotation uses `performance.now() + ship.id * 0.37`** —
-  phase keeps a swarm from spinning in lockstep.
-- **Damage chip chrome paints OVER icons** at low HP — intentional.
-- **Shield floor 6px preserves small-craft bubble.** Don't lower
-  below 4.
-
-### 2026-05-20 — Bigger modules, chip-damage VFX, pixel hulls per class
-
-All MODULES radii bumped ~35% so visible disc = hit zone. drawShip
-render mult 0.55 → 0.85. 5 damage stages per module (pristine →
-crack → wedge → red-hot → crater) with transition spark + smoke.
-Cell grid 3-4× finer per class (`CELL_HP` fighter 1 → station 5,
-`CELL_HULL_COST` fighter 0.25 → station 1.0). `damageCellsInRadius`
-budget-based, inner-first. `deadCells[]` cache on each ship.
-
-- **`cell.hpMax` no longer per-cell** — uniform via `ship.cellHpMax`.
-- **Budget cap (`remaining * 1.2`) lives in `applyDamage`**, not
-  `damageCellsInRadius`. Raising it lets beam ticks punch ribbons.
-- **Damage-stage thresholds duplicated** in `drawShip` + `moduleStage()`
-  — keep in lockstep.
-- **Wounded-cell halo skips below `screenRadius < 12px`** — retune
-  on camera ZOOM change, don't remove.
-- **`auditModuleLayout()` dev-only** via `import.meta.env.DEV`.
-
-### 2026-05-19 — Fighters/bombers stop dodging; per-capital fighter escorts; bombers flank
-
-Fighter `danger` weight 1.95 → 0.55, bomber 2.20 → 0.85.
-`bigShipDanger` excludes the current target. `MAX_APPROACH_TIME`
-10 → 16 s; forced break-off on PD bubble entry removed. Per-capital
-escorts via `ESCORT_SIZE` map (frigate 5, cruiser 10, BB 15, carrier
-10). Bomber AI renamed `bomberStandoffAI` → `bomberFlankAI` —
-perpendicular-aft flank slot.
-
-- **Target-exclude is targeted.** Fighters still flinch from OTHER
-  capitals. Don't fold new avoidance classes (mines, hazards) into
-  this exclusion without thought.
-- **No pack-leash on escorts.** The bomber IS the threat — chasing
-  is correct. If you add a leash, use `escortOf` lookup.
-- **`ESCORT_SIZE` in game.js is the single source.** Legacy
-  `spec.escortSize` field is gone — don't reintroduce.
-- **Fleet sizes balloon (~103 ships/side Terran, ~128 Hegemony).**
-  Frame rate lever is `ESCORT_SIZE`, not the roster.
-- **Bomber flank uses target heading where available** — target
-  velocity would park bombers behind sliding cruisers.
-
-### 2026-05-19 — Cruiser refit: long-range artillery (cluster + siege missiles + laser)
-
-Cruiser dropped `weapon` + `firingMode: "forward"` entirely. Now:
-2× cluster missile pods (split into 5 children on approach), 1×
-siege missile (240 dmg, 18 s, hp 10), single bow heavy laser.
-`aiOrbit: 880 → 1500`.
-
-- **Cluster `missilePods.damage` is per CHILD now** (5 × 30 = 150).
-- **Children home on parent's target**, spread is spatial only —
-  forces multiple PD intercepts.
-- **Children don't carry `.cluster`** — only pod-spawned missiles
-  do. No recursive cluster.
-- **Siege shares the `"missile"` subsystem gate** with cluster pods.
-- **`s.weapon` may be undefined** (cruiser + carrier). AI code that
-  touches `s.weapon.x` must guard.
-- **AI orbit 1500** feels right at 4500–11000 px maps; shrink maps
-  → dial it down.
-
-### 2026-05-19 — Heavy laser is now a 3-second sustained beam; AI dodges it
-
-BB heavy laser `beamDuration: 0.45 → 3.0`. Damage spreads as
-`dps = damage / beamDuration`. Beam re-anchors to owner bow each
-tick. Dies on owner death or laser-subsystem kill. AI dodges via
-`beamAvoidance` overlay applied to every class.
-
-- **Continuous damage routes through `applyDamage`** — same
-  shield/armor/subsystem/hull pipeline as a cannon round.
-- **Subsystem hits route through node closest to target centre** —
-  almost always engine on a fleeing target. Intentional.
-- **`beam.side` is the OWNER's side** — friendly avoidance skips via
-  `beam.side === ship.side`.
-- **AI force-clears `firing` on high urgency** — looks decisive,
-  prevents re-acquiring beam-camped targets.
-- **No path-prediction lookahead** — adds oscillation near beam
-  edges. Don't add without verifying AI doesn't dither.
-
-### 2026-05-19 — Destructible subsystem nodes (gun / engine / missile / laser)
-
-Ships carry `subsystems` array — hit-routed nodes that disable
-behaviors when destroyed (gun → cannons off, engine → drift,
-missile → pods off, laser → beam off). PD turrets intentionally
-excluded (swarm, not a node). `applyDamage` Step 3 absorbs into
-node, overflow continues to hull.
-
-- **Routing opt-in via aim** — player has to land in the hit-radius.
-  AI aims at centre, so AI hits only graze nodes occasionally —
-  deliberate player edge.
-- **Overflow continues to hull** — killing blows aren't wasted on
-  node HP. Avoids the spongy-ship trap.
-- **`hpFrac` is fraction of `ship.hpMax`** — race HP overrides scale
-  subsystem HP for free.
-- **`hasWorkingSubsystem(ship, kind)` returns true if no nodes of
-  that kind exist** (e.g. carrier has no `gun`). Always go through
-  the helper.
-- **Engine kill behavior differs by class** — aircraft coast
-  (`vel *= 0.995`), capitals drift (`vel *= 0.99`).
-- **Hit point comes from `applyDamage(... hitPos)`**. New callers
-  MUST supply `hitPos` or the subsystem step bails.
-
-### 2026-05-19 — Ship visuals, opponent picker, persistent wreckage
-
-`src/wreckage.js` (new) — destroyed ships leave drifting fractured
-hulks, damaging hits chip debris fragments. Both persist for the
-match. Arena gained an OPPONENT picker (random + four races; muted
-in waves/daily). Ships got engine plumes, race-accent spine,
-cockpit/bridge markers, panel lines, HP-driven scorch marks.
-
-- **Wreckage caps: 160 wrecks, 500 debris.** Oldest dropped on
-  overflow. Don't age them out by time — persistence is intentional.
-- **Hull-chunk splitter shares centroid as fan apex** — adjacent
-  chunks share their edge so the union reproduces the silhouette.
-  Last chunk wraps `poly[V % V] === poly[0]`.
-- **`SIDES.blue.primary === "#5cf"`** (3-hex). `darken()` handles
-  both 3- and 6-hex; don't assume 6.
-- **Engine plume tint keyed on `ship.side`**, not race — team ID at
-  a glance even if races mix later.
-- **Battle scars use deterministic hash of `ship.id`** — stable
-  frame-to-frame without storing scar state on the ship.
-- **`mergeWithDefaults` deep-merges menuSelection/settings** — new
-  additive fields don't need a schema bump.
-
----
-
-<!-- Append new dated sections above this line. Keep entries terse. -->
+## Changelog (condensed)
+
+Newest first. Date + headline + load-bearing gotcha only.
+
+### 2026-05-29 (tighter battle-plan commands — 3-axis orders)
+- **Fleet directives became three orthogonal axes** (see
+  `BATTLE_COMMANDS_SPEC.md`): STANCE (engage/charge/standoff/hold/fallback),
+  TARGET PRIORITY (default/hunt‹class›/focus), ASSIGNMENT (free/escort‹class›),
+  plus the orthogonal missiles free/hold. Replaces the old 3-posture
+  (hold/free/press) + 5-kind wing model.
+  - **Behavior** (`ai.js`): `applyAdmiralPosture` → `applyShipOrders(ship,
+    world, target)` implements the 5 stances. ENGAGE = no-op (class AI);
+    CHARGE = aim straight at target/enemy-centroid; STAND OFF = kite at
+    `effectiveRange` (back-pedal <0.85R, close >R, orbit between); HOLD
+    POSITION = anchor (escorted cap, else `ship.holdAnchor` captured on first
+    hold) + defend within `HOLD_RADIUS+R`, return if pulled off, never pursue;
+    FALL BACK = retreat to the fleet REAR (allied centroid pushed away from
+    enemy centroid) + cease fire. `resolveOrders` reads `ship.wingCommand`
+    (new `.stance` shape OR legacy `.kind` mapped forward) else the per-class
+    `game.directives[klass]` (also legacy-`.posture` tolerant).
+  - **FOCUS is now opt-in** (was a blanket pin): only ships whose resolved
+    priority is `focus` follow `game.focusTargetId`. The admiral panel's
+    **ALL FOCUS** master restores the old "whole fleet piles on the tap"
+    on demand. GOTCHA: a bare admiral tap no longer makes untagged ships
+    converge — tag classes FOCUS (or hit ALL FOCUS) first.
+  - **ESCORT now works for any class** (`ai.js` escort leash de-gated from
+    fighter/bomber-only) — "frigates screen the battleship". `fleetcommand.js`
+    stamps `escortOf` from `escortKlass` per-class AND per-wing; FREE ROAM
+    preserves the auto-escort (no default-plan nerf — same rule as the earlier
+    escort-parity fix), so there's no explicit un-leash (the STANCE governs
+    movement regardless).
+  - **target-class/defend-capital wings no longer overridden by class HOLD**
+    — those map to HUNT/ESCORT which keep DEFAULT stance, so they pursue
+    their task. (This subsumed an earlier fix.)
+  - **Carriers/stations are NOT commandable** — they return before the stance
+    layer in `updateAI`; excluded from the Fleet Plan capital rows (they
+    still appear in the live admiral grid as a no-op, pre-existing).
+  - **UI**: NEW 3-axis chip pickers in the Fleet Plan (`menus.js
+    _syncFleetPlan`/`_fpOrderControls`, one delegated `_onFleetPlanClick`) —
+    capital class rows (frigate/cruiser/battleship) + per-wing rows, each with
+    STANCE/TARGET(+hunt sub)/POSITION(+escort sub), a section missile toggle.
+    Live admiral panel: 5 stance buttons + per-class FOCUS toggle + ALL FOCUS
+    master. `main.js` `setPosture` now writes `.stance`; new `setPriority`.
+  - GOTCHA: the directive shape changed (`{posture,missiles}` →
+    `{stance,missiles,priority,priorityClass,assignment,escortKlass}`).
+    Directives are transient (re-init each match), so no save migration.
+    `ESCORT_SIZE` is now exported from game.js (preview escort-bump math).
+  Verified: per-stance behavior (CHARGE closes, STAND-OFF holds range, escort
+  leashes capitals), FOCUS gating (focus cruisers converge on the tap),
+  full match with a rich plan runs clean (no NaN, 0 throws). FOLLOW-UP: bring
+  the 3-axis UI to the Frontier Battle Plan overlay (still legacy chips,
+  mapped forward).
+
+### 2026-05-29 (bug-review fix pass)
+- **Eight bug fixes from a high-effort review of the directives work +
+  core gameplay.** (1) **Wave Survival instant-loss**: `waves.js#checkEnd`
+  sniffed `isPlayer`, but TAKE COMMAND/spectate clears it (hull gets
+  `wasPlayerShip`) → match forfeited the instant you opened admiral view.
+  Now matches `isPlayer || wasPlayerShip`. (2) **Admiral stuck state**:
+  the SPECTATE pill stayed live in admiral ("RETURN TO FIELD"); clicking
+  it retook the ship but left `admiralMode` on → piloting with no
+  controls. `_syncModeChrome` now hides `#spectate-btn` in admiral
+  (RESUME PILOT is the sole return path). (3) **Multi-beam laser
+  immortality**: the in-flight-beam owner-check read `moduleByName.laser`,
+  but `heavyLaser` arrays of ≥2 build `laser-fore`/`laser-aft` and have NO
+  `laser` module → beams never died after both bays were shot off. Now
+  scans `owner.modules` for any live `laser*` emitter. (4) **Player death
+  had no wreck/explosion/loss-tally**: the death block called
+  `enterSpectate` (which filters the player husk) BEFORE the wreck/tally/
+  telemetry passes. Deferred the spectate hand-off to AFTER those passes
+  (`if (playerEliminated && !spectating) enterSpectate` post-kill-pass) —
+  GOTCHA: relies on enterSpectate setting `spectating` so the guard fires
+  once; voluntary spectate/exit-elimination never hit it (they leave
+  `spectating` true or never set `playerEliminated` while not spectating).
+  (5) **Wing target-class/defend-capital overridden by class HOLD**:
+  `applyAdmiralPosture` fell through to the class-wide posture for those
+  kinds, so a class HOLD pulled a "hunt cruisers" wing off-task. Those two
+  kinds now early-return (their own target-pref/escort AI drives them).
+  (6) **Fleet Plan preview counts wrong**: previewed `fleetMul` even for
+  skirmish (which forces `mul=1` at spawn via its race-only customRoster)
+  → showed up to 3× the real fleet; and omitted the escort-demand fighter
+  bump. `_resolveFleetPreview` now mirrors spawnRoster exactly (`mul = cr
+  ? 1 : fleetMul`; escort bump only when `!cr` and base fighters exist —
+  needed `export ESCORT_SIZE` from game.js). (7) **Stale plan targets**:
+  `_fleetPlanState` persists across opens; a defend-capital/target-class
+  target from a prior battle could name an absent class. `_openFleetPlan`
+  now `_sanitizeFleetPlan`s — prunes targets not in the upcoming battle to
+  "free". (8) **C-hotkey** could drop an eliminated pilot into admiral
+  (HUD pill was hidden but the key wasn't gated) — TAKE COMMAND branch now
+  also requires `!playerEliminated`. Plus defensive `speed > 0` guards on
+  the `leadAim` (ai.js) + `updateMissile` (projectile.js) divides (no
+  current spec triggers NaN, but a malformed component patch would). LEFT
+  (design calls, reported not fixed): Frontier KIA roll is skipped when
+  the hull dies under AI after a voluntary hand-off (may be intended
+  "ejected safely"); Frontier "free" wing clears escort while generic
+  modes preserve it; Battle Plan / Fleet Plan remain forked (shared CSS,
+  duplicated JS). Verified: full custom match to completion (5888 ticks,
+  no NaN, 0 throws) + targeted probes for each fix.
+
+### 2026-05-29
+- **Battle directives in ALL modes — pre-battle Fleet Plan overlay +
+  mid-battle admiral toggle.** Frontier's fleet-direction system is now
+  available in every mode (skirmish/custom/open/defend/arena/waves/
+  daily/admiral). The behaviour + data pipeline was already built (a
+  prior uncommitted session): `fleetcommand.js#applyFleetPlan` stamps a
+  transient `fleetPlan` (per-class `classDirectives` + ad-hoc fighter/
+  bomber `wings`) onto the spawned blue fleet, `game.js:207` inits
+  `game.directives` for every mode, and `game.js:328` calls
+  `applyFleetPlan` post-spawn when `modeConfig.fleetPlan` is present —
+  ALL wired end-to-end already. This pass added the missing UI + the
+  missing input method:
+  (1) **NEW generic `menu-fleetplan` overlay** (separate from Frontier's
+  run-coupled Battle Plan — do NOT merge them). `_buildFleetPlan`/
+  `_syncFleetPlan` in menus.js mirror the Battle Plan DOM-screen pattern
+  but read a `run`-free `menuState.fleetPlan` and use ONE delegated click
+  handler (`_onFleetPlanClick`) because the body is innerHTML-rebuilt on
+  every plan change (per-element listeners would leak). Reuses the
+  `bp-*`/`battleplan-*` CSS classes; only the `.menu-fleetplan` screen
+  rule + a few `.fp-*` classes are new. CSS flex-direction trap honoured
+  (`.menu-fleetplan` gets explicit `flex-direction: column !important`).
+  (2) **ALWAYS shown pre-battle.** `_emitStart`'s body split into
+  `_buildLaunchParams()`; every non-Frontier launch path (onStart non-
+  custom branch, onCustomStart, onSkirmishStart, + the two canvas-click
+  starts) now calls `_openFleetPlan(params)` instead of emitting. LAUNCH
+  (`onFleetPlanLaunch`) assembles the plan onto `justStarted.fleetPlan`;
+  main.js:844 already forwards `choice.fleetPlan` → modeConfig. The plan
+  state (`_fleetPlanState`) lives on StartMenu and PERSISTS in-memory
+  across opens (no save-schema change). GOTCHA: opening from the custom
+  editor leaves `showCustom` set so BACK reveals it again — `fleetPlan`
+  sits ABOVE `custom` in the screenName chain; `onFleetPlanLaunch` clears
+  both. `consumeCustomRoster` clones (doesn't destroy) so re-entry is
+  safe. Wing counts shown are a PREVIEW (`distributeByWeight` on the
+  resolved pool); the real split runs at spawn on the actual fleet.
+  Enemy preview is null for modes that randomise the hostile race in
+  `mode.setup` (arena/open/daily) → overlay shows a "randomised at
+  launch" note instead of a wrong roster.
+  (3) **Mid-battle admiral toggle was BROKEN — fixed.** main.js:878
+  called `input.consumeAdmiralToggle()` which **never existed** (same
+  unfinished session) — it threw every gameplay frame, silently killing
+  the RAF loop's admiral path. Added `consumeAdmiralToggle()` (C key +
+  `_admiralToggleEdge` flag) + a HUD "TAKE COMMAND / RESUME PILOT" pill
+  (`#command-btn`, sets the edge flag like the SPECTATE pill sets
+  `spectateBtn.justPressed`). `_syncModeChrome` shows it except in
+  standalone admiral mode + after elimination, and flips the label when
+  admiral was entered via the toggle (`game._admiralByToggle`). Verified
+  via Playwright: overlay renders (6 class rows, 18 posture chips, 4
+  missile toggles, wings + sub-pickers), LAUNCH assembles the plan, all
+  100 blue fighters get `wingCommand` stamped, a full match with hold/
+  press/target-class/defend + missile-hold runs to 66s with ZERO throws,
+  and TAKE COMMAND→RESUME PILOT round-trips cleanly. Plan doc:
+  `PLAN_DIRECTIVES_ALL_MODES.md`.
+  GOTCHA (escort parity): `applyFleetPlan` only stamps the BLUE side, so a
+  "free" wing now intentionally LEAVES `escortOf` as `assignEscortPacks`
+  set it (was: cleared for all non-defend wings). Otherwise a do-nothing
+  default plan stripped the blue fighters' auto-escort leash while red
+  kept theirs — a one-sided nerf just for routing through the overlay.
+  Only hold/press/target-class clear escortOf now; defend-capital sets
+  it; free preserves it. Verified default-plan escort count ≈ vanilla.
+
+### 2026-05-28
+- **HUD roster fixes + in-depth end-of-battle report.** Three things.
+  (1) **Surrendered ships no longer counted active.** `countBySide` +
+  the minimap "units" count gated only on `!s.dead`; added
+  `&& !s.surrendered` (surrendered = untargetable drifting hulks, out
+  of the fight). (2) **Mobile roster overlap.** The two side-strips
+  stack at top:6 / top:34 on `max-width:767px`, but each row is ~38px
+  tall → they overlapped ~10px. Bumped `.side-right` to `top:48px`
+  (desktop/tablet were never overlapping — checked widths). (3) **NEW:
+  full battle report (all modes)** via new `game.battleStats`
+  telemetry → `game.battleReport`, rendered by `renderBattleReportHTML`
+  in the match-over panel (appended below the Frontier AAR / career
+  summary; sole content in skirmish/custom/open/defend). Tracks per
+  side+class committed/lost/surrendered/survived, kills, damage dealt,
+  shots+accuracy, missiles, duration, MVP, per-capital lines (name,
+  K/dmg, fate), strike-craft aggregate. Instrumentation: shots counted
+  once in the projectile loop (`_statSeen`, PD excluded from accuracy);
+  damage+hits+last-damager stamped in `applyDamage` (laser path now
+  threads `beam.ownerId`/`beam.side` so beam kills attribute); kills/
+  losses in a `_statDead` death pass (separate from the wreck loop,
+  which skips stations). GOTCHA: per-class buckets are derived from
+  per-ship **terminal `fate`** in finalize, NOT incremental counters —
+  a ship can surrender then be over-killed by in-flight ordnance, so
+  incremental surrendered+lost double-counted (committed ≠ sum). fate
+  flips surrendered→lost on death (death pass runs after the surrender
+  pass), giving exactly one bucket per hull. Verified via Playwright:
+  full skirmish to matchOver, committed === survived+lost+surrendered
+  both sides, panel renders, 0 throws.
+
+### 2026-05-28
+- **Thren carrier (capital) buff pass.** Four coupled changes to the
+  Thren bio-carrier — the race's only capital. (1) Bow cannon damage
+  ×4 (55→220) and projectile speed ×1.3 (560→728) in `races.js`.
+  (2) Cannon *module* HP ×3 (280→840, hullPenalty 110→330) in
+  `modules.js` — the gun is meant to tank focus-fire. (3) Block size
+  restored to default while keeping the radius-440 hull: new
+  `CELL_GRID_OVERRIDES` in `sprites.js` gives `thren.carrier` a 96×52
+  grid (2× the shared 48×26). GOTCHA: the radius bump (220→440)
+  doubled `cellW = R*2/cols`, so blocks rendered 2× normal; doubling
+  the grid cancels it exactly (cellW 9.17px, same as pre-bump). Side
+  effect is ~4× the cell count (1248→4992 pre-cull) ⇒ the carrier is
+  much tankier (per-cell HP unchanged) — intended, on-theme with the
+  buff, but watch perf with 2 carriers/side and re-check surrender %s
+  if they feel off (block-loss is ratio-based so thresholds hold).
+  Override keys on `(race, klass)` so other carriers are untouched.
+
+### 2026-05-28
+- **Spectate HUD cleanup — target-panel label + vitals-bar gate.**
+  Two display bugs reading wrong from the screenshot:
+  (1) **Target panel header showed hardcoded red "MARKED"** on every
+  observed ship — including allies. The label was a static string in
+  the panel's innerHTML and never updated. Cached the ref as
+  `#target-label` and updated `_syncTargetPanel` to set the text from
+  `SIDES[ship.side].name` ("ALLIED" / "HOSTILE") and the color from
+  `palette.primary` (cyan / red). Inline style.color overrides the
+  hardcoded `color: #f66` in `.target-label`. Future: if a per-ship
+  rival/marked flag lands, swap to "MARKED" in red as a special case.
+  (2) **Bottom vitals bar showed during spectate** — the `_syncVitals`
+  flow correctly falls back to the spectated ship when the player is
+  dead, but the bottom vitals strip showing the locked target's shield
+  at 100% read as "the player is alive at full shields" while the
+  player is in fact KIA. The target panel on the left already shows
+  the shield + module readouts of the spectated ship, so the bottom
+  bar is redundant. `_syncModeChrome` now hides `#vitals-bar` outside
+  piloting (was: hidden only in admiral). Verified at 412×800 mobile
+  size: target label reads "ALLIED" in cyan when spectating a friendly
+  frigate; vitals bar is hidden. (Side-strip count visibility was also
+  checked — counts are present + visible in the DOM for both rows;
+  the screenshot's apparent "missing FRIENDLY counts" was a misread.)
+
+### 2026-05-28
+- **Fighter accuracy buff vs strike craft (bombers + fighters).**
+  Three coupled changes so fighters actually land shots in dogfights
+  instead of spraying:
+  (1) **`leadAim` iterates twice.** The one-shot estimate
+  (`t = dist / speed`) ignored how target motion changes the time-
+  to-target — fine for slow capitals, poor for fighters chasing
+  fighters/bombers at 250-500 u/s. Now estimates t against the
+  predicted future position once, then re-estimates t at THAT
+  point. Converges inside ~5% of the analytic solution for typical
+  engagement geometry. Used by fighter approach + cruiser/frigate
+  cannon — both get the buff for free.
+  (2) **Tighter fire-alignment when target is small.** Fighter
+  approach state's `c.firing` gate goes from `aligned > 0.92`
+  (≈23° cone) to `aligned > 0.94` (≈20° cone) when `target.klass`
+  is fighter/bomber. Hard enough to bias shots ON the silhouette;
+  not so hard that fighters never fire (an earlier 0.96 was too
+  restrictive — fighters only got 4 shots off per fighter per 10s).
+  Sets `c.aimingAtSmall = true` on the controller so the fire path
+  can see the tag.
+  (3) **Spread halved when `c.aimingAtSmall`.** Fighter cannons
+  carry `spread: 0.05` rad → ±2.9° random angular offset per shot
+  → ±25u scatter at 500u range, wider than a fighter's hit radius
+  (~24u). The fire code in `updateShip`'s primary-weapon loop
+  reads `ship.controller.aimingAtSmall` and applies `spreadMul =
+  0.5` to the spread, halving the cone. Cleared in the break-state
+  branch so a fighter coasting away doesn't keep the tag.
+  Verified: 8v8 fighter-vs-bomber, 10s sim — 42 cannon shots
+  fired, 26 detonated on contact (vs ttl expiry) = **72.2% on-
+  contact hit rate**, 2 bombers killed. Capital cannons targeting
+  small craft keep their normal spread (the AI flag is only set by
+  the fighter approach state). GOTCHA: `c.aimingAtSmall` is on
+  the per-ship controller — the fire path reads it via
+  `ship.controller.aimingAtSmall`, so any future AI type that
+  fires cannons at small craft (e.g. frigate ring battery) would
+  need its own flag-stash to opt in.
+
+### 2026-05-28
+- **Block damage = alive-till-dead; ship-armor bar GONE; per-block +
+  per-module armor.** Three coupled changes that simplify the damage
+  read and push toughness down to the structures that take the hit.
+  (1) **Cells render at full brightness until they die** — the old
+  `bright = 0.30 + frac*0.70` in `cellFillColor` tinted cells darker
+  as their hp dropped, communicating damage as a wounded-hull
+  texture. Removed: surviving cells stay at full faction-tinted
+  color, dead cells just wink out. The momentary impact ember
+  (cell.flash drawn in ship.js) stays as transient feedback. Also
+  optimised `damageCellsInRadius`: `ship.blockDirty` now only flips
+  when a cell actually dies (was every hp tick), so the block-canvas
+  rebuild fires once per cell death instead of per damage event.
+  (2) **Ship-level armor REMOVED.** Dropped `ship.armor` /
+  `ship.armorMax` / `ship.armorFlash`, the Step 2 armor cascade in
+  `applyDamage`, and the armor bar above the hull in `drawShip`.
+  `spec.armor` entries in classes.js are now inert (kept rather
+  than ripped out to avoid touching every spec). Replaced the
+  `ship.spec.armorMax > 0` capital-detection proxy (used to scale
+  module-death VFX + SFX intensity) with an explicit klass check.
+  (3) **Per-cell + per-module armor (0..1 reduction).** Cells now
+  carry their own `armor` field (initialized from `FACTION_CELL_STATS`
+  — heavy capitals get higher per-cell armor than strike craft;
+  read by `damageCellsInRadius` so each cell applies its own
+  reduction). `buildModules` accepts a `defaultArmor` parameter and
+  stamps each module with `armor` (a LAYOUTS entry can override per-
+  module via `m.armor`). `applyDamage`'s module step reduces
+  incoming `dmg * weight` by `(1 - module.armor)` before subtracting
+  from module hp. armor-piercing ordnance (torpedoes) skips both
+  layers. GOTCHA: balance shifted — previously capitals had TWO
+  layers (ship-level armor at wearRate 0.5 AND per-cell armor 0.3
+  via `ship.cellArmor`), now just one (per-cell). Effective damage
+  reduction dropped, so capitals take more cell damage than before;
+  tune `FACTION_CELL_STATS[race][klass].armor` higher if cell
+  attrition feels too fast. GOTCHA: `cellArmor` on the build-cells
+  result is still set (for any callers reading it) but no longer
+  used by damageCellsInRadius — that reads per-cell `cell.armor`.
+  Verified: damage sheet (5 classes × 3 damage levels) shows full
+  brightness surviving cells, no armor bar; 10s combat smoke (232
+  ships → 52 eliminated, 815 detonations, 39 cells dead, zero
+  throws). Clean build.
+
+### 2026-05-28
+- **Projectile impact snaps onto the actual block / bubble.** Logic
+  was already correct (block-test gate allowed pass-through of dead
+  cells when shield was down), but VISUALS spawned at `p.pos` — the
+  projectile's last-step world position. Two failure modes that read
+  as "weapons stop at the undamaged hull": (1) **shield down +
+  half-destroyed hull**: the projectile's current position could be
+  just barely overlapping a live cell (broad-phase circle is bigger
+  than the polygon, so projectile is in empty space within the
+  circle), so `spawnHitSparks` / scar / hit-event landed outside the
+  cell. (2) **shield up**: broad-phase impact is at `spec.radius + 4`
+  but the bubble visual is drawn at `spec.radius + max(12, R*0.40)`
+  — projectile flashed INSIDE the bubble (40-70u inside on a BB).
+  Fix in two parts:
+  (a) New `projectileBlockHitCell` (sprites.js) — same disc-vs-live-
+  cell test as `projectileBlockHit` but returns the CLOSEST live
+  cell intersected (or null). Legacy boolean wrapper kept.
+  (b) game.js collision now snaps `p.pos` BEFORE `applyDamage`:
+  shield-down hits → snap to the hit cell's world centre (cell.lx/ly
+  rotated by ship heading + ship.pos); shield-up hits → snap to the
+  bubble's surface (`spec.radius + shieldOffset`). All downstream
+  visuals (sparks, scars, hit events, missile blast origin) now land
+  on the visible structure or the visible bubble — never in empty
+  space outside the polygon. Pass-through over dead/culled cells
+  still works (returning `null` cell → `continue` skips this ship).
+  GOTCHA: applyAndAgeBeams already ray-marches to the first live
+  block when shield is down and synthesises `pos:{x:hitX,y:hitY}` on
+  the damage event, so beams are untouched — they were already doing
+  the right thing. Verified: 3-scenario probe (live cell snap, dead-
+  cell pass-through, shield-bubble snap) all pass; 10-second combat
+  smoke (296 ships → 74 eliminated, 859 detonations, 200 cells dead)
+  with zero throws. Clean build.
+
+### 2026-05-28
+- **SFX cutout fixed via concurrent-voice cap; heavy guns louder;
+  laser beam silenced.** Three changes in audio.js:
+  (1) **Concurrent voice ceiling**: per-frame budget capped NEW voice
+  *creation* but didn't limit how many voices were CONCURRENTLY live.
+  Each `_burst`/`_tone` lives ~0.1-0.5s; broadside `_gunReport`
+  spawns 3-4 sub-voices each. In sustained brawls concurrent count
+  climbed past the iOS / Capacitor WebKit ~32 simultaneous-source
+  ceiling — beyond that the browser drops new voices silently
+  ("SFX cuts out mid-game"). Added `_liveVoices` counter:
+  `_disconnectOnEnd` increments on creation + decrements (idempotent
+  via `cleaned` flag) on source `onended`. `_sfxOk` gates new voices
+  against the count: heavy gate at `>=_maxLiveVoices-4` (room for a
+  full 3-4 sub-voice heavy burst); light gate at `>=_maxLiveVoices-8`
+  (wider berth so a heavy call landing in the same frame still has
+  slots). `_maxLiveVoices = 28`. Verified 20s marathon stress
+  (heavy guns + light chatter every frame): peak live count 28,
+  428 of 429 heavy calls played, ctx stays "running" throughout,
+  drains cleanly post-stress. Also reset count on `start()` so
+  stale state from a backgrounded run doesn't carry over.
+  (2) **Heavy weapons louder**: broadside v 1.6→2.1 (+ thump peak
+  0.5→0.7), heavycannon 1.5→1.9, cruisercannon 1.5→1.8. Increased
+  reverb sends (0.36→0.42 broadside, 0.30→0.34 heavy, 0.22→0.26
+  cruiser) so the big guns ring out further. Safe to bump now that
+  the voice cap means each heavy shot gets its own slot instead of
+  stacking-and-ducking the limiter.
+  (3) **Laser beam SILENT**: `sfxBeam` is a no-op. The 3s sustained
+  oscillator stack (4 oscillators × beam duration) was the worst
+  offender for the iOS node-cap breach — multiple BB lasers + a
+  carrier or two in flight = 12+ persistent oscillators eating
+  slots. Visual is loud enough. GOTCHA: function preserved (not
+  deleted) so the main.js event subscriber doesn't need a gate.
+  GOTCHA: each `_gunReport` calls `_sfxOk(heavy)` ONCE but spawns
+  multiple `_burst`/`_tone` sub-voices internally — that's why the
+  gate has to leave room for the whole burst, not just one slot.
+
+### 2026-05-28
+- **Strike-craft visibility + sleeker silhouettes.** Two-part fix
+  for "fighters/bombers are hard to see and look bulbous". (1) Added
+  a baked-on silhouette outline to the block-canvas builder
+  (`rebuildBlockCanvas`, sprites.js): for `klass==="fighter"||"bomber"`
+  it traces the hull polygon as a thick dark halo (R*0.16) then a
+  side-tinted line (R*0.08) on top — strike-craft now read as
+  stencilled icons against the starfield instead of dissolving into
+  the projectile noise. Capitals skipped — their sheer cell mass is
+  its own silhouette. Sprite outline got the same double-stroke
+  treatment for the sprite path (used by stations + fallback).
+  (2) Redesigned all 10 strike-craft polygons (fighter/bomber × 5
+  races) in `ship.js#HULLS`: needle prows, hard-swept wings pinned
+  to the centreline mid-body, distinct twin-engine block aft with a
+  centerline exhaust notch. Max|y| pulled from 0.70-0.95 down to
+  0.50-0.64 — they now read as darts, not fans. Faction identity
+  preserved (Terran clean, Reaver barbed/forked, Hegemony stepped
+  armour, Voidsworn needle, Thren organic manta). (3) **Thren
+  radius bump** (races.js): Thren fighter `radius` 8→16, bomber
+  15→22. The 2026-05-27 strike-craft enlargement (fighter 14→24,
+  bomber 16→28) was applied to `CLASSES` in classes.js but Thren
+  overrides the radius in races.js, so the enlargement skipped them
+  — Thren strike craft stayed 1/3 the size of the rest, invisible at
+  default zoom. Bumped to keep them visibly smaller than others
+  ("slippery" identity preserved) but no longer dots. GOTCHAS:
+  (1) New polygons are y-symmetric + CCW (probe checks signed-area
+  sign consistency across all 10); (2) all 45 modules across the
+  10 craft sit on a live cell (collision-aware snap); (3) cellH
+  derives from `max(0.70, max|y|)`, so the narrower hulls don't
+  shrink the cell grid — cells past the polygon are culled
+  individually by the ray-cast point-in-hull test. Net is a smaller
+  hitbox (fewer live cells) which buffs strike-craft survivability
+  slightly — acceptable, the user wanted sleeker silhouettes; if
+  this reads as too tanky in playtest, drop cell HP modestly.
+  Self-intersection trap: an early Thren polygon zigzagged at the
+  tail (x went out-in-out) which made the point-in-hull test
+  unreliable — kept monotonic y rises + clean tail closure.
+
+### 2026-05-28
+- **NEW CAREER from home + play hub (mid-run).** Previously the home
+  hero card and play-hub Frontier card only routed to RESUME when a
+  run was active — to start fresh you had to enter the run map and
+  use the overflow ABANDON. Added a secondary CTA on both surfaces
+  (`#home-cta-secondary` un-hidden as "NEW CAREER";
+  `#playhub-frontier-new` "+ NEW CAREER") that opens a confirm
+  overlay (`menu-newcareer-confirm`, `_buildNewCareerConfirm`)
+  showing the active officer's rank + callsign + act. CONFIRM
+  dispatches `onRunChoice("abandon-run")` (synchronous via main.js
+  `refresh()` → setRoguelite, so `runState.run` is null before the
+  next line runs) then opens run setup. CANCEL just hides the
+  overlay. Wired via four new menu callbacks: `onHomeNewCareer`,
+  `onPlayHubNewCareer`, `onNewCareerConfirm`, `onNewCareerCancel`.
+  Menu-state plumbing follows the existing overlay pattern
+  (`showNewCareerConfirm` flag → screenName chain + `hasSubOverlay`
+  + `_buildMenuState.newCareerConfirm` payload + sync). GOTCHA:
+  remembered the CLAUDE.md flex-direction trap — extended the
+  `.menu-promotion, .menu-preamble, …` selector to include
+  `.menu-newcareer-confirm`. Without it the overlay panel would
+  render as a row instead of a column.
+
+### 2026-05-27
+- **Projectile collision is block-based, not circle-based.** New
+  `projectileBlockHit` requires a shot to overlap a live cell before
+  `applyDamage` — except when shields are up (bubble = circle). Shield-
+  bypassing missiles always use block test. Beam impact ray-marches to
+  first live block when shield down. Tightens collision on intact thin
+  hulls too (intended). Gate: `shieldUp = shieldMax>0 && shield>0`.
+- **Cruiser cannon arc widened to ±90°** via `cannonArc: π/2` on
+  `CLASSES.cruiser`. `cannonTurnRate` default 0.7 rad/s.
+- **Battleship broadsides traverse ±25° per side** (50° arc).
+  `slewBroadsideAim` keeps per-side `broadsideAimPort/Stbd`; muzzle
+  ORIGINS still on the beam (flank-mounted), only direction + barrel
+  art rotate. Nautical-name crosswise pairing holds: +y-flank guns
+  (`broadside-stbd-*`) fire the PORT beam.
+- **Strike craft enlarged.** Fighter r 14→24, bomber 16→28 — crosses
+  `detail` LOD threshold. R-invariant for overlap (offsets + radii both
+  scale with R).
+- **Module placement port↔starboard symmetric.** `buildModules` emits
+  PD as MIRROR PAIRS about long axis. New `snapModulesSymmetric`
+  (sprites.js) pairs off-axis modules, pins centreline + lone-off-axis
+  to axis, snaps +y member to nearest clear block (y-symmetric polygons
+  guarantee mirror clears). Lone off-axis modules are pinned to
+  centreline (a solitary off-axis mount is itself asymmetric).
+- **Module overlap fix; capitals enlarged.** Module disc area exceeded
+  hull area; fix via per-class `MODULE_RADIUS_SCALE` (fighter 0.90…
+  battleship 0.68…station 1.0), PD builds LAST with collision-aware
+  `pdSeatAtFraction`, engines build before PD. `snapOffsetToLiveCell`
+  is collision-aware (threads `placed[]` + `selfR`). Capital radii
+  bumped (frigate 54→62, cruiser 90→106, BB 156→184, carrier 180→208)
+  — purely cosmetic re: overlap (R-invariant), but a real gameplay
+  change (bigger hitboxes/collision).
+- **Module art overhaul — per-faction 3D hardware.** Shared toolkit in
+  ship.js (`drawModuleBase`, `modShapePath`, `drawRivets`,
+  `drawFactionFlair`, `energyGlow`, `drawBarrel`, `modPulse`). Per-
+  faction `MODULE_STYLE`. **Gotchas**: (1) `FACTION_SHIELD`/`FACTION_MODULE`
+  key was `reaver` not `reavers` — every Reaver module was falling
+  back to Terran blue; (2) `moduleKind` now prefix-matches `laser*`/
+  `torpedo*`/`shield-generator*`; (3) gradient/rivet/flair gated on
+  `detail` (screenRadius≥12).
+- **Every module sits on a live ship block.** Three independent
+  placement systems disagreed: (1) cell grid `cellH` now derives from
+  hull's true max|y| (floored at 0.70 so Terran is byte-for-byte
+  unchanged — `rows` count untouched to avoid HP/balance drift);
+  (2) `snapOffsetToLiveCell` pulls stray module offsets onto nearest
+  live cell (PD + broadside read `offset` so this is gameplay-relevant
+  for them; gun/cannon/missile/laser/torpedo spawn from spec+heading
+  so it's visual-only); (3) PD turret ART now reads
+  `moduleByName["pd-"+i].offset` (was a fixed 0.75R ring).
+  Pre-existing bug fixed: `pdTurretOffset` called `pdTurretToModuleName(i)`
+  with one arg, sig is `(klass, i, n)` → silently fell back to ring for
+  the whole game.
+- **Missile redesign + hull block culling.** `buildCells` uses ray-cast
+  even-odd polygon test (was ellipse); culled cells excluded from
+  damage/draw/count. Every class gains `shield-generator[-port/-stbd]`
+  — destroying one halves `shieldMax`. BB gets `torpedoes` spec
+  (armorPiercing + bypassShield + blastRadius:65); `updateTorpedoFire`
+  in ship.js. All missiles carry `blastRadius`. Fighter missiles get
+  `antiCraftBonus:1.3` vs fighter/bomber. Carrier gains 3 light pods
+  for self-defence. **Surrender hardened**: disarmed condition now
+  requires `weaponLoss≥threshold AND blockLoss≥0.65`. HUD strips
+  shield numeric + armor bar (block grid is the readout). **Gotcha**:
+  `ship.totalLiveCells` must be >0 for block-loss % to work; null grid
+  → block-loss gate always false → surrender blocked.
+
+### 2026-05-26
+- **PD inward-normal flip removed.** Hull polygons are CCW so inward
+  normal is unconditionally `(-dy, dx)`; the centroid-direction
+  heuristic mis-classified concave/sponson edges and pushed those
+  turrets outside the hull.
+- **Per-cannon broadside modules.** Each side is now 3 individual
+  modules (`broadside-{port,stbd}-{0,1,2}`, hp:70 each) instead of one
+  battery, positioned by `mod.offset.x * R`. **Surrender math**: BB now
+  has 9 offensive modules — killing all 6 broadsides alone is 67% (not
+  75% threshold), needs another system gone too.
+- **Broadside gate was crosswise.** Side vectors are screen-space:
+  `sidePort` points to +y flank but `broadside-port` sits at offset
+  y:-0.70 (nautical name = opposite sense). Pair fire side with disc
+  physically ON that flank: `sidePort ↔ broadside-stbd`. PD rounds are
+  also `kind:"cannon"` (with `fromKlass:"pd"`) — filter on that.
+- **Broadside salvo aborts if target leaves the arc / dies mid-volley.**
+  Was only re-checking battery module per shot, not target presence.
+- **Surrendered ships still take in-flight damage.** Removed blanket
+  early-return from `applyDamage`. Missiles set `targetId` at LAUNCH;
+  `updateMissile`'s lock-retention only drops `dead`/same-side, NOT
+  surrendered → pre-locked missiles land. `acquireMissileTarget` skips
+  surrendered, so NEW acquisitions ignore hulks.
+- **Fighters counter bombers (3× cannon damage).**
+  `FIGHTER_CANNON_VS_BOMBER_MUL=3` applied to `remaining` before layer
+  cascade. Cannon only (missiles/PD excluded). Net vs shield is 3×0.5
+  = 1.5× base (the prior fighter-vs-shield 0.5 still applies on top).
+- **Capitals no longer surrender on engine loss alone at full hull.**
+  Engine-trigger now also requires `hull ≤ hullThreshold` (capital: 0.35).
+  Disarmed path unchanged. Small craft (no `hullThreshold`) still
+  surrender engine-only.
+
+### 2026-05-25
+- **Clickable commander dossier rows.** `captaindetail` overlay
+  generalised via `kind:capital|wing` field; `_wingDetailRef` on
+  input.js. **Gotcha**: live DOM menu is `input.startMenu._menuSystem`;
+  callbacks at `_menuSystem._callbacks`, not `startMenu._callbacks`
+  (null) — probes must poke the former.
+- **Scrollable campaign overlays + captured craft in AAR.**
+  `.overlay-panel` gets `max-height:90vh; overflow-y:auto`. AAR shows
+  CAPTURED column — `roguelite.js` now copies
+  `run._capturedThisBattle` into `lastBattleReport.captured` (hoisted
+  out of `if(won)` block).
+- **Frontier economy + commander tuning.** Small-craft recruit ×4
+  (`RECRUIT_COST` fighter 5→20, bomber 14→56); resupply UI hardcodes
+  base prices (`input.js#baseFighter`/`baseBomber`) — must stay in
+  sync. Post-engagement reinforcements halved. **Fuel-spend bug**:
+  resupplyState was missing `fuel` so all boon rows showed disabled.
+  Shared commander perk system (see Frontier section).
+- **Story content pass + editorial sweep.** 5 new 3-stage arcs in
+  `ARC_DEFINITIONS`, all ids `sa-`/`sa_` prefixed (no collisions).
+  `BOSSES[n].description` edited FIELD-BY-FIELD — never replace whole
+  object (would nuke rosters).
+- **Blueprint derives from buildModules.** Schematic dots now match
+  in-game mount positions. Categories with no physical mount fall back
+  to `SLOT_VISUALS` (shield = bubble, armor = layer, fighter missile
+  = fires from gun).
+- **SaveStore flushes on `visibilitychange`.** Mobile/Capacitor often
+  fires `visibilitychange` but not `pagehide`/`beforeunload`; pending
+  debounced write was lost on app kill → equips reverted on relaunch.
+- **PD inset bumped to `turretR * 1.25`** to account for swinging
+  barrel art (~1.15× disc radius). Disc-tangent inset alone wasn't
+  enough.
+- **Edge-mounted guns + PD framework.** `pdTurretLocalOffset(poly, i,
+  n, turretR)` distributes turrets by perimeter arc-length, insets
+  along inward normal. `buildModules(klass, spec, poly)` stores as
+  module offset (single source of truth — ship.js reads it). Forward
+  guns pushed to bow edge. Shield stand-off widened to `max(12, r*0.40)`.
+- **Hull silhouette revamp — all 5 factions.** Per-faction identity
+  preserved (Reaver barbed, Hegemony stepped armour, Voidsworn spear-
+  prow, Thren left organic). Collision/modules use spec.radius +
+  fractional offsets, NOT vertices → purely visual. Two hull tables:
+  shape lives ONLY in `ship.js` HULLS[race][klass]; `components.js`
+  HULLS is stats/slots only.
+- **Shipyard preview → blueprint schematic.** SVG draughting plate
+  (cyan grid, registration ticks, dimension callouts, title block).
+  Slot labels replaced with numbered callout balloons + 2-col legend.
+- **App icon = exact in-game Terran fighter** (`public/app-icon.svg`).
+
+### 2026-05-25 (audio)
+- **SFX cut out via shared-compressor ducking, not node leak.** Live-
+  node cleanup is correct. One shared `DynamicsCompressor` (-14/6/
+  0.18s) clamped the entire mix ~8–13 dB sustained. Fix: dedicated
+  `sfxComp` limiter on SFX path only (-9/8/0.06s release) + retune
+  shared `compressor` into a gentle master safety limiter (-3/8/0.08s)
+  + trim redundant broadside `_thump`. **Gotcha**: judge compressor by
+  SUSTAINED reduction (median), not inter-sample peaks.
+- **SFX node leak fix.** `_disconnectOnEnd(source, nodes)` hooks
+  `source.onended` to disconnect the full chain. Wired into `_burst`/
+  `_tone`/`sfxBeam`/music voices/`sfxUiTap`. Uses `source.onended=`
+  not `addEventListener` — don't add a second consumer.
+- **WW2-artillery palette.** Global SFX low-pass @2400Hz hard tone
+  ceiling. `_gunReport(size 0..1)`, `_impactThud`, `_detonation` =
+  rolling thunder. Removed every highpass burst, every Q≥4 bandpass,
+  every >600Hz oscillator. Music hi-hat (7kHz, separate music bus) is
+  the only remaining >2.5kHz source.
+- **Heavy capital cannons louder.** Loudness order broadside >
+  heavycannon ≈ cruisercannon ≫ autocannon.
+- **Separate music + SFX volume sliders.** Dedicated `musicGain` bus;
+  `master` is a fixed global trim (`MASTER_TRIM=0.32`) never touched
+  by mute/volume. `musicVolume`/`sfxVolume` persisted in save schema.
+- **Pause-on-hide.** `visibilitychange` sets `paused` flag (frame loop
+  early-returns) + `audio.suspendAll()`. On show: reset `last`/`accum`
+  (no time jump) + `audio.resumeCtx()` + force `musicWasPlaying=false`.
+
+### Earlier 2026-05 (rollup)
+- **Home SKIRMISH + CUSTOM tiles routed correctly** (were both →
+  onHomePlay). Live menu = `input.startMenu._menuSystem._callbacks`.
+- **"Ghost fighter" fix — `promotePlayer` is idempotent.**
+  `spawnRoster` already calls it; legacy mode setups (`custom.js`,
+  `arena.js`, `daily.js`, `waves.js`) called it again → two `isPlayer`
+  ships. Early-return if a live player ship exists.
+- **Commander model (Frontier): spectate→AI, death=no respawn.**
+  `RESPAWN_SECONDS` removed. `playerKIA`/`playerEliminated`/
+  `playerDeathResolved`. matchEnded KIA = `!isAdmiral && !!playerKIA`
+  (never ship-sniff).
+- **Fuel actually depletes.** No combat/elite/boss refunds.
+  `ACT_REFIT_FUEL=8` Math.max top-up between acts only.
+- **Detour-graph act map.** Greens extend acts (extra jump), not
+  shortcut. Combat spine + fractional-col detours.
+- **Event-choice feedback.** Stamp `_lastEventResult` AFTER `refresh()`.
+- **Faction relations Phase 1.** `battleReputationPreview` single
+  source. Allied reinforcements tagged + non-persistent. Coalition
+  excluded.
+
+### 2026-05-24
+- **Captured ships keep their race.** Multi-race blue fleet via
+  `blueTeams`. **Recount-before-capture ordering is load-bearing.**
+- **Surrender-targeting bug sweep.** 7 more target loops gained
+  `o.surrendered` skip. `enemyHullProximity` intentionally still
+  avoids surrendered hulks (physical obstacle).
+- **Variable post-engagement reinforcements.** Per-archetype rolled;
+  salvage scales with kills (capped).
+- **Named wing commanders + traits.** `applyWingCommanderEffect` must
+  clone `spec` + `spec.weapon` before mutating.
+- **Wing size bounds 2–5.** User-action constraints, not data
+  invariants — `rebalanceWings` doesn't enforce.
+- **Multi-wing system.** Per-ship command supersedes class directive.
+  Escort leash extended to bombers; stale defend-capital → free.
+- **Battle Plan pre-flight overlay.** Wing commands map to existing
+  `game.directives`.
+- **Small-craft engine surrender + AI engine focus.**
+  `AIM_PRIORITY_BY_KLASS` keys on target.klass.
+- **Surrender + capture mechanic.** Per-class `spec.surrender`. PD
+  excluded from weapon-loss count. Match-end "alive" requires
+  `!surrendered`.
+- **Frontier survival check.** 60% start, −18%/death, 5% floor.
+  `Math.random` (anti-save-scum). KIA → run ends.
+- **BOOST button wired.** AI never sets boost flag. Boost spec cloned
+  per-instance.
+- **Per-mount weapons + carrier bay split.** Endgame beam components
+  stamp `heavyLaser.beamColors` (not `.color`) — would crash beam render.
+- **Procedural starmap node variety.** Hue-rotate scoped to colored
+  parts; scale baked into bob keyframe.
+
+### 2026-05-23
+- **Shipyard MVP + economy + tier scaling.** Default design = stock
+  fighter byte-for-byte. Frontier resume bug: `onPlayHubFrontier`
+  needs `_layoutRunMap`/`_layoutRunSetup`.
+- **Custom/Skirmish regression.** `selectedMode` wasn't stamped
+  `"custom"` when opening overlay → `customRoster` dropped. Skirmish
+  routes via `mode:"custom"` with races-only roster.
+- **Thren = 5th faction.** Fighter/bomber/carrier only; carrier carries
+  forward cannon (`cannonAimAngle` init extended to carrier;
+  `carrierAI` face+fire branch).
+- **Per-turret PD modules + module-gate audit.** Every subsystem gates
+  its fire path. `buildModules` now takes resolved spec.
+
+### 2026-05-22 (Frontier campaign + content tiers)
+- **Frontier campaign story pass.** 5 acts/ranks, named bosses (bypass
+  `scaleRoster`), one-defeat career, memorial wall. Promotion
+  auto-open gate moved above sync gate in `input.js#draw` (was
+  chicken-and-egg).
+- **Tiers 1–18**: officer traits at promotion (chained effective-spec
+  stacking), event cards w/ preconditions, declarative boon
+  spec-patches (`BOON_EFFECTS`, clone-on-descent), 12-trait pool,
+  story arcs, capital ship names+captains, career log + memoir.
+- **Mechanical depth**: fuel-stranded detection, phased Act-5 boss
+  reinforcement waves.
+
+### 2026-05-21
+- **Corner-stuck + stall watchdog.** `enforceWallEscape`; 45s
+  no-damage force-ends match (ties→red, player is blue).
+- **PLAY + Custom Match carousels.** Mode-relevant step auto-skip
+  via `_resetOverlayState` gated on screen change. Capital missile
+  pods skip fighters/bombers when `fromKlass !== "fighter"`.
+- **Cluster 160° cone + frigates dart + capital crowding.**
+  `allyAvoidance` on capitals, ignores small craft.
+- **Custom Match multi-faction teams.** `customBlueTeams`/
+  `customRedTeams`; `spawnRoster` resolves multi→legacy→race-default.
+- **Tracking gun turrets + lasers bury into hull.** Per-turret aim
+  angle; beam endpoint stops short of centre.
+- **Admiral camera unmovable fix.** Dead canvas
+  `AdmiralPanel.handleClick` swallowed pointers; lifted `setPosture`/
+  `setMissiles` onto `game`.
+- **DOM menu teardown** on every non-Frontier mode (`StartMenu.hide()`
+  in draw loop, not startGame).
+- **Frontier flow fixes**: JUMP no-op (visibility gate lifted above
+  `hasSubOverlay`), stale `run` closure (re-read at click),
+  `_launchBattle` cleans up before dispatch.
+- **Startup black screen** — restored `InputManager.layoutOverlays`
+  (called in resize() before RAF; missing method threw at module-init).
+- **AI targets PD + weapon modules before hull** via `pickAimModule`/
+  `aimPointFor`. Engines excluded from priority. Aim only — not
+  target selection.
+
+### 2026-05-19/20 (foundations)
+- **Frontier roguelite** replaces old 100-mission campaign (save
+  schema v3). Per-instance capital identity via `runtimeInstanceId`;
+  only hull persists between battles. `unlockedFactions` is the
+  5th-race extensibility gate.
+- **Defensive buff pass.** `PD_VS_SHIP_MUL=0.22` — PD buff is
+  anti-missile, not anti-ship.
+- **Procedural SFX** (separate `sfxGain` bus); per-frame voice budget
+  6; AI weapon SFX 35% gated.
+- **Pinch zoom** (spectate/admiral only) + **non-linear capital HP**
+  (`HP_TIER_MUL` applied after race merge) + crater hull damage.
+- **Multi-stage salvos** (BB broadside + cruiser forward); salvo
+  continues past `c.firing=false`; recompute heading per shot.
+- **Bigger modules + per-class pixel hulls.** 5 damage stages; cell
+  grid per class; budget-based `damageCellsInRadius`.
+- **Cruiser refit → long-range artillery.** `s.weapon` may be
+  undefined (cruiser/carrier) — guard it.
+- **Heavy laser = 3s sustained beam.** Damage spread as dps; AI dodges
+  via `beamAvoidance`; beam re-anchors to owner bow each tick.
+- **Destructible subsystem nodes.** Routing opt-in via aim; overflow
+  continues to hull; callers must supply `hitPos` to `applyDamage`.
+- **Persistent wreckage** (`wreckage.js`; caps 160 wrecks / 500
+  debris; deterministic scar hash of `ship.id`).

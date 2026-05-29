@@ -14,15 +14,22 @@ import { GameAudio } from "./audio.js";
 import {
   loadRun, loadMeta, startNewRun, abandonRun, discardRun,
   buildModeConfig, captureBattleOutcome, completeNode, enterNode,
-  isRunOver, recordRunEnd, clearPendingPromotion, selectPromotionTrait, endReasonFlavor,
+  isRunOver, recordRunEnd, clearPendingPromotion, clearPendingPreamble, clearPendingDispatch, clearPendingJumpEncounter, selectPromotionTrait, endReasonFlavor,
   ACT_RANKS,
   buyRepair, buyRecruit, buyRefuel, applyBoon, applyEventChoice,
+  renameCapital, setCapitalBehavior, buyServiceUpgrade, selectCapitalVariant,
+  setWingCommand, pickCommanderPerk,
+  addWing, removeWing, adjustWingCount, setWingDetail,
 } from "./roguelite.js";
 import {
   loadEnergy, regenTick, spendEnergy, purchase as purchaseEnergy,
 } from "./energy.js";
 import { saveStore } from "./save.js";
 import { events } from "./events.js";
+import {
+  recordKill, computeRunPayout, bankRunPayout,
+  buyHull, setHull, buyComponent, equipComponent, renameShip, setPaint,
+} from "./shipyard.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -33,14 +40,56 @@ const input = new InputManager(canvas);
 prerenderSprites();
 const game = createGame();
 window.game = game; // for console smoke-testing
+window.input = input; // exposed for browser-side test probes
+window.saveStore = saveStore; // exposed so probes share the singleton
+
+// Dismiss the boot splash once the engine is ready. Two RAFs so the
+// first paint draws the menu UI before the splash fades out — feels
+// like a clean transition into a populated home screen.
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  const splash = document.getElementById("boot-splash");
+  if (splash) {
+    splash.classList.add("fade-out");
+    setTimeout(() => splash.remove(), 600);
+  }
+}));
 const audio = new GameAudio();
+window.audio = audio; // exposed for browser-side test probes
 let musicWasPlaying = false; // tracks state for start/stop edge detection
 
 // Restore persisted music + SFX mute states and wire the Settings
 // overlay + the P key shortcut (music only) to both apply the change
 // to the live audio graph AND persist it through saveStore.
-audio.setMuted(!!saveStore.get().settings.musicMuted);
-audio.setSfxMuted(!!saveStore.get().settings.sfxMuted);
+{
+  const st = saveStore.get().settings;
+  // Per-channel volumes (the Settings sliders). Fall back to the old
+  // boolean mutes for saves that predate the volume fields: a previously
+  // muted channel restores at 0.
+  audio.setMusicVolume(typeof st.musicVolume === "number" ? st.musicVolume : (st.musicMuted ? 0 : 0.6));
+  audio.setSfxVolume(typeof st.sfxVolume === "number" ? st.sfxVolume : (st.sfxMuted ? 0 : 0.8));
+  // Mute flags layer over volume (the P-key quick-mute persists too).
+  audio.setMuted(!!st.musicMuted);
+  audio.setSfxMuted(!!st.sfxMuted);
+}
+
+// Global UI tap audio. Plays a short procedural click whenever the
+// player taps a menu button, link, chip, or shipyard slot. Routed
+// through audio.sfxUiTap which respects SFX mute. The capture-phase
+// listener catches taps before any stopPropagation. Buttons inside
+// the game canvas (action cluster FIRE/MISSILE/BOOST) skip the tap
+// voice because they already have weapon SFX.
+document.addEventListener("pointerdown", (e) => {
+  const t = e.target;
+  if (!t || !(t instanceof Element)) return;
+  // Only react to interactive UI controls inside menu / battle-HUD chrome.
+  const tap = t.closest("button, .home-card, .home-nav-btn, .preview-hotspot, .shipyard-slot-row, .shipyard-cat-item, .home-shipyard-card, .home-link, .home-more-row, .chip-item");
+  if (!tap) return;
+  // Action cluster + virtual sticks have their own SFX — skip.
+  if (tap.closest(".action-btn, .vstick")) return;
+  // Back / dismiss buttons get a slightly lower-pitch chirp.
+  const isBack = !!tap.closest(".menu-back-btn, .shipyard-back, .shipyard-cat-back, .playhub-back, .skirmish-back, .home-nav-panel-back") || tap.id?.includes("back");
+  audio.sfxUiTap({ variant: isBack ? "back" : "tap" });
+}, true);
 function applyMuteChange(muted) {
   audio.setMuted(muted);
   saveStore.update((d) => { d.settings.musicMuted = muted; });
@@ -49,9 +98,24 @@ function applySfxMuteChange(muted) {
   audio.setSfxMuted(muted);
   saveStore.update((d) => { d.settings.sfxMuted = muted; });
 }
+function applyMusicVolume(v) {
+  audio.setMusicVolume(v);
+  saveStore.update((d) => { d.settings.musicVolume = audio.getMusicVolume(); });
+}
+function applySfxVolume(v) {
+  audio.setSfxVolume(v);
+  saveStore.update((d) => { d.settings.sfxVolume = audio.getSfxVolume(); });
+}
 input.startMenu.setSettings(
-  () => ({ musicMuted: audio.isMuted(), sfxMuted: audio.isSfxMuted() }),
+  () => ({
+    musicVolume: audio.getMusicVolume(),
+    sfxVolume: audio.getSfxVolume(),
+    musicMuted: audio.isMuted(),
+    sfxMuted: audio.isSfxMuted(),
+  }),
   (patch) => {
+    if (typeof patch.musicVolume === "number") applyMusicVolume(patch.musicVolume);
+    if (typeof patch.sfxVolume === "number") applySfxVolume(patch.sfxVolume);
     if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted);
     if (typeof patch.sfxMuted === "boolean") applySfxMuteChange(patch.sfxMuted);
   },
@@ -72,14 +136,42 @@ function sfxAttenuation(x, y) {
   // Soft inverse curve — louder up close, gentle falloff to range.
   return Math.max(0, 1 - (d / SFX_RANGE) ** 1.3);
 }
-events.on("weaponFired", ({ x, y, kind, isPlayer }) => {
+// Per-weapon-module fire SFX. Each weapon system has its own gritty voice
+// (autocannon / ring battery / heavy cannon / broadside). AI fire is
+// probability-gated so a big brawl doesn't wall up — but heavy weapons are
+// rarer + more impactful, so they pass through more often than the rapid
+// light guns. Player fire is always full-volume + ungated.
+const WEAPON_FIRE_PROB = {
+  broadside: 0.85,
+  heavycannon: 0.70,
+  cruisercannon: 0.75,
+  ringcannon: 0.40,
+  autocannon: 0.35,
+};
+events.on("weaponFired", ({ x, y, kind, weapon, isPlayer }) => {
   if (!audio.ctx) return;
-  // Player always plays full-volume cannon SFX. AI cannons probability-gated
-  // so a 200-ship brawl doesn't deafen the player.
-  if (!isPlayer && Math.random() > SFX_CANNON_PROB) return;
+  // Resolve the weapon voice: prefer the explicit `weapon` tag; fall back
+  // to mapping the firing ship's class for any older emit site.
+  const w = weapon || (kind === "battleship" ? "broadside"
+    : (kind === "cruiser" || kind === "carrier") ? "heavycannon"
+    : kind === "frigate" ? "ringcannon" : "autocannon");
+  if (!isPlayer && Math.random() > (WEAPON_FIRE_PROB[w] ?? SFX_CANNON_PROB)) return;
   const att = isPlayer ? 1 : sfxAttenuation(x, y);
   if (att <= 0.04) return;
-  audio.sfxCannon({ volume: att, kind });
+  audio.sfxWeapon({ weapon: w, volume: att });
+});
+
+// Point-defence fire — a faint metallic rattle. PD rings fire far too
+// fast to sound per-shot, so ship.js emits one throttled `pdFired` per
+// ship per tick and we probability-gate it hard here so a fleet of
+// capitals reads as ambient chatter, not a machine-gun wall.
+const PD_FIRE_PROB = 0.14;
+events.on("pdFired", ({ x, y, isPlayer }) => {
+  if (!audio.ctx) return;
+  if (Math.random() > (isPlayer ? 0.35 : PD_FIRE_PROB)) return;
+  const att = isPlayer ? 0.85 : sfxAttenuation(x, y) * 0.7;
+  if (att <= 0.05) return;
+  audio.sfxPdFire({ volume: att });
 });
 events.on("missileFired", ({ x, y, isPlayer }) => {
   if (!audio.ctx) return;
@@ -87,17 +179,103 @@ events.on("missileFired", ({ x, y, isPlayer }) => {
   if (att <= 0.04) return;
   audio.sfxMissile({ volume: att });
 });
-events.on("hit", ({ x, y, shielded, isPlayer }) => {
+// Impact SFX — distinct per defence LAYER (shield / armor / hull) and
+// coloured by the SOURCE weapon (a missile crump reads differently from a
+// fighter-cannon ping or a PD tink against the same plate).
+events.on("hit", ({ x, y, shielded, layer, source, isPlayer }) => {
   if (!audio.ctx) return;
   const att = isPlayer ? 1 : sfxAttenuation(x, y) * 0.7;
   if (att <= 0.08) return;
-  audio.sfxHit({ shielded, volume: att });
+  audio.sfxImpact({
+    layer: layer || (shielded ? "shield" : "hull"),
+    source: source || "cannon",
+    volume: att,
+  });
 });
 events.on("shipDestroyed", ({ x, y, intensity }) => {
   if (!audio.ctx) return;
   const att = sfxAttenuation(x, y);
   if (att <= 0.05) return;
   audio.sfxExplosion({ volume: att, intensity: intensity || 0.6 });
+});
+
+// Shipyard meta-progression: tally enemy kills onto the active Frontier
+// run. Banked into save.shipyardCredits at run-end. Non-Frontier modes
+// have no activeRun so the tally just stays at 0 — credits only flow
+// from career play.
+events.on("shipDestroyed", ({ klass, side, isPlayer }) => {
+  if (!activeRun || isPlayer || side !== "red") return;
+  recordKill(activeRun, klass);
+});
+
+// Heavy laser — one-shot sustained whine for the beam's duration.
+// Player-fired beams always play at full volume; AI beams attenuate
+// with camera distance.
+events.on("beamFired", ({ x, y, duration, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.05) return;
+  audio.sfxBeam({ volume: att, duration: duration || 3.0 });
+});
+
+// Cluster missile bloom — sharp burst + scatter sparkle. Audible cue
+// that one inbound parent missile has split into multiple tracks.
+events.on("missileBloom", ({ x, y }) => {
+  if (!audio.ctx) return;
+  const att = sfxAttenuation(x, y);
+  if (att <= 0.06) return;
+  audio.sfxMissileBloom({ volume: att });
+});
+
+// PD intercept — missile shot down before reaching target. Soft pop
+// distinct from a full ship explosion so defensive PD work reads
+// clearly in the mix.
+events.on("missileIntercepted", ({ x, y }) => {
+  if (!audio.ctx) return;
+  const att = sfxAttenuation(x, y) * 0.65;
+  if (att <= 0.06) return;
+  audio.sfxMissileIntercept({ volume: att });
+});
+
+// Shield collapse — crystalline shatter when a ship's shield drops
+// from positive to zero. Player events bypass attenuation so a
+// breaking player shield is always heard.
+events.on("shieldBreak", ({ x, y, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.06) return;
+  audio.sfxShieldBreak({ volume: att });
+});
+
+// Armor plate strip — metallic shear when a capital's armor depletes.
+events.on("armorStripped", ({ x, y, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.06) return;
+  audio.sfxArmorStrip({ volume: att });
+});
+
+// Module destroyed — PD turret / missile bay / broadside battery /
+// laser / engine / hangar takes its final hit. Smaller than a full
+// ship explosion; the per-event intensity scales pitch + duration
+// (capitals louder than fighter `gun` module).
+events.on("moduleDestroyed", ({ x, y, intensity, isPlayer }) => {
+  if (!audio.ctx) return;
+  const att = isPlayer ? 1 : sfxAttenuation(x, y);
+  if (att <= 0.06) return;
+  audio.sfxModuleDestroyed({ volume: att, intensity: intensity || 0.5 });
+});
+
+// Carrier replenishment launch — catapult thunk + thrust whoosh as a
+// new fighter/bomber clears the bay. Probability-gated for AI carriers
+// so a heavy fleet of carriers doesn't sound like a constant launch
+// chorus.
+events.on("carrierLaunch", ({ x, y }) => {
+  if (!audio.ctx) return;
+  if (Math.random() > 0.55) return; // sparse, character-only
+  const att = sfxAttenuation(x, y);
+  if (att <= 0.06) return;
+  audio.sfxCarrierLaunch({ volume: att });
 });
 
 // Admiral panel — reads and writes game.directives directly. The map
@@ -109,14 +287,23 @@ events.on("shipDestroyed", ({ x, y, intensity }) => {
 // hud.js' rebuilt grid calls game.setPosture / game.setMissiles, so
 // hang them on the game object too — without this the DOM buttons
 // render but their click handlers no-op.
-const setPosture = (klass, posture) => {
-  if (game.directives && game.directives[klass]) game.directives[klass].posture = posture;
+// `setPosture` now writes the STANCE axis (engage/charge/standoff/hold/
+// fallback) — the live admiral panel passes stance values. Kept the name so
+// the legacy canvas AdmiralPanel hook signature is unchanged.
+const setPosture = (klass, stance) => {
+  if (game.directives && game.directives[klass]) game.directives[klass].stance = stance;
 };
 const setMissiles = (klass, missiles) => {
   if (game.directives && game.directives[klass]) game.directives[klass].missiles = missiles;
 };
+// FOCUS toggle — sets the TARGET-PRIORITY axis so the class follows the
+// admiral's tapped focus target (game.focusTargetId).
+const setPriority = (klass, priority) => {
+  if (game.directives && game.directives[klass]) game.directives[klass].priority = priority;
+};
 game.setPosture = setPosture;
 game.setMissiles = setMissiles;
+game.setPriority = setPriority;
 input.admiralPanel.setHooks(() => game.directives, setPosture, setMissiles);
 
 // Roguelite "Frontier" controller — owns the live run state. The
@@ -140,6 +327,47 @@ function refresh() {
   }, handleRunChoice);
 }
 
+// Look up the vendor on the currently-pending resupply node so the
+// buy* helpers can read its pricing modifiers. Falls through to null
+// (no vendor) if the player isn't standing at a resupply.
+function currentResupplyVendor() {
+  if (!activeRun) return null;
+  const node = input && input._pendingResupplyNode;
+  return (node && node.vendor) || null;
+}
+
+// Deferred node transition. When a jump-encounter fires we hold the
+// node-entry action (battle start, event clear, resupply clear) here
+// until the player dismisses the encounter overlay. Cleared after
+// the proceed call. Null when no transition is pending.
+let _deferredProceed = null;
+
+function proceedAfterJump(action, payload) {
+  if (!activeRun) return;
+  if (action === "battle") {
+    const { nodeId, battleMode, doctrine } = payload;
+    activeRun.battleMode = battleMode || "fly";
+    // Stamp the pre-battle doctrine so buildModeConfig picks it up
+    // and threads it through to game.battleDoctrine for spawnCapital.
+    activeRun.battleDoctrine = doctrine || "skirmish";
+    pendingNode = activeRun.graphs[activeRun.act - 1].nodes.find((n) => n.id === nodeId);
+    const cfg = buildModeConfig(activeRun, pendingNode, activeRun.battleMode);
+    // Persistent Shipyard design — player deploys as the ship they've
+    // built between runs. Frontier always honours the design; legacy
+    // modes don't carry one (they're skirmish-only).
+    cfg.playerDesign = saveStore.get().playerShip || null;
+    const mapW = 5000 + (activeRun.act - 1) * 2000;
+    const mapH = 3500 + (activeRun.act - 1) * 1500;
+    startGame(game, mapW, mapH, activeRun.faction, "roguelite", cfg, 1);
+    input.resetForNewMatch();
+    input.admiralActive = !!game.admiralMode;
+    audio.start();
+  } else if (action === "noncombat") {
+    completeNode(activeRun, payload.nodeId);
+    refresh();
+  }
+}
+
 function handleRunChoice(action, payload) {
   if (action === "new-run") {
     activeRun = startNewRun(
@@ -154,6 +382,14 @@ function handleRunChoice(action, payload) {
     if (activeRun) { clearPendingPromotion(activeRun); refresh(); }
     return;
   }
+  if (action === "dismiss-preamble") {
+    if (activeRun) { clearPendingPreamble(activeRun); refresh(); }
+    return;
+  }
+  if (action === "dismiss-dispatch") {
+    if (activeRun) { clearPendingDispatch(activeRun); refresh(); }
+    return;
+  }
   if (action === "select-trait") {
     if (activeRun) { selectPromotionTrait(activeRun, payload.traitKey); refresh(); }
     return;
@@ -166,26 +402,29 @@ function handleRunChoice(action, payload) {
   }
   if (action === "enter-node") {
     if (!activeRun) return;
-    const { nodeId, battleMode } = payload;
+    const { nodeId } = payload;
     if (!enterNode(activeRun, nodeId)) return;
-    activeRun.battleMode = battleMode || "fly";
-    pendingNode = activeRun.graphs[activeRun.act - 1].nodes.find((n) => n.id === nodeId);
-    // Build the modeConfig bundle and launch the battle.
-    const cfg = buildModeConfig(activeRun, pendingNode, activeRun.battleMode);
-    // Map size scales with act so later acts feel bigger.
-    const mapW = 5000 + (activeRun.act - 1) * 2000;
-    const mapH = 3500 + (activeRun.act - 1) * 1500;
-    startGame(game, mapW, mapH, activeRun.faction, "roguelite", cfg, 1);
-    input.admiralActive = !!game.admiralMode;
-    audio.start();
+    // Mid-jump encounter check — enterNode may have stamped a
+    // pendingJumpEncounter. Defer the actual battle launch until the
+    // overlay is dismissed.
+    if (activeRun.pendingJumpEncounter) {
+      _deferredProceed = { action: "battle", payload };
+      refresh();
+      return;
+    }
+    proceedAfterJump("battle", payload);
     return;
   }
   if (action === "complete-node-noncombat") {
     // Event nodes — the choice was already applied. Now just advance.
     if (!activeRun) return;
     if (!enterNode(activeRun, payload.nodeId)) return;
-    completeNode(activeRun, payload.nodeId);
-    refresh();
+    if (activeRun.pendingJumpEncounter) {
+      _deferredProceed = { action: "noncombat", payload };
+      refresh();
+      return;
+    }
+    proceedAfterJump("noncombat", payload);
     return;
   }
   if (action === "enter-node-and-complete") {
@@ -193,20 +432,145 @@ function handleRunChoice(action, payload) {
     // the overlay have already mutated the run via buyRepair / etc.
     if (!activeRun) return;
     if (!enterNode(activeRun, payload.nodeId)) return;
-    completeNode(activeRun, payload.nodeId);
+    if (activeRun.pendingJumpEncounter) {
+      _deferredProceed = { action: "noncombat", payload };
+      refresh();
+      return;
+    }
+    proceedAfterJump("noncombat", payload);
+    return;
+  }
+  if (action === "rename-capital") {
+    if (activeRun) {
+      renameCapital(activeRun, payload.instanceId, payload.fields || {});
+      refresh();
+    }
+    return;
+  }
+  if (action === "set-capital-behavior") {
+    if (activeRun) {
+      setCapitalBehavior(activeRun, payload.instanceId, payload.behavior);
+      refresh();
+    }
+    return;
+  }
+  if (action === "set-wing-command") {
+    if (activeRun) {
+      setWingCommand(activeRun, payload.wing, payload.command);
+      refresh();
+    }
+    return;
+  }
+  if (action === "set-wing-detail") {
+    if (activeRun) {
+      setWingDetail(activeRun, payload.craft, payload.wingId, payload.command);
+      refresh();
+    }
+    return;
+  }
+  if (action === "add-wing") {
+    if (activeRun) {
+      addWing(activeRun, payload.craft, 1);
+      refresh();
+    }
+    return;
+  }
+  if (action === "remove-wing") {
+    if (activeRun) {
+      removeWing(activeRun, payload.craft, payload.wingId);
+      refresh();
+    }
+    return;
+  }
+  if (action === "adjust-wing") {
+    if (activeRun) {
+      adjustWingCount(activeRun, payload.craft, payload.wingId, payload.delta);
+      refresh();
+    }
+    return;
+  }
+  if (action === "buy-service-upgrade") {
+    buyServiceUpgrade(payload.key);
     refresh();
     return;
   }
+  if (action === "shipyard-buy-hull") {
+    buyHull(payload.hullId);
+    refresh();
+    return;
+  }
+  if (action === "shipyard-set-hull") {
+    setHull(payload.hullId);
+    refresh();
+    return;
+  }
+  if (action === "shipyard-buy-component") {
+    const r = buyComponent(payload.componentId);
+    // After a successful buy, auto-equip the new component into the
+    // requested slot so the player doesn't have to tap twice.
+    if (r.ok && payload.slotId) equipComponent(payload.slotId, payload.componentId);
+    refresh();
+    return;
+  }
+  if (action === "shipyard-equip") {
+    equipComponent(payload.slotId, payload.componentId);
+    refresh();
+    return;
+  }
+  if (action === "shipyard-rename") {
+    renameShip(payload.name);
+    refresh();
+    return;
+  }
+  if (action === "shipyard-paint") {
+    setPaint(payload.primary, payload.trim);
+    refresh();
+    return;
+  }
+  if (action === "select-variant") {
+    if (activeRun) {
+      selectCapitalVariant(activeRun, payload.instanceId, payload.variantKey);
+      refresh();
+    }
+    return;
+  }
+  if (action === "pick-commander-perk") {
+    if (activeRun) {
+      pickCommanderPerk(activeRun, payload.ref, payload.perkKey);
+      refresh();
+    }
+    return;
+  }
+  if (action === "dismiss-jump-encounter") {
+    if (activeRun) clearPendingJumpEncounter(activeRun);
+    const d = _deferredProceed;
+    _deferredProceed = null;
+    if (d) proceedAfterJump(d.action, d.payload);
+    else refresh();
+    return;
+  }
   if (action === "buy-repair") {
-    if (activeRun) { buyRepair(activeRun, payload.instanceId); refresh(); }
+    if (activeRun) {
+      const v = currentResupplyVendor();
+      buyRepair(activeRun, payload.instanceId, v);
+      refresh();
+    }
     return;
   }
   if (action === "buy-recruit") {
-    if (activeRun) { buyRecruit(activeRun, payload.klass); refresh(); }
+    if (activeRun) {
+      const v = currentResupplyVendor();
+      buyRecruit(activeRun, payload.klass, v);
+      refresh();
+    }
     return;
   }
   if (action === "buy-refuel") {
-    if (activeRun) { buyRefuel(activeRun, payload.units || 1); refresh(); }
+    if (activeRun) {
+      const v = currentResupplyVendor();
+      buyRefuel(activeRun, payload.units || 1, v);
+      refresh();
+    }
     return;
   }
   if (action === "apply-boon") {
@@ -215,8 +579,36 @@ function handleRunChoice(action, payload) {
   }
   if (action === "apply-event") {
     if (activeRun) {
-      applyEventChoice(activeRun, payload.eventId, payload.choiceIndex);
+      // Snapshot resources before so we can show the player exactly
+      // what their choice changed (obvious feedback). The event's
+      // apply() returns a flavor outcome string.
+      const before = {
+        credits: activeRun.resources.credits,
+        fuel: activeRun.resources.fuel,
+        fighter: activeRun.smallCraft.fighter,
+        bomber: activeRun.smallCraft.bomber,
+        capitals: activeRun.capitals.length,
+      };
+      const text = applyEventChoice(activeRun, payload.eventId, payload.choiceIndex);
+      const after = {
+        credits: activeRun.resources.credits,
+        fuel: activeRun.resources.fuel,
+        fighter: activeRun.smallCraft.fighter,
+        bomber: activeRun.smallCraft.bomber,
+        capitals: activeRun.capitals.length,
+      };
+      const deltas = [];
+      const push = (label, b, a) => { if (a !== b) deltas.push({ label, delta: a - b }); };
+      push("credits", before.credits, after.credits);
+      push("fuel", before.fuel, after.fuel);
+      push("fighter", before.fighter, after.fighter);
+      push("bomber", before.bomber, after.bomber);
+      push("capital", before.capitals, after.capitals);
+      // refresh() reloads activeRun from the save (applyEventChoice
+      // already persisted the resource changes), so stamp the transient
+      // result AFTER refresh — onto the live object the menu reads.
       refresh();
+      activeRun._lastEventResult = { text: text || "", deltas };
     }
     return;
   }
@@ -229,19 +621,40 @@ function handleRunChoice(action, payload) {
 // the player is a Terran officer and the war doesn't give second
 // chances. We tag the cause so the run-summary screen can show the
 // right death-flavor line.
+// Match-end sting — fires for every match, regardless of mode. Player
+// won (blue) gets the victory triad; lost (red) gets the defeat
+// descent. Bypasses the per-frame SFX budget inside the voice itself
+// since it's a single one-shot at the end of the match.
+events.on("matchEnded", ({ winner }) => {
+  if (!audio.ctx) return;
+  if (winner === "blue") audio.sfxVictory();
+  else if (winner === "red") audio.sfxDefeat();
+});
+
 events.on("matchEnded", ({ mode, winner }) => {
   if (mode !== "roguelite" || !activeRun || !pendingNode) return;
   // Snapshot the run reference up front — completeNode can clear it
   // synchronously on a final-boss win via the runEnded handler below.
   const runRef = activeRun;
+  // Pass the node faction through so the promotion picker can gate
+  // archetypes like "defector" (Hegemony-only) by enemy faction.
+  game.pendingNode = pendingNode;
   captureBattleOutcome(runRef, game);
+  // Stash the AAR snapshot on game so the match-over panel renderer
+  // (in hud.js#_syncMatchOver) can read it. captureBattleOutcome wrote
+  // it onto run.lastBattleReport — but the HUD only has `game`.
+  game.lastBattleReport = runRef.lastBattleReport || null;
 
-  // Detect whether the player ship survived the battle. promotePlayer
-  // re-spawns the player from a live blue fighter mid-match; isPlayer
-  // is sticky to the most recent host. If no isPlayer ship exists (or
-  // it's flagged dead) by matchEnded, the player is KIA.
-  const playerShip = game.ships.find((s) => s.isPlayer);
-  const playerKIA = !playerShip || playerShip.dead;
+  // KIA is now an explicit flag, NOT "no/dead player ship". A
+  // destroyed player ship no longer respawns — the pilot drops to
+  // spectate — so "no isPlayer ship at matchEnd" is the NORMAL state
+  // after any player death OR a voluntary spectate, and must not be
+  // read as career-ending. `game.playerKIA` is set true ONLY when a
+  // Frontier survival roll FAILS (see the death block in game.js); an
+  // ejected-but-alive pilot, a voluntary spectator, and an admiral all
+  // leave it false so the run continues on a fleet win.
+  const isAdmiral = !!game.admiralMode;
+  const playerKIA = !isAdmiral && !!game.playerKIA;
 
   if (winner === "blue") {
     completeNode(runRef, pendingNode.id);
@@ -261,7 +674,7 @@ events.on("matchEnded", ({ mode, winner }) => {
 
   // KIA can also fire on a *won* battle if the player died in the
   // process but their fleet still cleared the node. That's still a
-  // career-ender — heroic last stand.
+  // career-ender — heroic last stand. Admiral guard applies here too.
   if (activeRun && winner === "blue" && playerKIA && !activeRun.endReason) {
     activeRun.endReason = "kia";
   }
@@ -282,6 +695,12 @@ events.on("matchEnded", ({ mode, winner }) => {
 // run isn't discarded until the panel is dismissed.
 events.on("runEnded", ({ run, won, reason, flavor }) => {
   const rank = (ACT_RANKS[run.act] || {}).rank || "Officer";
+  // Compute + bank Shipyard credit payout from the run tally. Pure
+  // function — won/loss both pay; loss just doesn't get the war-won
+  // bonus. Surfaced on game.runSummary so the match-over panel can
+  // show the breakdown.
+  const payout = computeRunPayout(run, !!won);
+  const newBalance = bankRunPayout(payout);
   game.runSummary = {
     won,
     reason,
@@ -291,6 +710,18 @@ events.on("runEnded", ({ run, won, reason, flavor }) => {
     act: run.act,
     actsTotal: 5,
     visitedCount: (run.visitedNodeIds || []).length,
+    // Snapshot of run.stats for the end-screen breakdown.
+    stats: run.stats || null,
+    // Achievements unlocked this run (Tier 43). Stamped by
+    // recordRunEnd on the run object via _achievementsUnlocked.
+    achievementsUnlocked: run._achievementsUnlocked || [],
+    // Shipyard payout breakdown — surfaced on the match-over panel
+    // so players see how their kills converted to credits.
+    shipyard: {
+      payout: payout.total,
+      breakdown: payout.breakdown,
+      newBalance,
+    },
   };
   if (!won) {
     // Defeated runs are already wiped from save by recordRunEnd's
@@ -341,8 +772,39 @@ const FIXED_DT = 1 / 60;
 const MAX_ACCUM = 0.25;
 let last = performance.now() / 1000;
 let accum = 0;
+// True while the tab is hidden / the app is backgrounded. The frame loop
+// freezes the simulation + draw, and all audio is suspended, so a player
+// who swaps tabs or minimises comes back to a paused game with no music
+// or SFX having played in the background. See the visibilitychange wiring.
+let paused = false;
+
+// Pause-on-hide. Browsers already throttle requestAnimationFrame for
+// hidden tabs, but the Web Audio scheduler + context keep running, so the
+// soundtrack (and any ringing SFX) would otherwise play on in the
+// background. On hide: freeze the sim and suspend all audio. On show:
+// wake audio, reset the timestep so we don't process one huge catch-up
+// step, and let the frame loop restart the soundtrack if appropriate.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    paused = true;
+    audio.suspendAll();
+    // Force the music edge-detector to "not playing" so the loop calls
+    // audio.start() again on resume (suspendAll halted the scheduler).
+    musicWasPlaying = false;
+  } else {
+    paused = false;
+    // Drop the accumulated wall-clock gap from the hidden period — the
+    // next frame should advance by a single tick, not replay minutes.
+    last = performance.now() / 1000;
+    accum = 0;
+    audio.resumeCtx();
+  }
+});
 
 function frame(now) {
+  // Tab hidden — keep the RAF chain alive but do no work (no sim, no
+  // draw, no audio). Audio is already suspended by the visibility handler.
+  if (paused) { requestAnimationFrame(frame); return; }
   const t = now / 1000;
   let delta = t - last;
   last = t;
@@ -381,8 +843,18 @@ function frame(now) {
       // Open / Defend / Custom / Admiral. Custom carries its full
       // roster bundle through; Admiral flips the input layer to show
       // the command panel.
-      startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode, null,
+      // Persistent Shipyard design deploys in every mode that has a
+      // player ship. Admiral has no player ship — passing a design is
+      // harmless because promotePlayer doesn't run in that path.
+      // Pre-battle Fleet Plan (per-class directives + ad-hoc wings) rides
+      // on the mode config so game.js#startGame applies it post-spawn.
+      const legacyCfg = {
+        playerDesign: saveStore.get().playerShip || null,
+        fleetPlan: choice.fleetPlan || null,
+      };
+      startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode, legacyCfg,
                 choice.fleetMul, choice.customRoster || null);
+      input.resetForNewMatch();
       input.admiralActive = !!game.admiralMode;
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();
@@ -393,6 +865,10 @@ function frame(now) {
     game.playerController.thrust = ctrl.thrust;
     game.playerController.aim = ctrl.aim;
     game.playerController.firing = ctrl.firing;
+    // Boost — hold to burn charge for +speed/accel. Consumed in
+    // updateShip via spec.boost config. Empty controllers default
+    // to false so AI ships (which don't get a boost flag) skip.
+    game.playerController.boost = !!ctrl.boosting;
     // Edge-triggered missile fire. The flag is consumed inside updateShip.
     // Clear stale presses when there's no live player to fire.
     game.playerController.firingMissile = input.consumeMissilePress();
@@ -401,6 +877,32 @@ function frame(now) {
     if (input.consumeSpectateToggle()) {
       if (game.spectating) exitSpectate(game);
       else enterSpectate(game);
+    }
+
+    // TAKE COMMAND / RESUME PILOT — drop into the top-down admiral view
+    // mid-battle to direct the fleet, then return to the cockpit. Reuses
+    // the spectate hand-off (enterSpectate hands the live hull to AI;
+    // exitSpectate retakes it if still alive). Only meaningful in modes
+    // that have a player ship — the HUD hides the button otherwise.
+    if (input.consumeAdmiralToggle()) {
+      if (game.admiralMode && game._admiralByToggle) {
+        // RESUME PILOT: leave admiral, retake the ship (no-op if it died).
+        game.admiralMode = false;
+        game._admiralByToggle = false;
+        input.admiralActive = false;
+        game.focusTargetId = null;   // drop stale focus-fire
+        exitSpectate(game);
+      } else if (!game.admiralMode && !game.playerEliminated) {
+        // TAKE COMMAND: hand the ship to AI (unless already spectating
+        // after death) and enter the admiral command view. Gated on
+        // !playerEliminated so the C hotkey can't drop an eliminated
+        // pilot (who has no hull to return to) into admiral — the HUD
+        // already hides the COMMAND pill in that state.
+        if (!game.spectating) enterSpectate(game);
+        game.admiralMode = true;
+        game._admiralByToggle = true;
+        input.admiralActive = true;
+      }
     }
     // Camera zoom: pinch (touch) + wheel (mouse) feed a single delta
     // pool. Spectator and admiral get to use it; piloting keeps the

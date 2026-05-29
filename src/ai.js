@@ -5,7 +5,7 @@ import { pickAimModule, moduleOffsetWorld } from "./modules.js";
 function nearestEnemy(ship, ships) {
   let best = null, bestD2 = Infinity;
   for (const other of ships) {
-    if (other.dead || other.side === ship.side) continue;
+    if (other.dead || other.surrendered || other.side === ship.side) continue;
     const dx = other.pos.x - ship.pos.x;
     const dy = other.pos.y - ship.pos.y;
     const d2 = dx * dx + dy * dy;
@@ -30,17 +30,34 @@ function aimPointFor(target) {
   return target.pos;
 }
 
-// Lead a moving target so a projectile of `speed` will hit. Approximation
-// (one iteration is plenty for our purposes). Aim point is module-aware
-// via `aimPointFor` so strafing fighters / frigates lead the PD turret
-// or weapon bay they're chewing rather than the hull centroid.
+// Lead a moving target so a projectile of `speed` will hit. Aim point
+// is module-aware via `aimPointFor` so strafing fighters / frigates
+// lead the PD turret or weapon bay they're chewing rather than the
+// hull centroid. TWO iterations: the first estimate of time-to-target
+// is based on current distance, but if the target is moving toward
+// (or away from) the shooter, the projected future position is at a
+// different distance — so we re-estimate t against the predicted
+// future position. Single iteration was fine for slow capitals but
+// missed fast strike craft (fighters chasing fighters / bombers at
+// 250-500 u/s), where the lead point shifts noticeably between
+// iterations. Two iterations converge inside ~5% of the analytic
+// solution for typical engagement geometry — enough that fighters
+// reliably score hits.
 function leadAim(shooter, target, speed) {
   const aimPt = aimPointFor(target);
-  const rel = V.sub(aimPt, shooter.pos);
-  const dist = V.len(rel);
-  const t = dist / speed;
-  // Lead by the TARGET's velocity, not the aim point's (modules ride
-  // with the ship so they share the same velocity vector).
+  const dx0 = aimPt.x - shooter.pos.x;
+  const dy0 = aimPt.y - shooter.pos.y;
+  // Guard a zero/negative/NaN projectile speed (malformed spec or component
+  // patch): a divide here would put NaN into the aim vector → ship.heading →
+  // ship.pos, corrupting the ship and any pack centroid it feeds. Fall back
+  // to no-lead (aim straight at the point).
+  if (!(speed > 0)) return { x: dx0, y: dy0 };
+  let t = Math.hypot(dx0, dy0) / speed;
+  // Second iteration: predict where the target will be at t1, recompute
+  // time-to-that-point. Converges for targets slower than the projectile.
+  const px1 = aimPt.x + target.vel.x * t;
+  const py1 = aimPt.y + target.vel.y * t;
+  t = Math.hypot(px1 - shooter.pos.x, py1 - shooter.pos.y) / speed;
   return {
     x: aimPt.x + target.vel.x * t - shooter.pos.x,
     y: aimPt.y + target.vel.y * t - shooter.pos.y,
@@ -50,7 +67,7 @@ function leadAim(shooter, target, speed) {
 function nearestEnemyOfClass(ship, ships, klass) {
   let best = null, bestD2 = Infinity;
   for (const other of ships) {
-    if (other.dead || other.side === ship.side) continue;
+    if (other.dead || other.surrendered || other.side === ship.side) continue;
     if (other.klass !== klass) continue;
     const dx = other.pos.x - ship.pos.x;
     const dy = other.pos.y - ship.pos.y;
@@ -66,7 +83,7 @@ function pickBomberTarget(ship, ships) {
   const RANK = { station: 5, battleship: 4, carrier: 3.5, cruiser: 3, frigate: 2 };
   let best = null, bestRank = -1, bestD2 = Infinity;
   for (const o of ships) {
-    if (o.dead || o.side === ship.side) continue;
+    if (o.dead || o.surrendered || o.side === ship.side) continue;
     const rank = RANK[o.klass] || 0;
     if (rank === 0) continue;
     const dx = o.pos.x - ship.pos.x;
@@ -94,28 +111,34 @@ export function updateAI(ship, world, dt) {
 
   const c = ship.controller;
 
-  // Admiral focus-fire override. When the player has tapped an enemy
-  // ship in admiral mode, every blue-side ship prefers that target
-  // before any of the per-class priority tables run. Bombers and
-  // escorts can still peel off to their own role-specific picks if
-  // the focus target is way out of role — bombers won't waste a
-  // strike on a fighter, etc. — but for capitals + cruisers + free
-  // fighters the focus is a hard pin.
+  // Resolve this ship's standing orders once (stance handled later in
+  // applyShipOrders; the TARGET PRIORITY axis is applied here).
+  const orders = resolveOrders(ship, world);
+  const priority = (orders && orders.priority) || "default";
+
+  // FOCUS priority — ships tagged FOCUS pile onto the admiral's live focus
+  // target (set by tapping an enemy in admiral view). Only FOCUS-tagged
+  // ships follow it now (was: every blue ship) so the order is a tight,
+  // opt-in "all guns on my call" rather than a blanket pin. Bombers still
+  // refuse a fighter focus (wasted pods).
   let target = null;
-  if (ship.side === "blue" && world.focusTargetId != null) {
+  if (priority === "focus" && ship.side === "blue" && world.focusTargetId != null) {
     const focus = world.ships.find((o) => o.id === world.focusTargetId);
-    if (focus && !focus.dead && focus.side !== ship.side) {
-      // Bombers + fighters retain their soft preferences only when the
-      // focus would be a strict downgrade (focusing a fighter as a
-      // bomber wastes pods). For bombers, accept anything from frigate
-      // up; for fighters, accept anything. Other classes always
-      // honour the focus.
+    if (focus && !focus.dead && !focus.surrendered && focus.side !== ship.side) {
       if (ship.klass === "bomber") {
         if (focus.klass !== "fighter") target = focus;
       } else {
         target = focus;
       }
     }
+  }
+
+  // HUNT priority — soft preference for a specific enemy klass over the
+  // per-class default. Falls through to the normal pickers when no live
+  // enemy of that klass is on the field.
+  if (!target && priority === "hunt" && orders && orders.priorityClass) {
+    const preferred = nearestEnemyOfClass(ship, world.ships, orders.priorityClass);
+    if (preferred) target = preferred;
   }
 
   // Battleships duel each other; if no enemy battleship is on the
@@ -164,7 +187,11 @@ export function updateAI(ship, world, dt) {
   const ESCORT_ENGAGE_RANGE = 3500;
   const ESCORT_RECALL_RANGE = 5000;
   let escortCap = null;
-  if (ship.klass === "fighter" && ship.escortOf != null && world.ships) {
+  // Escort leash runs for ANY class now (ESCORT is a valid order for
+  // capitals too — e.g. frigates screening a battleship). Stamped via
+  // `escortOf` at spawn (fleetcommand/roguelite) or auto-assigned for
+  // fighter packs. The carrier/station classes already returned above.
+  if (ship.escortOf != null && world.ships) {
     escortCap = world.ships.find((o) => o.id === ship.escortOf && !o.dead) || null;
     if (!escortCap) {
       ship.escortOf = null; // assigned capital is gone; free fighter
@@ -179,7 +206,7 @@ export function updateAI(ship, world, dt) {
       let bestCapD2 = ESCORT_ENGAGE_RANGE * ESCORT_ENGAGE_RANGE;
       let bestCapT = null;
       for (const o of world.ships) {
-        if (o.dead || o.side === ship.side) continue;
+        if (o.dead || o.surrendered || o.side === ship.side) continue;
         const dx = o.pos.x - escortCap.pos.x;
         const dy = o.pos.y - escortCap.pos.y;
         const d2 = dx * dx + dy * dy;
@@ -243,7 +270,18 @@ export function updateAI(ship, world, dt) {
     if (ship.klass === "fighter") {
       flybyAI(ship, target, dt, world);
     } else if (ship.klass === "bomber") {
-      bomberFlankAI(ship, target, dt, world);
+      // bomberFlankAI sets up flank slots perpendicular to the
+      // target's heading — designed for capitals. Against a fighter
+      // or bomber (both heading-locked, both moving) those slots
+      // overshoot through the target. Endgame "only bombers left"
+      // turns into a head-on charge. Route small-craft engagements
+      // through fighter AI so bombers dogfight + use cannons at
+      // close range instead.
+      if (target.klass === "fighter" || target.klass === "bomber") {
+        flybyAI(ship, target, dt, world);
+      } else {
+        bomberFlankAI(ship, target, dt, world);
+      }
     } else if (ship.klass === "battleship") {
       battleshipAI(ship, target, dt, world);
     } else if (ship.klass === "cruiser") {
@@ -252,11 +290,11 @@ export function updateAI(ship, world, dt) {
       frigateAI(ship, target, dt, world);
     }
   }
-  // Admiral PRESS / HOLD must still override even when the ship has no
-  // target (e.g. an idle escort fighter under HOLD should still pull
-  // back to the fleet centroid). Runs after the per-class branch so it
-  // can supersede the no-target c.aim default.
-  applyAdmiralPosture(ship, world);
+  // Stance override (CHARGE / STAND OFF / HOLD POSITION / FALL BACK) must
+  // still run even with no target (e.g. an idle ship under FALL BACK should
+  // pull to the rear). Runs after the per-class branch so it can supersede
+  // the no-target c.aim default.
+  applyShipOrders(ship, world, target);
 
   // Safety net: corners pin heading-locked craft (fighter / bomber)
   // when their per-class AI didn't run wall avoidance — escort station
@@ -295,51 +333,159 @@ function enforceWallEscape(ship, world) {
 }
 
 // Admiral-mode directive override. Runs after the per-class AI has set
-// c.aim / c.firing so we can cleanly replace those values when the
-// admiral has issued HOLD or PRESS. Only the allied (blue) side is
-// commanded — enemy AI is unaffected so the player faces a normal
-// opponent.
-function applyAdmiralPosture(ship, world) {
-  if (!world.directives || ship.side !== "blue") return;
-  const dir = world.directives[ship.klass];
-  if (!dir) return;
-  if (dir.posture === "hold") {
-    // Pull back to the allied fleet centroid. Drop fire orders — HOLD
-    // means literal hold-fire, the ships should disengage cleanly.
-    const c = ship.controller;
-    let sx = 0, sy = 0, n = 0;
-    for (const o of world.ships) {
-      if (o.dead || o.side !== "blue" || o === ship) continue;
-      sx += o.pos.x; sy += o.pos.y; n++;
-    }
-    if (n > 0) {
-      const cx = sx / n, cy = sy / n;
-      const dx = cx - ship.pos.x, dy = cy - ship.pos.y;
-      const d = Math.hypot(dx, dy);
-      // Within 200u of the centroid: stop steering toward the centre
-      // (which would cause oscillation through it). Hold current
-      // heading instead.
-      if (d > 200) c.aim = { x: dx, y: dy };
+// c.aim / c.firing so we can cleanly replace those values per the ship's
+// STANCE. Only the allied (blue) side is commanded — enemy AI is unaffected
+// so the player faces a normal opponent. See BATTLE_COMMANDS_SPEC.md.
+
+// Longest effective offensive range — the distance the ship can still land a
+// hit. Used by STAND OFF (kite distance) + HOLD POSITION (engage leash). The
+// fighter air-to-air `missile` is excluded so fighters kite at GUN range, not
+// the occasional intercept-missile range.
+function effectiveRange(ship) {
+  const s = ship.spec;
+  if (!s) return 1000;
+  let r = 0;
+  const consider = (w) => { if (w && w.range > r) r = w.range; };
+  const arr = (x) => (x ? (Array.isArray(x) ? x : [x]) : []);
+  consider(s.weapon);
+  for (const p of arr(s.missilePods)) consider(p);
+  for (const l of arr(s.heavyLaser)) consider(l);
+  consider(s.torpedoes);
+  return r > 0 ? r : 1000;
+}
+
+// Centroid of a side (optionally hostile-to `ship`), skipping dead/surrendered.
+function sideCentroid(world, side, exclude) {
+  let sx = 0, sy = 0, n = 0;
+  for (const o of world.ships) {
+    if (o.dead || o === exclude) continue;
+    if (side === "enemy") { if (o.surrendered || o.side === exclude.side) continue; }
+    else if (o.side !== side) continue;
+    sx += o.pos.x; sy += o.pos.y; n++;
+  }
+  return n > 0 ? { x: sx / n, y: sy / n, n } : null;
+}
+
+// Resolve a ship's orders into the unified shape { stance, priority,
+// priorityClass }. New-shape `wingCommand.stance` wins; a legacy
+// `wingCommand.kind` (free/hold/press/defend-capital/target-class — still
+// emitted by the Frontier Battle Plan UI) is mapped forward; otherwise the
+// per-class `game.directives[klass]` (live-editable via the admiral panel)
+// is the default. Escort is NOT resolved here — it rides on `ship.escortOf`,
+// stamped at spawn. Returns null if the ship has no orders at all.
+const LEGACY_STANCE = { free: "engage", press: "charge", hold: "fallback", "defend-capital": "engage", "target-class": "engage" };
+function resolveOrders(ship, world) {
+  const wc = ship.wingCommand;
+  if (wc) {
+    if (wc.stance) return wc; // already new-shape
+    return {
+      stance: LEGACY_STANCE[wc.kind] || "engage",
+      priority: wc.kind === "target-class" ? "hunt" : "default",
+      priorityClass: wc.kind === "target-class" ? wc.target : null,
+    };
+  }
+  const d = world.directives && world.directives[ship.klass];
+  if (!d) return null;
+  if (d.stance) return d; // new-shape per-class directive
+  // Legacy {posture, missiles} per-class directive — map posture forward.
+  return { stance: LEGACY_STANCE[d.posture] || "engage", priority: "default", priorityClass: null };
+}
+
+function applyShipOrders(ship, world, target) {
+  if (ship.side !== "blue") return;
+  const orders = resolveOrders(ship, world);
+  const stance = (orders && orders.stance) || "engage";
+  if (stance === "engage") return; // no-op: per-class AI stands as-is
+  const c = ship.controller;
+
+  if (stance === "fallback") {
+    // Full disengage: retreat to the fleet REAR (allied centroid pushed
+    // away from the enemy centroid, so ships actually withdraw instead of
+    // piling into the middle) and cease fire.
+    const ally = sideCentroid(world, "blue", ship);
+    const foe = sideCentroid(world, "enemy", ship);
+    if (ally) {
+      let rx = ally.x, ry = ally.y;
+      if (foe) {
+        let ax = ally.x - foe.x, ay = ally.y - foe.y;
+        const al = Math.hypot(ax, ay) || 1;
+        rx = ally.x + (ax / al) * 1000; ry = ally.y + (ay / al) * 1000;
+      }
+      const dx = rx - ship.pos.x, dy = ry - ship.pos.y;
+      if (Math.hypot(dx, dy) > 200) c.aim = { x: dx, y: dy };
     }
     c.firing = false;
     c.firingMissile = false;
-  } else if (dir.posture === "press") {
-    // Steer toward enemy fleet centroid, keep existing firing flags.
-    // This makes capitals charge instead of orbiting and pulls
-    // fighters/bombers into the fight even if their per-class AI was
-    // sitting on a flank/regroup beat.
-    const c = ship.controller;
-    let sx = 0, sy = 0, n = 0;
-    for (const o of world.ships) {
-      if (o.dead || o.side === ship.side) continue;
-      sx += o.pos.x; sy += o.pos.y; n++;
-    }
-    if (n > 0) {
-      const cx = sx / n, cy = sy / n;
-      c.aim = { x: cx - ship.pos.x, y: cy - ship.pos.y };
-    }
+    return;
   }
-  // "free" is the no-op — the per-class AI's outputs stand as-is.
+
+  if (stance === "charge") {
+    // Close to point-blank on the target (or the enemy mass if none),
+    // overriding any class standoff/orbit. Keep the class AI's fire flags.
+    if (target) {
+      c.aim = { x: target.pos.x - ship.pos.x, y: target.pos.y - ship.pos.y };
+    } else {
+      const foe = sideCentroid(world, "enemy", ship);
+      if (foe) c.aim = { x: foe.x - ship.pos.x, y: foe.y - ship.pos.y };
+    }
+    return;
+  }
+
+  if (stance === "standoff") {
+    // Kite at max weapon range. Inside 0.85R → open distance (turn away);
+    // beyond R → close; in the band → orbit perpendicular so guns/PD bear.
+    if (!target) return; // nothing to range against → let class AI idle
+    const R = effectiveRange(ship);
+    const dx = target.pos.x - ship.pos.x, dy = target.pos.y - ship.pos.y;
+    const d = Math.hypot(dx, dy) || 1;
+    if (d < 0.85 * R) {
+      c.aim = { x: -dx, y: -dy }; // back-pedal: open the range
+    } else if (d > R) {
+      c.aim = { x: dx, y: dy };   // close into range
+    } else {
+      c.aim = { x: -dy, y: dx };  // orbit perpendicular, hold the range
+    }
+    // Fire flags from the class AI stand — it shoots when arcs bear.
+    return;
+  }
+
+  if (stance === "hold") {
+    // Hold ground + defend: anchor to the escorted capital (if any) else the
+    // spot where the order took effect. Return if pulled past HOLD_RADIUS;
+    // otherwise engage only targets near the anchor (never pursue out).
+    const HOLD_RADIUS = 600;
+    let A;
+    if (ship.escortOf != null) {
+      const cap = world.ships.find((o) => o.id === ship.escortOf && !o.dead);
+      A = cap ? cap.pos : (ship.holdAnchor || (ship.holdAnchor = { x: ship.pos.x, y: ship.pos.y }));
+    } else {
+      A = ship.holdAnchor || (ship.holdAnchor = { x: ship.pos.x, y: ship.pos.y });
+    }
+    const dax = ship.pos.x - A.x, day = ship.pos.y - A.y;
+    const dA = Math.hypot(dax, day);
+    if (dA > HOLD_RADIUS) {
+      c.aim = { x: A.x - ship.pos.x, y: A.y - ship.pos.y }; // return home
+      c.firing = false;
+      c.firingMissile = false;
+      return;
+    }
+    // Within the leash: engage the class-picked target only if it's close
+    // enough to the anchor to fight without leaving station; else hold.
+    const R = effectiveRange(ship);
+    let defend = false;
+    if (target) {
+      const tx = target.pos.x - A.x, ty = target.pos.y - A.y;
+      defend = Math.hypot(tx, ty) <= HOLD_RADIUS + R;
+    }
+    if (!defend) {
+      // No nearby threat — drift back toward the anchor centre, hold fire.
+      if (dA > 120) c.aim = { x: A.x - ship.pos.x, y: A.y - ship.pos.y };
+      c.firing = false;
+      c.firingMissile = false;
+    }
+    // else: leave the class AI's aim/fire as-is (engage the nearby target).
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +533,7 @@ const FORWARD_ARC_COS_WIDE = Math.cos(Math.PI / 3); // 60° half-angle
 function bigShipDanger(ship, ships, excludeTarget = null) {
   let ax = 0, ay = 0;
   for (const other of ships) {
-    if (other.dead || other.side === ship.side) continue;
+    if (other.dead || other.surrendered || other.side === ship.side) continue;
     if (other.klass === "fighter") continue;
     if (other === ship) continue;
     if (other === excludeTarget) continue;
@@ -420,9 +566,18 @@ function bigShipDanger(ship, ships, excludeTarget = null) {
 
     // 2. Missile pods — long-range homing. Radial again because they
     //    track. Softer weight than PD since flares / dodging works.
+    //    With multi-group missile loadouts (player capital with mixed
+    //    cluster + nuke pods), pick the LONGEST range — that's the
+    //    one defining the "stay away" zone.
     if (spec.missilePods) {
-      const mR = spec.missilePods.range;
-      if (d < mR) {
+      const mp = spec.missilePods;
+      let mR = 0;
+      if (Array.isArray(mp)) {
+        for (const g of mp) if (g && g.range > mR) mR = g.range;
+      } else if (typeof mp.range === "number") {
+        mR = mp.range;
+      }
+      if (mR > 0 && d < mR) {
         const u = 1 - d / mR;
         pushX += toUsX * u * 0.55;
         pushY += toUsY * u * 0.55;
@@ -430,11 +585,23 @@ function bigShipDanger(ship, ships, excludeTarget = null) {
     }
 
     // 3. Heavy laser — instant hit, fatal damage. Push perpendicular
-    //    if we're in its forward firing arc.
+    //    if we're in its forward firing arc. Array-aware: a BB with
+    //    multiple beams uses the longest range + widest arc to define
+    //    the "stay clear" envelope.
     if (spec.heavyLaser) {
-      const lR = spec.heavyLaser.range;
-      if (d < lR) {
-        const arc = spec.heavyLaser.arc || Math.PI * 0.55;
+      const hl = spec.heavyLaser;
+      let lR = 0, arc = Math.PI * 0.55;
+      if (Array.isArray(hl)) {
+        for (const g of hl) {
+          if (!g) continue;
+          if (g.range > lR) lR = g.range;
+          if (g.arc && g.arc > arc) arc = g.arc;
+        }
+      } else {
+        lR = hl.range || 0;
+        if (hl.arc) arc = hl.arc;
+      }
+      if (lR > 0 && d < lR) {
         const arcCos = Math.cos(arc);
         if (toUsX * fwdX + toUsY * fwdY > arcCos) {
           const u = 1 - d / lR;
@@ -497,7 +664,7 @@ function bigShipDanger(ship, ships, excludeTarget = null) {
 // would commit them to lethal proximity.
 function insideEnemyPDRange(ship, ships) {
   for (const other of ships) {
-    if (other.dead || other.side === ship.side) continue;
+    if (other.dead || other.surrendered || other.side === ship.side) continue;
     if (!other.spec.pdCannons) continue;
     const r = other.spec.pdCannons.range * 1.1;
     const dx = other.pos.x - ship.pos.x;
@@ -512,7 +679,7 @@ function tailDanger(ship, ships) {
   const myFwdX = Math.cos(ship.heading), myFwdY = Math.sin(ship.heading);
   const TAIL_RANGE = 450;
   for (const other of ships) {
-    if (other.dead || other.side === ship.side) continue;
+    if (other.dead || other.surrendered || other.side === ship.side) continue;
     if (other.klass !== "fighter") continue;
     const dx = ship.pos.x - other.pos.x;
     const dy = ship.pos.y - other.pos.y;
@@ -663,7 +830,19 @@ function flybyAI(ship, target, dt, world) {
     const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
     const aimNorm = V.norm(leadVec);
     const aligned = V.dot(fwd, aimNorm);
-    c.firing = dist <= s.weapon.range && aligned > 0.92;
+    // Tighter alignment + tagged controller when the prey is a small
+    // moving target. Fighter cannons at default ±0.05 spread will scatter
+    // ±25u at 500u range — wider than a fighter's hit radius — so a wide
+    // firing cone meant most shots scored against backstop, not the
+    // target. 0.94 cos = ~20° full cone (was 0.92 ~ 23°) — narrower
+    // enough to bias shots ON the target, wide enough that fighters
+    // still get plenty of firing windows during a dogfight. The
+    // aimingAtSmall flag also tells the fire path to halve the random
+    // spread on the shots that DO get out.
+    const smallPrey = target.klass === "fighter" || target.klass === "bomber";
+    c.aimingAtSmall = smallPrey;
+    const alignThreshold = smallPrey ? 0.94 : 0.92;
+    c.firing = dist <= s.weapon.range && aligned > alignThreshold;
 
     const departing = (rel.x * ship.vel.x + rel.y * ship.vel.y) < 0;
     const inPassZone = dist < PASS_ZONE_DIST;
@@ -689,6 +868,7 @@ function flybyAI(ship, target, dt, world) {
     c.thrust = { x: 0, y: 0 };
     c.aim = { x: bx / bLen, y: by / bLen };
     c.firing = false;
+    c.aimingAtSmall = false;
 
     ship.breakTimer -= dt;
     const minTimeMet = ship.breakTimer <= 0;
@@ -1215,9 +1395,15 @@ function carrierAI(ship, world) {
   c.firing = false;
   c.firingMissile = false;
 
+  // Thren-style carriers carry a bow cannon and behave more like a
+  // strike platform: face the threat and fire. Standard carriers
+  // (Terran/Reaver/Hegemony/Voidsworn) have firingMode "none" and
+  // run the strafe-and-defend script below.
+  const hasCannon = ship.spec.weapon && ship.spec.firingMode === "forward";
+
   let threat = null, threatD2 = Infinity;
   for (const o of world.ships) {
-    if (o.dead || o.side === ship.side) continue;
+    if (o.dead || o.surrendered || o.side === ship.side) continue;
     if (o.klass === "fighter" || o.klass === "bomber") continue;
     const dx = o.pos.x - ship.pos.x;
     const dy = o.pos.y - ship.pos.y;
@@ -1225,20 +1411,50 @@ function carrierAI(ship, world) {
     if (d2 < threatD2) { threatD2 = d2; threat = o; }
   }
 
-  const SAFE_DIST = 1500;
-  if (threat && Math.sqrt(threatD2) < SAFE_DIST) {
-    c.aim = { x: ship.pos.x - threat.pos.x, y: ship.pos.y - threat.pos.y };
-  } else {
-    // No nearby capital threat — strafe perpendicular to the nearest
-    // enemy so the carrier's PD wall still has a usable target axis.
-    const enemy = nearestEnemy(ship, world.ships);
-    if (enemy) {
-      const dx = enemy.pos.x - ship.pos.x;
-      const dy = enemy.pos.y - ship.pos.y;
-      const sign = (ship.id % 2 === 0) ? 1 : -1;
-      c.aim = { x: -dy * sign, y: dx * sign };
+  if (hasCannon) {
+    // Face the nearest threat (or any enemy if no capital threat is
+    // nearby) so the bow cannon arc stays usable. The carrier is
+    // slow enough that closing range isn't a real risk — the PD +
+    // missile + shield kit handles whoever closes.
+    const target = threat || nearestEnemy(ship, world.ships);
+    if (target) {
+      const aimPt = aimPointFor(target);
+      c.aim = { x: aimPt.x - ship.pos.x, y: aimPt.y - ship.pos.y };
+      // The cannon turret tracks the lead-aim direction (cruiser
+      // pattern); slewCannonAim in ship.js consumes this each tick.
+      ship.cannonTargetDir = { x: aimPt.x - ship.pos.x, y: aimPt.y - ship.pos.y };
+      // Fire when the cannon barrel is roughly aligned with the
+      // target (within ~15° of the lead direction). Lower tolerance
+      // would have the carrier silent most of the time during turn
+      // chase; higher would spray off-axis.
+      if (ship.cannonAimAngle != null) {
+        const desired = Math.atan2(c.aim.y, c.aim.x);
+        let delta = desired - ship.cannonAimAngle;
+        while (delta >  Math.PI) delta -= Math.PI * 2;
+        while (delta < -Math.PI) delta += Math.PI * 2;
+        c.firing = Math.abs(delta) < 0.26; // ±15°
+      }
     } else {
       c.aim = null;
+      ship.cannonTargetDir = null;
+    }
+  } else {
+    const SAFE_DIST = 1500;
+    if (threat && Math.sqrt(threatD2) < SAFE_DIST) {
+      c.aim = { x: ship.pos.x - threat.pos.x, y: ship.pos.y - threat.pos.y };
+    } else {
+      // No nearby capital threat — strafe perpendicular to the
+      // nearest enemy so the carrier's PD wall still has a usable
+      // target axis.
+      const enemy = nearestEnemy(ship, world.ships);
+      if (enemy) {
+        const dx = enemy.pos.x - ship.pos.x;
+        const dy = enemy.pos.y - ship.pos.y;
+        const sign = (ship.id % 2 === 0) ? 1 : -1;
+        c.aim = { x: -dy * sign, y: dx * sign };
+      } else {
+        c.aim = null;
+      }
     }
   }
   // Capital crowding — keep distance from ally capitals. Carriers

@@ -5,9 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
     <title>Aphelion Star Fighter</title>
     <link rel="stylesheet" href="style.css" />
+    <link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/app-icon.svg" />
+    <meta name="theme-color" content="#04060e" />
   </head>
   <body>
     <canvas id="game"></canvas>
+    <!-- Boot splash — full-screen overlay shown during initial module
+         load + sprite prerender. Fades out once main.js fires the
+         "ready" event (window.dispatchEvent for app-ready). -->
+    <div id="boot-splash" aria-hidden="true">
+      <div class="boot-splash-inner">
+        <img class="boot-splash-icon" src="/app-icon.svg" alt="" />
+        <div class="boot-splash-title">APHELION</div>
+        <div class="boot-splash-subtitle">STAR FIGHTER</div>
+        <div class="boot-splash-loader"><span></span><span></span><span></span></div>
+      </div>
+    </div>
     <script type="module" src="src/main.js"></script>
   </body>
 </html>

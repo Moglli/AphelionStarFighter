@@ -24,10 +24,20 @@ import { RACES, randomRaceKey } from "../races.js";
 
 export const ADMIRAL_CLASSES = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
 
+// Per-class standing orders. Three axes (see BATTLE_COMMANDS_SPEC.md):
+//   stance      engage | charge | standoff | hold | fallback   (how to fight)
+//   priority    default | hunt | focus                          (what to shoot)
+//   assignment  free | escort   (+ escortKlass)                 (where to be)
+// plus the orthogonal missiles free | hold gate. Defaults are a no-op:
+// ENGAGE / DEFAULT / FREE / missiles on plays like an un-commanded battle.
 export function defaultDirectives() {
   const out = {};
   for (const k of ADMIRAL_CLASSES) {
-    out[k] = { posture: "free", missiles: "on" };
+    out[k] = {
+      stance: "engage", missiles: "on",
+      priority: "default", priorityClass: null,
+      assignment: "free", escortKlass: null,
+    };
   }
   return out;
 }

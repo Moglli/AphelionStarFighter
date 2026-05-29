@@ -8,6 +8,7 @@
 // Damage interaction with shields is computed in game.js (see applyDamage).
 
 import { createShockwave, createSpark } from "./particles.js";
+import { events } from "./events.js";
 
 export function createProjectile({
   pos, vel, damage, ttl, radius, color, side, ownerId, ownerKlass = null,
@@ -37,6 +38,10 @@ export function createMissile({
   speed, turnRate, hp = 1, fromKlass = null, acquireRange = 2000,
   initialTarget = null, targetModuleName = null,
   cluster = null,
+  armorPiercing = false,
+  bypassShield = false,
+  blastRadius = null,
+  antiCraftBonus = null,
 }) {
   return {
     pos: { ...pos },
@@ -56,16 +61,13 @@ export function createMissile({
     turnRate,
     acquireRange,
     targetId: initialTarget ? initialTarget.id : null,
-    // When set, the missile homes at the live world position of the named
-    // module on the target ship (rather than the ship's center). Falls
-    // back to ship-center homing if the module is destroyed mid-flight.
     targetModuleName,
-    // Cluster config (battleship pods). When non-null, the missile blooms
-    // into N smaller child warheads once it gets within bloomDistance of
-    // its target. Children inherit side / ownerId but not the cluster
-    // tag, so they don't recursively split.
     cluster,
-    trail: [], // recent positions for rendering
+    armorPiercing,
+    bypassShield,
+    blastRadius,
+    antiCraftBonus,
+    trail: [],
   };
 }
 
@@ -130,6 +132,9 @@ function updateMissile(m, dt, world) {
       }
       if (ddist2 <= effectiveBloom * effectiveBloom && clearedOwner) {
         spawnClusterChildren(m, target, world);
+        // Cluster-bloom SFX event — sharp burst + scatter sparkle so
+        // the defending player hears multi-track inbound.
+        events.emit("missileBloom", { x: m.pos.x, y: m.pos.y });
         m.dead = true;
         return;
       }
@@ -156,7 +161,10 @@ function updateMissile(m, dt, world) {
     const dx = aimX - m.pos.x;
     const dy = aimY - m.pos.y;
     const dist = Math.hypot(dx, dy);
-    const t = dist / m.speed;
+    // Guard a zero/NaN missile speed — a divide here would NaN the heading
+    // and position, producing an undying NaN projectile that poisons every
+    // distance/collision check. No valid speed → no lead this tick.
+    const t = m.speed > 0 ? dist / m.speed : 0;
     const px = aimX + target.vel.x * t;
     const py = aimY + target.vel.y * t;
     const desired = Math.atan2(py - m.pos.y, px - m.pos.x);
@@ -272,6 +280,8 @@ function spawnClusterChildren(parent, target, world) {
       fromKlass: parent.fromKlass,
       acquireRange: parent.acquireRange,
       initialTarget: target,
+      bypassShield: parent.bypassShield,
+      blastRadius: cfg.childBlastRadius || null,
       // Children carry no .cluster so they don't recursively split.
     }));
   }
@@ -304,6 +314,12 @@ function acquireMissileTarget(m, ships) {
   let best = null, bestD2 = m.acquireRange * m.acquireRange;
   for (const s of ships) {
     if (s.dead || s.side === m.side) continue;
+    // A missile that lost its original target must not re-acquire onto a
+    // ship that has since surrendered — a surrendered hulk was never
+    // "targeted before the white flag". (Missiles whose original lock is
+    // still alive keep homing through that ship's surrender via the
+    // targetId path in updateMissile — that's the intended in-flight hit.)
+    if (s.surrendered) continue;
     if (ownerIsCapital && (s.klass === "fighter" || s.klass === "bomber")) continue;
     const dx = s.pos.x - m.pos.x;
     const dy = s.pos.y - m.pos.y;
@@ -318,12 +334,19 @@ export function drawProjectile(ctx, p) {
     drawMissile(ctx, p);
     return;
   }
-  // Heavy cannon shells render as oriented streaks instead of perfect
-  // circles. At fighter scale the circles read fine because the round
-  // crosses several body-lengths per frame; for slow heavy rounds
-  // (BB barrage, anything with radius >= 6) the circle just sat there
-  // looking like a hovering orb. Stretching the round along velocity
-  // gives the "tracer" silhouette the player expects from a cannon.
+  if (p.fromKlass === "battleship") {
+    drawBattleshipShell(ctx, p);
+    return;
+  }
+  if (p.fromKlass === "cruiser") {
+    drawCruiserShell(ctx, p);
+    return;
+  }
+  if (p.fromKlass === "carrier") {
+    drawCarrierShell(ctx, p);
+    return;
+  }
+  // Heavy non-BB cannon shells (cruiser, etc.) render as oriented streaks.
   if (p.radius >= 6) {
     const vx = p.vel ? p.vel.x : 0;
     const vy = p.vel ? p.vel.y : 0;
@@ -332,14 +355,11 @@ export function drawProjectile(ctx, p) {
     ctx.translate(p.pos.x, p.pos.y);
     ctx.rotate(heading);
     ctx.fillStyle = p.color;
-    // Length scaled with radius — gives big BB rounds a clearly long
-    // streak without making fighter rounds look like noodles.
     const len = p.radius * 2.6;
     const halfH = p.radius * 0.78;
     ctx.beginPath();
     ctx.ellipse(0, 0, len, halfH, 0, 0, Math.PI * 2);
     ctx.fill();
-    // Bright leading tip for the cannon "tracer" read.
     ctx.fillStyle = "#fff";
     ctx.globalAlpha = 0.55;
     ctx.beginPath();
@@ -352,6 +372,185 @@ export function drawProjectile(ctx, p) {
   ctx.beginPath();
   ctx.arc(p.pos.x, p.pos.y, p.radius, 0, Math.PI * 2);
   ctx.fill();
+}
+
+// Battleship broadside round: a slim elongated naval artillery shell.
+// Dark steel body, tapered nose, hot white impact tip, warm tracer wake.
+function drawBattleshipShell(ctx, p) {
+  const vx = p.vel ? p.vel.x : 0;
+  const vy = p.vel ? p.vel.y : 0;
+  if (!vx && !vy) return;
+  ctx.save();
+  ctx.translate(p.pos.x, p.pos.y);
+  ctx.rotate(Math.atan2(vy, vx));
+
+  const R     = p.radius;
+  const hW    = R * 0.30;   // slim half-height
+  const noseX = R * 1.0;    // tip ahead of centre
+  const bodyL = R * 2.8;    // body length behind centre
+  const wakeL = R * 6.0;    // tracer wake length
+
+  // Tracer wake — warm glow fading out behind the round
+  const wake = ctx.createLinearGradient(-wakeL, 0, -bodyL * 0.2, 0);
+  wake.addColorStop(0,   "rgba(255,210,130,0)");
+  wake.addColorStop(1,   "rgba(255,210,130,0.22)");
+  ctx.beginPath();
+  ctx.ellipse(-(wakeL * 0.5 + bodyL * 0.1), 0, wakeL * 0.5, hW * 0.55, 0, 0, Math.PI * 2);
+  ctx.fillStyle = wake;
+  ctx.fill();
+
+  // Shell body — dark steel, tapered at both ends
+  ctx.beginPath();
+  ctx.moveTo(noseX * 0.55,  0);         // tip (where nose glow sits)
+  ctx.lineTo(R * 0.05,      hW);        // forward shoulder
+  ctx.lineTo(-bodyL,        hW * 0.28); // tail top
+  ctx.lineTo(-bodyL,       -hW * 0.28); // tail bottom
+  ctx.lineTo(R * 0.05,     -hW);        // forward shoulder bottom
+  ctx.closePath();
+  ctx.fillStyle = "#2c2a34";
+  ctx.fill();
+
+  // Specular rim — faint highlight along the upper edge to sell the
+  // cylindrical metal shape
+  ctx.beginPath();
+  ctx.moveTo(R * 0.4,     -hW * 0.12);
+  ctx.lineTo(-bodyL * 0.75, -hW * 0.52);
+  ctx.lineWidth   = hW * 0.22;
+  ctx.strokeStyle = "rgba(150,140,180,0.40)";
+  ctx.stroke();
+
+  // Hot nose — white-core radial glow compressed at the tip
+  const noseCx   = noseX * 0.48;
+  const noseGlow = ctx.createRadialGradient(noseCx, 0, 0, noseCx, 0, R * 0.95);
+  noseGlow.addColorStop(0,    "rgba(255,255,255,1.0)");
+  noseGlow.addColorStop(0.30, "rgba(255,240,210,0.85)");
+  noseGlow.addColorStop(0.65, "rgba(220,200,255,0.30)");
+  noseGlow.addColorStop(1.0,  "rgba(180,160,220,0)");
+  ctx.beginPath();
+  ctx.arc(noseCx, 0, R * 0.95, 0, Math.PI * 2);
+  ctx.fillStyle = noseGlow;
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Thren carrier bow round: the largest single cannon shell in the game.
+// Heavier and slower than a BB broadside — fatter body, longer wake,
+// bioluminescent green-white nose tint to match Thren's faction identity.
+function drawCarrierShell(ctx, p) {
+  const vx = p.vel ? p.vel.x : 0;
+  const vy = p.vel ? p.vel.y : 0;
+  if (!vx && !vy) return;
+  ctx.save();
+  ctx.translate(p.pos.x, p.pos.y);
+  ctx.rotate(Math.atan2(vy, vx));
+
+  const R     = p.radius;
+  const hW    = R * 0.34;   // slightly fatter than BB — a heavy mass-driver round
+  const noseX = R * 1.15;
+  const bodyL = R * 3.2;
+  const wakeL = R * 7.0;    // long wake — this thing is slow and massive
+
+  // Tracer wake — cool green-tinted glow
+  const wake = ctx.createLinearGradient(-wakeL, 0, -bodyL * 0.2, 0);
+  wake.addColorStop(0, "rgba(140,255,200,0)");
+  wake.addColorStop(1, "rgba(140,255,200,0.18)");
+  ctx.beginPath();
+  ctx.ellipse(-(wakeL * 0.5 + bodyL * 0.1), 0, wakeL * 0.5, hW * 0.6, 0, 0, Math.PI * 2);
+  ctx.fillStyle = wake;
+  ctx.fill();
+
+  // Shell body — dark with a faint organic green undertone
+  ctx.beginPath();
+  ctx.moveTo(noseX * 0.55,  0);
+  ctx.lineTo(R * 0.06,      hW);
+  ctx.lineTo(-bodyL,        hW * 0.30);
+  ctx.lineTo(-bodyL,       -hW * 0.30);
+  ctx.lineTo(R * 0.06,     -hW);
+  ctx.closePath();
+  ctx.fillStyle = "#1e2a22";
+  ctx.fill();
+
+  // Specular rim
+  ctx.beginPath();
+  ctx.moveTo(R * 0.45,      -hW * 0.12);
+  ctx.lineTo(-bodyL * 0.78, -hW * 0.54);
+  ctx.lineWidth   = hW * 0.22;
+  ctx.strokeStyle = "rgba(120,200,150,0.38)";
+  ctx.stroke();
+
+  // Hot nose — bioluminescent green-white
+  const noseCx   = noseX * 0.50;
+  const noseGlow = ctx.createRadialGradient(noseCx, 0, 0, noseCx, 0, R * 1.05);
+  noseGlow.addColorStop(0,    "rgba(255,255,255,1.0)");
+  noseGlow.addColorStop(0.28, "rgba(200,255,230,0.85)");
+  noseGlow.addColorStop(0.62, "rgba(100,220,160,0.30)");
+  noseGlow.addColorStop(1.0,  "rgba(60,180,110,0)");
+  ctx.beginPath();
+  ctx.arc(noseCx, 0, R * 1.05, 0, Math.PI * 2);
+  ctx.fillStyle = noseGlow;
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Cruiser forward cannon round: slimmer and sharper than a BB broadside
+// shell — faster-moving so the wake is shorter and the profile narrower.
+function drawCruiserShell(ctx, p) {
+  const vx = p.vel ? p.vel.x : 0;
+  const vy = p.vel ? p.vel.y : 0;
+  if (!vx && !vy) return;
+  ctx.save();
+  ctx.translate(p.pos.x, p.pos.y);
+  ctx.rotate(Math.atan2(vy, vx));
+
+  const R     = p.radius;
+  const hW    = R * 0.24;   // narrower than BB
+  const noseX = R * 0.9;
+  const bodyL = R * 2.4;
+  const wakeL = R * 4.2;    // shorter wake — round travels faster
+
+  // Tracer wake
+  const wake = ctx.createLinearGradient(-wakeL, 0, -bodyL * 0.15, 0);
+  wake.addColorStop(0, "rgba(200,230,255,0)");
+  wake.addColorStop(1, "rgba(200,230,255,0.18)");
+  ctx.beginPath();
+  ctx.ellipse(-(wakeL * 0.5 + bodyL * 0.08), 0, wakeL * 0.5, hW * 0.5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = wake;
+  ctx.fill();
+
+  // Shell body
+  ctx.beginPath();
+  ctx.moveTo(noseX * 0.5,   0);
+  ctx.lineTo(R * 0.04,      hW);
+  ctx.lineTo(-bodyL,        hW * 0.25);
+  ctx.lineTo(-bodyL,       -hW * 0.25);
+  ctx.lineTo(R * 0.04,     -hW);
+  ctx.closePath();
+  ctx.fillStyle = "#252830";
+  ctx.fill();
+
+  // Specular rim
+  ctx.beginPath();
+  ctx.moveTo(R * 0.35,      -hW * 0.10);
+  ctx.lineTo(-bodyL * 0.72, -hW * 0.50);
+  ctx.lineWidth   = hW * 0.20;
+  ctx.strokeStyle = "rgba(130,160,200,0.38)";
+  ctx.stroke();
+
+  // Hot nose — slightly cooler blue-white than BB (forward kinetic round)
+  const noseCx   = noseX * 0.42;
+  const noseGlow = ctx.createRadialGradient(noseCx, 0, 0, noseCx, 0, R * 0.82);
+  noseGlow.addColorStop(0,    "rgba(255,255,255,1.0)");
+  noseGlow.addColorStop(0.30, "rgba(220,240,255,0.80)");
+  noseGlow.addColorStop(0.65, "rgba(160,200,255,0.28)");
+  noseGlow.addColorStop(1.0,  "rgba(120,170,230,0)");
+  ctx.beginPath();
+  ctx.arc(noseCx, 0, R * 0.82, 0, Math.PI * 2);
+  ctx.fillStyle = noseGlow;
+  ctx.fill();
+
+  ctx.restore();
 }
 
 function drawMissile(ctx, m) {

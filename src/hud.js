@@ -3,8 +3,13 @@ import { ARENA } from "./arena.js";
 import { getSpectateTarget } from "./game.js";
 import { RACES } from "./races.js";
 
+import { classIconSvg, CLASS_SHORT_LABELS } from "./ship-icons.js";
+
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
 
+// Letter glyphs kept as fallback labels for accessibility / narrow
+// contexts. The visual UI uses classIconSvg from ship-icons.js so
+// players see ship silhouettes instead of letters in every roster cell.
 const CLASS_GLYPH = {
   fighter: "F", bomber: "B", frigate: "Fr",
   cruiser: "C", battleship: "BB", carrier: "CV", station: "St",
@@ -13,26 +18,138 @@ const CLASS_GLYPH = {
 // Friendly labels for module names that appear in the target panel.
 const MODULE_LABELS = {
   laser:            "Heavy Laser",
-  "missile-fwd":    "Missile Bay Fwd",
-  "missile-aft":    "Missile Bay Aft",
+  "laser-fore":     "Heavy Laser Fore",
+  "laser-aft":      "Heavy Laser Aft",
+  "missile-fwd":      "Missile Bay Fwd",
+  "missile-aft":      "Missile Bay Aft",
+  "missile-bay":      "Missile Bay",
+  "missile-bay-fore": "Missile Bay Fore",
+  "missile-bay-aft":  "Missile Bay Aft",
   "broadside-port": "Broadside Port",
   "broadside-stbd": "Broadside Stbd",
-  "pd-bow":         "PD Bow",
-  "pd-stern":       "PD Stern",
+  "broadside-port-0": "Cannon Port 1",
+  "broadside-port-1": "Cannon Port 2",
+  "broadside-port-2": "Cannon Port 3",
+  "broadside-stbd-0": "Cannon Stbd 1",
+  "broadside-stbd-1": "Cannon Stbd 2",
+  "broadside-stbd-2": "Cannon Stbd 3",
   hangar:           "Hangar",
-  "pd-port":        "PD Port",
-  "pd-stbd":        "PD Stbd",
   "torpedo-bay":    "Torpedo Bay",
-  "pd-cluster":     "PD Cluster",
+  "torpedo-tube-port": "Torpedo Tube (P)",
+  "torpedo-tube-stbd": "Torpedo Tube (S)",
+  "shield-generator":      "Shield Generator",
+  "shield-generator-port": "Shield Gen (P)",
+  "shield-generator-stbd": "Shield Gen (S)",
+  gun:              "Forward Gun",
+  cannon:           "Bow Cannon",
+  "gun-array":      "Ring Cannons",
+  // PD turrets are per-turret (pd-0, pd-1, ...). MODULE_LABEL_FN below
+  // handles them so the HUD doesn't need 14 separate entries.
 };
+
+// Resolve a module name to a friendly label. Per-turret PD modules
+// fall through to a generic "PD Turret N" without polluting the
+// static table.
+export function moduleLabel(name) {
+  if (MODULE_LABELS[name]) return MODULE_LABELS[name];
+  if (name && name.startsWith("pd-")) return "PD Turret " + name.slice(3);
+  if (name && name.startsWith("engine-")) return "Engine " + name.slice(7);
+  return name;
+}
 
 function countBySide(ships) {
   const out = {
     blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0, station: 0 },
     red:  { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0, station: 0 },
   };
-  for (const s of ships) if (!s.dead) out[s.side][s.klass]++;
+  // Surrendered ships are untargetable, drifting hulks — they're out of
+  // the fight, so the on-field roster strip must not count them as active.
+  for (const s of ships) if (!s.dead && !s.surrendered) out[s.side][s.klass]++;
   return out;
+}
+
+// Render the in-depth end-of-battle report (all modes) from game.battleReport.
+// Head-to-head totals, per-class fleet breakdown, MVP, per-capital lines, and
+// a strike-craft aggregate. Returns an HTML string ('' if no report).
+function renderBattleReportHTML(report) {
+  if (!report) return "";
+  const B = report.sides.blue, R = report.sides.red;
+  const dur = report.durationSeconds || 0;
+  const mmss = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
+  const pct = (f) => `${Math.round((f || 0) * 100)}%`;
+  const num = (n) => (n || 0).toLocaleString();
+  const klassLabel = {
+    fighter: "Fighters", bomber: "Bombers", frigate: "Frigates",
+    cruiser: "Cruisers", battleship: "Battleships", carrier: "Carriers", station: "Stations",
+  };
+  // Head-to-head: blue value | label | red value.
+  const cmp = (label, bv, rv) =>
+    `<div class="bstat-cmp-row"><span class="bstat-b">${bv}</span><span class="bstat-lbl">${label}</span><span class="bstat-r">${rv}</span></div>`;
+  const headToHead = `
+    <div class="bstat-cmp">
+      <div class="bstat-cmp-row bstat-cmp-head"><span class="bstat-b">FRIENDLY</span><span class="bstat-lbl"></span><span class="bstat-r">ENEMY</span></div>
+      ${cmp("Committed", B.totals.committed, R.totals.committed)}
+      ${cmp("Survived", B.totals.survivors, R.totals.survivors)}
+      ${cmp("Destroyed", B.totals.lost, R.totals.lost)}
+      ${cmp("Surrendered", B.totals.surrendered, R.totals.surrendered)}
+      ${cmp("Kills", B.totals.kills, R.totals.kills)}
+      ${cmp("Damage dealt", num(B.damageDealt), num(R.damageDealt))}
+      ${cmp("Accuracy", pct(B.accuracy), pct(R.accuracy))}
+      ${cmp("Missiles fired", B.missilesFired, R.missilesFired)}
+    </div>`;
+  // Per-class fleet breakdown for one side (only classes that fielded ships).
+  const fleetRows = (side) => {
+    const rows = [];
+    for (const k of ["battleship", "carrier", "cruiser", "frigate", "bomber", "fighter", "station"]) {
+      const c = side.committed[k] || 0;
+      if (c <= 0) continue;
+      const lost = side.lost[k] || 0, surr = side.surrendered[k] || 0, left = side.survivors[k] || 0;
+      rows.push(`<div class="bstat-fleet-row"><span class="bstat-fleet-k">${klassLabel[k]}</span><span class="bstat-fleet-v">${left}/${c} left${lost ? ` · ${lost} lost` : ""}${surr ? ` · ${surr} surr` : ""}</span></div>`);
+    }
+    return rows.join("") || `<div class="bstat-fleet-row"><span class="bstat-fleet-v">—</span></div>`;
+  };
+  const sideDot = (side) => `<span class="bstat-dot bstat-dot-${side}"></span>`;
+  const mvp = report.mvp ? `
+    <div class="bstat-mvp">
+      <span class="bstat-mvp-label">⭐ MVP</span>
+      <span class="bstat-mvp-name">${sideDot(report.mvp.side)}${report.mvp.name}</span>
+      <span class="bstat-mvp-stat">${report.mvp.kills} kills · ${num(report.mvp.damageDealt)} dmg</span>
+    </div>` : "";
+  // Per-capital lines (sorted blue-first, kills desc in finalize).
+  const fateLabel = { alive: "survived", lost: "lost", surrendered: "surrendered" };
+  const capRows = report.capitals.length ? report.capitals.map((c) =>
+    `<div class="bstat-cap-row bstat-fate-${c.fate}">
+      <span class="bstat-cap-name">${sideDot(c.side)}${c.isPlayer ? "★ " : ""}${c.name}</span>
+      <span class="bstat-cap-klass">${c.klass}</span>
+      <span class="bstat-cap-kd">${c.kills}K · ${num(c.damageDealt)}dmg</span>
+      <span class="bstat-cap-fate">${fateLabel[c.fate] || c.fate}</span>
+    </div>`).join("") : `<div class="bstat-cap-row"><span class="bstat-cap-name">No capital ships engaged.</span></div>`;
+  const sc = report.smallCraft;
+  const scLine = (label, side, o) =>
+    `<div class="bstat-sc-row">${sideDot(side)}<span class="bstat-sc-lbl">${label}</span><span class="bstat-sc-v">${o.count} craft · ${o.kills} kills · ${num(o.damage)} dmg</span></div>`;
+  return `
+    <div class="bstat-report">
+      <div class="bstat-title">BATTLE REPORT <span class="bstat-duration">⏱ ${mmss}</span></div>
+      ${headToHead}
+      <div class="bstat-cols">
+        <div class="bstat-col">
+          <div class="bstat-section-title bstat-blue">FRIENDLY FLEET</div>
+          ${fleetRows(B)}
+        </div>
+        <div class="bstat-col">
+          <div class="bstat-section-title bstat-red">ENEMY FLEET</div>
+          ${fleetRows(R)}
+        </div>
+      </div>
+      ${mvp}
+      <div class="bstat-section-title">CAPITAL SHIPS</div>
+      <div class="bstat-cap-list">${capRows}</div>
+      <div class="bstat-section-title">STRIKE CRAFT</div>
+      <div class="bstat-sc-list">
+        ${scLine("Friendly", "blue", sc.blue)}
+        ${scLine("Enemy", "red", sc.red)}
+      </div>
+    </div>`;
 }
 
 function moduleBarColor(frac) {
@@ -82,6 +199,13 @@ export class BattleHUD {
     spectateBtn.textContent = "SPECTATE";
     spectateBtn.style.pointerEvents = "auto";
     topRight.appendChild(spectateBtn);
+    // COMMAND pill — toggle the mid-battle admiral view (TAKE COMMAND /
+    // RESUME PILOT). Only meaningful when the player is piloting a ship;
+    // hidden in standalone admiral mode + after elimination (sync gates it).
+    const commandBtn = this._createEl("button", "battle-pill", "command-btn");
+    commandBtn.textContent = "TAKE COMMAND";
+    commandBtn.style.pointerEvents = "auto";
+    topRight.appendChild(commandBtn);
     // SETTINGS pill — opens the menu's settings overlay mid-match so
     // the player can mute music / SFX without quitting.
     const settingsBtn = this._createEl("button", "battle-pill", "battle-settings-btn");
@@ -131,7 +255,8 @@ export class BattleHUD {
     targetPanel.setAttribute("aria-hidden", "true");
     targetPanel.innerHTML = `
       <div class="target-header">
-        <span class="target-label">MARKED</span>
+        <span class="target-icon" id="target-icon" aria-hidden="true"></span>
+        <span class="target-label" id="target-label">TARGET</span>
         <span class="target-name" id="target-name"></span>
       </div>
       <div class="target-bars" id="target-bars"></div>
@@ -159,11 +284,6 @@ export class BattleHUD {
         <div class="vital-bar"><div class="vital-fill shield-fill" id="shield-fill"></div></div>
         <span class="vital-value" id="shield-value"></span>
       </div>
-      <div class="vitals-row">
-        <span class="vital-label">HULL</span>
-        <div class="vital-bar"><div class="vital-fill hull-fill" id="hull-fill"></div></div>
-        <span class="vital-value" id="hull-value"></span>
-      </div>
       <div class="vitals-row" id="vitals-gun-row" style="display:none;">
         <span class="vital-label" id="gun-label">GUN</span>
         <div class="vital-bar"><div class="vital-fill gun-fill" id="gun-fill"></div></div>
@@ -184,9 +304,16 @@ export class BattleHUD {
     matchover.innerHTML = `
       <div class="matchover-title" id="matchover-title"></div>
       <div class="matchover-subtitle" id="matchover-subtitle"></div>
+      <div class="matchover-aar" id="matchover-aar"></div>
       <div class="matchover-prompt" id="matchover-prompt"></div>
     `;
     this._root.appendChild(matchover);
+
+    // ---- Captain Comms strip (Tier 39) ----
+    const comms = this._createEl("div", "captain-comms", "captain-comms");
+    comms.setAttribute("aria-hidden", "true");
+    this._captainCommsEl = comms;
+    this._root.appendChild(comms);
 
     // ---- Spectate pill ----
     const spectatePill = this._createEl("div", "spectate-pill", "spectate-pill");
@@ -202,22 +329,40 @@ export class BattleHUD {
 
     // ---- Action cluster ----
     const actionCluster = this._createEl("div", "action-cluster", "action-cluster");
+    // Inline SVG icons: crosshair for primary fire, missile for the
+    // single-shot launcher, double-chevron for boost. Crisp at any
+    // pixel density and respects currentColor for theming.
     actionCluster.innerHTML = `
       <button class="action-btn fire-btn" id="fire-btn" aria-label="Fire primary weapon">
         <div class="btn-glow"></div>
-        <span class="btn-icon">&#x26A1;</span>
-        <span class="btn-label">STRIKE</span>
+        <svg class="btn-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+          <circle cx="12" cy="12" r="2.5" fill="currentColor"/>
+          <line x1="12" y1="1.5" x2="12" y2="6"  stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="18"  x2="12" y2="22.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="1.5" y1="12" x2="6"  y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="18"  y1="12" x2="22.5" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="btn-label">FIRE</span>
       </button>
       <button class="action-btn missile-btn" id="missile-btn" aria-label="Fire missile">
         <div class="btn-glow"></div>
-        <span class="btn-icon">&#x1F680;</span>
-        <span class="btn-label">SPC</span>
+        <svg class="btn-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+          <path d="M12 2 L15 9 L15 17 L12 20 L9 17 L9 9 Z" fill="currentColor" fill-opacity="0.55" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <line x1="9"  y1="14" x2="6"  y2="18" stroke="currentColor" stroke-width="1.6"/>
+          <line x1="15" y1="14" x2="18" y2="18" stroke="currentColor" stroke-width="1.6"/>
+          <circle cx="12" cy="11" r="1.4" fill="#0a1424"/>
+        </svg>
+        <span class="btn-label">MISSILE</span>
         <div class="btn-cooldown" id="missile-cooldown"></div>
       </button>
       <button class="action-btn boost-btn" id="boost-btn" aria-label="Speed boost">
         <div class="btn-glow"></div>
-        <span class="btn-icon">&#x25B2;</span>
-        <span class="btn-label">CHARGE</span>
+        <svg class="btn-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+          <path d="M12 3 L18 11 L13.5 11 L13.5 21 L10.5 21 L10.5 11 L6 11 Z" fill="currentColor" fill-opacity="0.55" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+        <span class="btn-label">BOOST</span>
+        <div class="btn-cooldown" id="boost-cooldown"></div>
       </button>
     `;
     this._root.appendChild(actionCluster);
@@ -230,21 +375,43 @@ export class BattleHUD {
     const admiralPanel = this._createEl("div", "admiral-panel", "admiral-panel");
     admiralPanel.setAttribute("aria-hidden", "true");
     admiralPanel.innerHTML = `
-      <div class="admiral-title">FLEET COMMAND</div>
-      <div class="admiral-master" id="admiral-master">
-        <button class="admiral-master-btn master-hold"  data-master="hold">ALL HOLD</button>
-        <button class="admiral-master-btn master-free"  data-master="free">ALL FREE</button>
-        <button class="admiral-master-btn master-press" data-master="press">ALL PRESS</button>
-        <button class="admiral-master-btn master-missiles" id="admiral-master-missiles">MISSILES: FREE</button>
+      <div class="admiral-header" id="admiral-header">
+        <div class="admiral-title">FLEET COMMAND</div>
+        <button class="admiral-min-btn" id="admiral-min-btn" title="Minimise panel" aria-label="Minimise fleet command panel">–</button>
       </div>
-      <div class="admiral-focus" id="admiral-focus">
-        <span class="focus-label">FOCUS FIRE</span>
-        <span class="focus-name" id="admiral-focus-name">Tap an enemy to focus</span>
-        <button class="focus-clear" id="admiral-focus-clear" title="Clear focus">&times;</button>
+      <div class="admiral-body" id="admiral-body">
+        <div class="admiral-master" id="admiral-master">
+          <button class="admiral-master-btn master-free"  data-master="engage">ALL ENGAGE</button>
+          <button class="admiral-master-btn master-hold"  data-master="hold">ALL HOLD</button>
+          <button class="admiral-master-btn master-press" data-master="fallback">ALL FALL BACK</button>
+          <button class="admiral-master-btn master-focus" id="admiral-master-focus">ALL FOCUS</button>
+          <button class="admiral-master-btn master-missiles" id="admiral-master-missiles">MISSILES: FREE</button>
+        </div>
+        <div class="admiral-focus" id="admiral-focus">
+          <span class="focus-label">FOCUS FIRE</span>
+          <span class="focus-name" id="admiral-focus-name">Tap an enemy to focus</span>
+          <button class="focus-clear" id="admiral-focus-clear" title="Clear focus">&times;</button>
+        </div>
+        <div class="admiral-grid" id="admiral-grid"></div>
       </div>
-      <div class="admiral-grid" id="admiral-grid"></div>
     `;
     this._root.appendChild(admiralPanel);
+    // Minimise / restore — collapses the panel to just its header so the
+    // player can see the battle, then expand it again. HUD-local UI
+    // state; tapping the header or the button toggles it.
+    this._admiralMinimized = false;
+    const minBtn = admiralPanel.querySelector("#admiral-min-btn");
+    const header = admiralPanel.querySelector("#admiral-header");
+    const toggleMin = (ev) => {
+      ev.stopPropagation();
+      this._admiralMinimized = !this._admiralMinimized;
+      admiralPanel.classList.toggle("minimized", this._admiralMinimized);
+      if (minBtn) minBtn.textContent = this._admiralMinimized ? "+" : "–";
+    };
+    if (minBtn) minBtn.addEventListener("click", toggleMin);
+    // Tapping the header (when minimised) restores; when expanded the
+    // header tap also minimises for a big touch target.
+    if (header) header.addEventListener("click", toggleMin);
 
     // Command toast — brief floating caption at top-centre that flashes
     // when the admiral issues an order. Gives instant feedback so the
@@ -261,8 +428,6 @@ export class BattleHUD {
     this._shieldRow = this._root.querySelector("#vitals-shield-row");
     this._shieldFill = this._root.querySelector("#shield-fill");
     this._shieldValue = this._root.querySelector("#shield-value");
-    this._hullFill = this._root.querySelector("#hull-fill");
-    this._hullValue = this._root.querySelector("#hull-value");
     this._gunRow = this._root.querySelector("#vitals-gun-row");
     this._gunFill = this._root.querySelector("#gun-fill");
     this._gunValue = this._root.querySelector("#gun-value");
@@ -272,11 +437,15 @@ export class BattleHUD {
     this._matchoverPanel = this._root.querySelector("#matchover-panel");
     this._matchoverTitle = this._root.querySelector("#matchover-title");
     this._matchoverSubtitle = this._root.querySelector("#matchover-subtitle");
+    this._matchoverAAR = this._root.querySelector("#matchover-aar");
     this._matchoverPrompt = this._root.querySelector("#matchover-prompt");
     this._spectatePill = this._root.querySelector("#spectate-pill");
     this._spectateShip = this._root.querySelector("#spectate-ship");
     this._targetPanelEl = this._root.querySelector("#target-panel");
     this._targetName = this._root.querySelector("#target-name");
+    this._targetLabel = this._root.querySelector("#target-label");
+    this._targetIcon = this._root.querySelector("#target-icon");
+    this._targetIconKey = null;  // cache so we skip innerHTML when target class unchanged
     this._targetBars = this._root.querySelector("#target-bars");
     this._targetModules = this._root.querySelector("#target-modules");
     this._minimapCount = this._root.querySelector("#minimap-count");
@@ -307,6 +476,15 @@ export class BattleHUD {
         this._input.spectateBtn.justPressed = true;
       }
     });
+
+    // ---- Wire COMMAND button click (TAKE COMMAND / RESUME PILOT) ----
+    // Sets the edge flag main.js#878 drains via consumeAdmiralToggle().
+    this._commandBtnEl = this._root.querySelector("#command-btn");
+    if (this._commandBtnEl) {
+      this._commandBtnEl.addEventListener("click", () => {
+        if (this._input) this._input._admiralToggleEdge = true;
+      });
+    }
 
     // ---- Wire QUIT button click ----
     // Sets an InputManager flag that main.js drains every frame, the
@@ -413,7 +591,11 @@ export class BattleHUD {
     for (const klass of CLASS_ORDER) {
       const cell = this._createEl("div", "roster-cell");
       cell.dataset.klass = klass;
-      cell.innerHTML = `<div class="cell-glyph">${CLASS_GLYPH[klass] || "?"}</div><div class="cell-count">0</div>`;
+      // Ship-silhouette icon instead of a letter chip — players read
+      // the fleet composition at a glance instead of decoding "Fr".
+      // Title attribute (CLASS_SHORT_LABELS) keeps accessibility solid.
+      cell.title = CLASS_SHORT_LABELS[klass] || klass;
+      cell.innerHTML = `<div class="cell-glyph">${classIconSvg(klass, { size: 22 })}</div><div class="cell-count">0</div>`;
       grid.appendChild(cell);
       this._sideCells[sideKey].push(cell);
     }
@@ -459,7 +641,10 @@ export class BattleHUD {
     // 9. Match over panel
     this._syncMatchOver(game);
 
-    // 10. Spectate pill
+    // 10. Captain comms strip
+    this._syncCaptainComms(game);
+
+    // 11. Spectate pill
     this._syncSpectate(game);
 
     // 11. Virtual sticks
@@ -484,10 +669,17 @@ export class BattleHUD {
     setVis(this._root.querySelector("#damage-indicator"), piloting);
     setVis(this._root.querySelector("#compass"), piloting);
     setVis(this._root.querySelector("#lock-reticle"), piloting);
-    setVis(this._root.querySelector("#respawn-panel"), piloting);
-    // Vitals: hide only in admiral (in spectate it tracks the locked
-    // target, which is useful chrome).
-    setVis(this._root.querySelector("#vitals-bar"), !admiral);
+    // Respawn panel doubles as the elimination notice — keep it visible
+    // during the post-death banner window even though we've dropped to
+    // spectate (piloting is false).
+    setVis(this._root.querySelector("#respawn-panel"), piloting || game.eliminationNoticeTimer > 0);
+    // Vitals: hide in admiral AND in spectate. During spectate the
+    // target panel (left side) already shows the locked ship's shield
+    // + module readouts, so the bottom vitals bar showing the SAME
+    // shield at 100% was redundant + confusing (read as "the player
+    // is alive at full shields" when in fact the player is dead and
+    // observing). Only piloting needs the bottom strip.
+    setVis(this._root.querySelector("#vitals-bar"), piloting);
     // Right virtual stick (aim) is meaningless without a piloted ship.
     setVis(this._root.querySelector("#vstick-right"), piloting);
     // Admiral mode is "you ARE the admiral" — the "OBSERVING <ship>"
@@ -496,6 +688,23 @@ export class BattleHUD {
     // panel. Keep it for non-admiral spectate where it actually says
     // which ship the camera is locked to.
     setVis(this._root.querySelector("#spectate-pill"), !admiral);
+    // SPECTATE pill: hide in admiral view. In admiral-by-toggle the player
+    // is BOTH spectating and admiral, so the pill would read "RETURN TO
+    // FIELD" and, if clicked, exitSpectate retakes the ship but leaves
+    // admiralMode stuck on → piloting with no action cluster / aim stick.
+    // RESUME PILOT (the command pill) is the sole, correct return path.
+    setVis(this._spectateBtnEl, !admiral);
+    // COMMAND pill (TAKE COMMAND / RESUME PILOT). Hidden in standalone
+    // admiral mode (the FLEET COMMAND panel is permanently up there, so a
+    // toggle is meaningless) and after the player is eliminated (no ship
+    // to return to). Label flips to RESUME PILOT once admiral was entered
+    // via the mid-battle toggle.
+    const standaloneAdmiral = admiral && !game._admiralByToggle;
+    setVis(this._commandBtnEl, !standaloneAdmiral && !game.playerEliminated);
+    if (this._commandBtnEl) {
+      this._commandBtnEl.textContent =
+        (admiral && game._admiralByToggle) ? "RESUME PILOT" : "TAKE COMMAND";
+    }
   }
 
   _syncSideStrips(game, viewW) {
@@ -541,13 +750,10 @@ export class BattleHUD {
       if (hasShield) {
         const shieldFrac = Math.max(0, Math.min(1, ship.shield / ship.shieldMax));
         this._shieldFill.style.width = `${shieldFrac * 100}%`;
-        this._shieldValue.textContent = `${Math.max(0, Math.round(ship.shield))} / ${ship.shieldMax}`;
+        // Shield HP is a hidden mechanic — player sees active/failed only.
+        if (this._shieldValue) this._shieldValue.textContent = "";
       }
 
-      const hullFrac = Math.max(0, Math.min(1, ship.hp / ship.hpMax));
-      this._hullFill.style.width = `${hullFrac * 100}%`;
-      this._hullFill.classList.toggle("critical", hullFrac < 0.33);
-      this._hullValue.textContent = `${Math.max(0, Math.round(ship.hp))} / ${ship.hpMax}`;
 
       this._gunRow.style.display = hasAmmo ? "" : "none";
       if (hasAmmo) {
@@ -568,8 +774,6 @@ export class BattleHUD {
       // Hide vitals during respawn
       this._shieldRow.style.display = "none";
       this._gunRow.style.display = "none";
-      this._hullFill.style.width = "0%";
-      this._hullValue.textContent = "";
     }
   }
 
@@ -587,7 +791,7 @@ export class BattleHUD {
     // during respawn and a paranoid extra layer here guards against
     // any future ship-removal-timing change.
     const liveShips = game.ships.filter(
-      (s) => !s.dead && !s.wreckSpawned && (s.hp == null || s.hp > 0),
+      (s) => !s.dead && !s.surrendered && !s.wreckSpawned && (s.hp == null || s.hp > 0),
     );
     this._minimapCount.textContent = `${liveShips.length} units`;
 
@@ -640,10 +844,28 @@ export class BattleHUD {
     const raceName = (RACES[ship.race] && RACES[ship.race].name) || "Unknown";
     const klassName = (CLASSES[ship.klass] && CLASSES[ship.klass].name) || ship.klass;
     this._targetName.textContent = `${raceName} ${klassName}`;
+    // Header label was hardcoded "MARKED" (red), which read as a
+    // "this is a marked rival" badge on every observed ship — including
+    // allies. Show the correct relationship (ALLIED / HOSTILE) and
+    // colour it from the side palette. Future: if a per-ship rival
+    // flag is added (e.g. ship.isRival), swap to "MARKED" in red.
+    if (this._targetLabel) {
+      const palette = SIDES[ship.side] || SIDES.blue;
+      this._targetLabel.textContent = (palette.name || "TARGET").toUpperCase();
+      this._targetLabel.style.color = palette.primary;
+      this._targetLabel.style.borderColor = palette.primary;
+    }
+    // Target ship-class icon — refreshed only when the class actually
+    // changes (cheap inner-HTML guard so the SVG isn't re-parsed every
+    // frame the panel is open).
+    const iconKey = ship.klass + "|" + ship.race;
+    if (this._targetIcon && iconKey !== this._targetIconKey) {
+      this._targetIcon.innerHTML = classIconSvg(ship.klass, { size: 28, race: ship.race });
+      this._targetIconKey = iconKey;
+    }
 
-    // Bars: shield (if any) → armor (capitals only) → hull. Mirrors the
-    // damage-resolution order so the readout matches what the player
-    // sees in combat.
+    // Target panel shows shield bubble status only — HP and armor are
+    // hidden mechanics; the player reads health from the block grid.
     let barsHtml = "";
     if (ship.shieldMax > 0) {
       const shieldFrac = Math.max(0, Math.min(1, ship.shield / ship.shieldMax));
@@ -653,27 +875,13 @@ export class BattleHUD {
           <div class="target-bar"><div class="target-bar-fill" style="width:${shieldFrac * 100}%;background:#5cf;"></div></div>
         </div>`;
     }
-    if (ship.armorMax > 0) {
-      const armorFrac = Math.max(0, Math.min(1, ship.armor / ship.armorMax));
-      barsHtml += `
-        <div class="target-bar-row">
-          <span style="font-size:9px;color:#9bd;width:36px;">ARMOR</span>
-          <div class="target-bar"><div class="target-bar-fill" style="width:${armorFrac * 100}%;background:#c93;"></div></div>
-        </div>`;
-    }
-    const hullFrac = Math.max(0, Math.min(1, ship.hp / ship.hpMax));
-    barsHtml += `
-      <div class="target-bar-row">
-        <span style="font-size:9px;color:#9bd;width:36px;">HULL</span>
-        <div class="target-bar"><div class="target-bar-fill" style="width:${hullFrac * 100}%;background:#4f6;"></div></div>
-      </div>`;
     this._targetBars.innerHTML = barsHtml;
 
     // Module rows
     let modulesHtml = "";
     if (ship.modules) {
       for (const m of ship.modules) {
-        const label = MODULE_LABELS[m.name] || m.name;
+        const label = moduleLabel(m.name);
         if (m.disabled) {
           modulesHtml += `<div class="target-module-row destroyed"><span class="target-module-name">${label}</span><span class="target-module-hp">DESTROYED</span></div>`;
         } else {
@@ -805,14 +1013,25 @@ export class BattleHUD {
   }
 
   _syncRespawn(game) {
-    if (game.respawnTimer > 0) {
+    // The player ship no longer respawns — on death the pilot drops to
+    // spectate and watches the fleet. This panel is now the brief
+    // ELIMINATION NOTICE shown for a few seconds after death:
+    //   - KIA (Frontier survival roll failed)  → red "KIA — CAREER ENDED"
+    //   - ejected / non-Frontier               → "SHIP LOST — OBSERVING"
+    // It auto-hides when game.eliminationNoticeTimer drains.
+    if (game.eliminationNoticeTimer > 0) {
+      const kia = game.playerKIAEvent;
+      const isKIA = !!(kia && kia.survived === false);
       this._respawnPanel.classList.add("active");
       this._respawnPanel.setAttribute("aria-hidden", "false");
-      this._respawnTimer.textContent = game.respawnTimer.toFixed(1) + "s";
-    } else {
-      this._respawnPanel.classList.remove("active");
-      this._respawnPanel.setAttribute("aria-hidden", "true");
+      this._respawnPanel.classList.toggle("kia", isKIA);
+      this._respawnPanel.querySelector(".respawn-label").textContent =
+        isKIA ? "KIA — CAREER ENDED" : "SHIP LOST — OBSERVING";
+      this._respawnTimer.textContent = isKIA ? "" : "No respawn — your fleet fights on";
+      return;
     }
+    this._respawnPanel.classList.remove("active", "kia");
+    this._respawnPanel.setAttribute("aria-hidden", "true");
   }
 
   _syncMatchOver(game) {
@@ -823,6 +1042,9 @@ export class BattleHUD {
       const isRoguelite = game.mode === "roguelite";
       const won = game.winner === "blue";
       const stalled = !!game.endedByStall;
+      // In-depth per-battle report (all modes). Appended below any mode-
+      // specific AAR / career-summary content.
+      const battleHtml = renderBattleReportHTML(game.battleReport);
 
       // Career-summary takes priority — set on game by main.js's
       // runEnded handler when the run is over (either war-won or any
@@ -832,11 +1054,116 @@ export class BattleHUD {
       if (isRoguelite && summary) {
         const headline = summary.won ? "WAR WON" : "CAREER ENDED";
         this._matchoverTitle.textContent = headline;
+        // Stamp-style reveal animation. Re-trigger by removing+adding
+        // the class with a reflow in between so the keyframe restarts
+        // even when the same headline lands twice (e.g. after a
+        // panel re-render). Tint matches result: green for victory,
+        // warm red for defeat — title becomes the visual anchor.
+        this._matchoverTitle.style.color = summary.won ? "#afe6b0" : "#f3b0b0";
+        this._matchoverTitle.style.textShadow = summary.won
+          ? "0 0 18px rgba(140, 220, 150, 0.55)"
+          : "0 0 18px rgba(240, 110, 110, 0.45)";
+        this._matchoverTitle.classList.remove("runend-stamp");
+        void this._matchoverTitle.offsetWidth;
+        this._matchoverTitle.classList.add("runend-stamp");
         const handle = `${summary.rank}${summary.callsign ? ` ${summary.callsign}` : ""}`;
         const progress = `Act ${summary.act}/${summary.actsTotal} · ${summary.visitedCount} jumps`;
         this._matchoverSubtitle.innerHTML =
           `<strong>${handle}</strong><br>${summary.flavor || ""}<br><span style="opacity:0.65;font-size:0.85em;">${progress}</span>`;
         this._matchoverSubtitle.style.color = summary.won ? "#bfd" : "#fdb";
+        // Final stats breakdown — read summary.stats stamped by main.js.
+        if (this._matchoverAAR && summary.stats) {
+          const s = summary.stats;
+          const totalKills = Object.values(s.shipsKilled || {}).reduce((a, b) => a + b, 0);
+          const totalLost  = Object.values(s.shipsLost   || {}).reduce((a, b) => a + b, 0);
+          const stat = (label, value) =>
+            `<div class="endstats-row"><span class="endstats-label">${label}</span><span class="endstats-value">${value}</span></div>`;
+          // Achievements-unlocked block (Tier 43). Names are surfaced
+          // from the run.log entries that recordRunEnd wrote, so we
+          // don't need a lookup against ACHIEVEMENTS here.
+          const achs = (summary.achievementsUnlocked || []);
+          let achHtml = "";
+          if (achs.length > 0) {
+            achHtml = `
+              <div class="endstats-section-title" style="color:#ffd680;">ACHIEVEMENTS UNLOCKED</div>
+              <div class="endstats-ach-list">
+                ${achs.map((id) => `<div class="endstats-ach-row">✦ ${id.replace(/-/g, " ").toUpperCase()}</div>`).join("")}
+              </div>
+            `;
+          }
+          // Shipyard credit breakdown (Phase 2). Stamped on game.runSummary
+          // by main.js's runEnded subscriber. Renders per-class kills,
+          // act/boss/node bonuses, total, and the new balance the player
+          // walks away with so the payoff feels tangible.
+          let shipyardHtml = "";
+          if (summary.shipyard) {
+            const sy = summary.shipyard;
+            const b = sy.breakdown || {};
+            const rows = [];
+            if (b.kills) {
+              const klassLabel = {
+                fighter: "Fighters", bomber: "Bombers", frigate: "Frigates",
+                cruiser: "Cruisers", battleship: "Battleships",
+                carrier: "Carriers", station: "Stations",
+              };
+              for (const k of ["fighter","bomber","frigate","cruiser","battleship","carrier","station"]) {
+                const entry = b.kills[k];
+                if (!entry || entry.count <= 0) continue;
+                rows.push(`<div class="endstats-row"><span class="endstats-label">${klassLabel[k] || k} × ${entry.count}</span><span class="endstats-value">+${entry.credits} cr</span></div>`);
+              }
+            }
+            if (b.nodesCleared && b.nodesCleared.count > 0) {
+              rows.push(`<div class="endstats-row"><span class="endstats-label">Nodes cleared × ${b.nodesCleared.count}</span><span class="endstats-value">+${b.nodesCleared.credits} cr</span></div>`);
+            }
+            if (b.actBonus > 0) {
+              rows.push(`<div class="endstats-row"><span class="endstats-label">Act ${summary.act} survival bonus</span><span class="endstats-value">+${b.actBonus} cr</span></div>`);
+            }
+            if (b.bossBonus > 0) {
+              rows.push(`<div class="endstats-row"><span class="endstats-label">Boss kill bonus</span><span class="endstats-value">+${b.bossBonus} cr</span></div>`);
+            }
+            if (b.warWonBonus > 0) {
+              rows.push(`<div class="endstats-row endstats-warbonus"><span class="endstats-label">WAR WON</span><span class="endstats-value">+${b.warWonBonus} cr</span></div>`);
+            }
+            shipyardHtml = `
+              <div class="endstats-section-title" style="color:#fc8;">SHIPYARD CREDITS EARNED</div>
+              <div class="endstats-grid endstats-shipyard">
+                ${rows.length > 0 ? rows.join("") : `<div class="endstats-row"><span class="endstats-label">(none)</span><span class="endstats-value">0 cr</span></div>`}
+              </div>
+              <div class="endstats-shipyard-total">
+                <span>EARNED THIS RUN</span>
+                <span class="endstats-shipyard-total-value">+${sy.payout || 0} cr</span>
+              </div>
+              <div class="endstats-shipyard-balance">
+                <span>New balance:</span>
+                <span class="endstats-shipyard-balance-value">${sy.newBalance || 0} cr</span>
+              </div>
+            `;
+          }
+          this._matchoverAAR.innerHTML = `
+            <div class="endstats-block">
+              <div class="endstats-section-title">FINAL TALLIES</div>
+              <div class="endstats-grid">
+                ${stat("Ships destroyed", totalKills)}
+                ${stat("Ships lost", totalLost)}
+                ${stat("Battles cleared", s.battlesCleared || 0)}
+                ${stat("Elites cleared", s.elitesCleared || 0)}
+                ${stat("Bosses killed", s.bossesKilled || 0)}
+                ${stat("Rivals down", s.rivalsDefeated || 0)}
+                ${stat("Credits earned", s.creditsEarned || 0)}
+                ${stat("Credits spent", s.creditsSpent || 0)}
+                ${stat("Boons acquired", s.boonsAcquired || 0)}
+                ${stat("Contracts complete", s.contractsCompleted || 0)}
+              </div>
+              ${shipyardHtml}
+              ${achHtml}
+            </div>
+            ${battleHtml}
+          `;
+          this._matchoverAAR.style.display = "block";
+        } else if (this._matchoverAAR) {
+          this._matchoverAAR.innerHTML = "";
+          this._matchoverAAR.style.display = "none";
+        }
         this._matchoverPrompt.textContent = "Tap to return to home";
         return;
       }
@@ -858,12 +1185,124 @@ export class BattleHUD {
         this._matchoverSubtitle.textContent = "";
       }
 
+      // After-action report (Frontier only). Two halves:
+      //   - Battlefield-promotion narrative block (headline + body +
+      //     reward chips). The "step reward" is now a flavored beat,
+      //     not a flat numeric drop.
+      //   - LOST / DESTROYED tally row below.
+      // Tallies + promotion come from game.lastBattleReport which
+      // main.js stashed from captureBattleOutcome.
+      if (this._matchoverAAR) {
+        const report = game.lastBattleReport;
+        if (isRoguelite && report) {
+          const fmtCounts = (counts) => {
+            const entries = [];
+            for (const k of ["battleship", "carrier", "cruiser", "frigate", "bomber", "fighter"]) {
+              const n = counts[k] || 0;
+              if (n > 0) entries.push(`${n} ${k}${n > 1 ? "s" : ""}`);
+            }
+            return entries.length > 0 ? entries.join(", ") : "—";
+          };
+          const promo = report.promo || null;
+          const reward = (promo && promo.reward) || report.reward || {};
+          const rewardChips = [];
+          if (reward.fighter > 0) rewardChips.push(`+${reward.fighter} fighter`);
+          if (reward.bomber > 0)  rewardChips.push(`+${reward.bomber} bomber`);
+          if (reward.frigate > 0) rewardChips.push(`+${reward.frigate} frigate`);
+          if (reward.credits > 0) rewardChips.push(`+${reward.credits} credits`);
+          const lostCapNames = (report.lostCapitals || [])
+            .map((c) => c.name || c.klass)
+            .filter(Boolean);
+          // Captured craft this battle (surrendered enemies pressed into
+          // the fleet). Grouped by class for the count, names listed below.
+          const captured = report.captured || [];
+          const capturedCounts = {};
+          for (const c of captured) capturedCounts[c.klass] = (capturedCounts[c.klass] || 0) + 1;
+          const capturedNames = captured.map((c) => c.name).filter(Boolean);
+          const capturedBlock = captured.length > 0 ? `
+            <div class="aar-row">
+              <div class="aar-col aar-captured">
+                <div class="aar-label">CAPTURED</div>
+                <div class="aar-value">${fmtCounts(capturedCounts)}</div>
+                ${capturedNames.length > 0 ? `<div class="aar-note">${capturedNames.join(", ")}</div>` : ""}
+              </div>
+            </div>
+          ` : "";
+          const promoBlock = promo ? `
+            <div class="aar-promo aar-promo-${promo.type || "recruit"}">
+              <div class="aar-promo-headline">${promo.headline}</div>
+              <div class="aar-promo-body">${promo.body || ""}</div>
+              <div class="aar-promo-rewards">${rewardChips.length > 0 ? rewardChips.join(" · ") : ""}</div>
+            </div>
+          ` : "";
+          this._matchoverAAR.innerHTML = `
+            ${promoBlock}
+            <div class="aar-row">
+              <div class="aar-col aar-lost">
+                <div class="aar-label">LOST</div>
+                <div class="aar-value">${fmtCounts(report.lost || {})}</div>
+                ${lostCapNames.length > 0 ? `<div class="aar-note">${lostCapNames.join(", ")}</div>` : ""}
+              </div>
+              <div class="aar-col aar-killed">
+                <div class="aar-label">DESTROYED</div>
+                <div class="aar-value">${fmtCounts(report.killed || {})}</div>
+              </div>
+            </div>
+            ${capturedBlock}
+            ${battleHtml}
+          `;
+          this._matchoverAAR.style.display = "block";
+        } else {
+          // Non-roguelite modes (skirmish / custom / open / defend): the
+          // in-depth battle report is the whole after-action panel.
+          this._matchoverAAR.innerHTML = battleHtml;
+          this._matchoverAAR.style.display = battleHtml ? "block" : "none";
+        }
+      }
+
       const prompt = isRoguelite ? "Tap to return to starmap" : "Tap to continue";
       this._matchoverPrompt.textContent = prompt;
     } else {
       this._matchoverPanel.classList.remove("active");
       this._matchoverPanel.setAttribute("aria-hidden", "true");
     }
+  }
+
+  // Captain comms strip (Tier 39). Reads game.captainComms, shows
+  // the last 4 lines within COMM_TTL ms; fades by age. Cheap signature
+  // so we only re-render when the queue changes.
+  _syncCaptainComms(game) {
+    if (!this._captainCommsEl) return;
+    const COMM_TTL = 6000; // ms a line stays visible
+    const FADE_TAIL = 1500; // last ms gets fade
+    const now = performance.now();
+    const all = Array.isArray(game.captainComms) ? game.captainComms : [];
+    // Filter to recent + take last 4.
+    const visible = all.filter((c) => now - c.ts < COMM_TTL).slice(-4);
+    const sig = visible.map((c) => `${c.ts}|${c.text}`).join("\n");
+    if (sig === this._captainCommsSig) return;
+    this._captainCommsSig = sig;
+    if (visible.length === 0) {
+      this._captainCommsEl.innerHTML = "";
+      this._captainCommsEl.style.display = "none";
+      return;
+    }
+    let html = "";
+    for (const c of visible) {
+      const age = now - c.ts;
+      const fade = age > (COMM_TTL - FADE_TAIL)
+        ? Math.max(0, 1 - (age - (COMM_TTL - FADE_TAIL)) / FADE_TAIL)
+        : 1;
+      html += `
+        <div class="comm-line" style="opacity:${fade.toFixed(2)};">
+          <span class="comm-speaker">${c.captain}</span>
+          <span class="comm-ship">${c.ship}</span>
+          <span class="comm-text">${c.text}</span>
+        </div>
+      `;
+    }
+    this._captainCommsEl.innerHTML = html;
+    this._captainCommsEl.style.display = "flex";
   }
 
   _syncSpectate(game) {
@@ -905,9 +1344,15 @@ export class BattleHUD {
       }
     }
 
-    // Boost button
+    // Boost button — pass the player's current charge fraction so the
+    // button's cooldown overlay shows drain + recharge live.
     if (this._input && this._input.boostBtn) {
-      this._input.boostBtn._updateDOM(this._boostBtn);
+      const player = game.ships.find((s) => s.isPlayer && !s.dead);
+      let frac = 1;  // default full when ship has no boost spec
+      if (player && player.boostMax > 0) {
+        frac = Math.max(0, Math.min(1, player.boostCharge / player.boostMax));
+      }
+      this._input.boostBtn._updateDOM(this._boostBtn, frac);
     }
 
     // Spectate button
@@ -1003,6 +1448,33 @@ export class BattleHUD {
           this._toastAdmiral(`MISSILES · ${next === "hold" ? "HOLD" : "FREE"}`);
         });
       }
+      // ALL FOCUS — toggle every class onto/off the focus target. Restores
+      // the old "tap an enemy and the whole fleet piles on" behavior on
+      // demand (focus is now opt-in per class, not a blanket pin).
+      const masterFocus = this._root.querySelector("#admiral-master-focus");
+      if (masterFocus) {
+        masterFocus.addEventListener("click", () => {
+          if (!game.setPriority) return;
+          const classes = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+          const anyDefault = classes.some((k) => {
+            const d = game.directives && game.directives[k];
+            return d && d.priority !== "focus";
+          });
+          const next = anyDefault ? "focus" : "default";
+          for (const klass of classes) game.setPriority(klass, next);
+          this._toastAdmiral(`ALL FOCUS · ${next === "focus" ? "ON" : "OFF"}`);
+        });
+      }
+    }
+    // Reflect ALL FOCUS state in its label.
+    const masterFocusBtn = this._root.querySelector("#admiral-master-focus");
+    if (masterFocusBtn) {
+      const classes = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+      const allFocus = classes.every((k) => {
+        const d = game.directives && game.directives[k];
+        return d && d.priority === "focus";
+      });
+      masterFocusBtn.classList.toggle("active", allFocus);
     }
     // Reflect current master-missiles state in the button label. Label
     // describes the *current* state ("MISSILES: HOLD" means pods are
@@ -1031,14 +1503,23 @@ export class BattleHUD {
       this._admiralClickHandlers = [];
 
       const classes = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
-      const postures = ["hold", "free", "press"];
+      // 5 stances (compact glyphs for the in-battle grid; full names on hover).
+      const postures = [
+        ["engage", "ENG", "Engage — fight at natural range"],
+        ["charge", "CHG", "Charge — close to point-blank"],
+        ["standoff", "OFF", "Stand off — kite at max range"],
+        ["hold", "HLD", "Hold position — defend, don't advance"],
+        ["fallback", "BCK", "Fall back — retreat, cease fire"],
+      ];
       const missileClasses = new Set(["bomber", "frigate", "cruiser", "battleship"]);
-      const CLASS_GLYPHS = { fighter: "F", bomber: "B", frigate: "Fr", cruiser: "C", battleship: "BB", carrier: "CV" };
+      // Letter glyphs kept here only as accessibility fallback labels; the
+      // admiral cell now renders the ship silhouette via classIconSvg.
+      const CLASS_GLYPHS = { fighter: "F", bomber: "B", frigate: "Fr", cruiser: "C", battleship: "BB", carrier: "CV" };  // eslint-disable-line no-unused-vars
 
       this._admiralGrid.innerHTML = "";
       this._admiralCellEls = {};
       for (const klass of classes) {
-        const d = game.directives[klass] || { posture: "free", missiles: "on" };
+        const d = game.directives[klass] || { stance: "engage", missiles: "on", priority: "default" };
         const cell = document.createElement("div");
         cell.className = "admiral-cell";
 
@@ -1046,28 +1527,47 @@ export class BattleHUD {
         const head = document.createElement("div");
         head.className = "admiral-cell-head";
         head.innerHTML = `
-          <span class="admiral-cell-glyph">${CLASS_GLYPHS[klass] || "?"}</span>
+          <span class="admiral-cell-glyph" title="${CLASS_SHORT_LABELS[klass] || klass}">${classIconSvg(klass, { size: 18 })}</span>
           <span class="admiral-cell-name">${klass.toUpperCase()}</span>
           <span class="admiral-cell-count" data-klass="${klass}">×0</span>
         `;
         cell.appendChild(head);
 
-        // Posture buttons — colour-coded by class.
+        // Stance buttons (5).
         const postureBar = document.createElement("div");
         postureBar.className = "admiral-cell-postures";
-        for (const p of postures) {
+        for (const [stance, label, tip] of postures) {
           const btn = document.createElement("button");
-          btn.className = `posture-btn posture-${p}` + (d.posture === p ? " active" : "");
-          btn.textContent = p.toUpperCase();
+          btn.className = `posture-btn posture-${stance}` + (d.stance === stance ? " active" : "");
+          btn.textContent = label;
+          btn.title = tip;
           const handler = () => {
-            if (game.setPosture) game.setPosture(klass, p);
-            this._toastAdmiral(`${klass.toUpperCase()} · ${p.toUpperCase()}`);
+            if (game.setPosture) game.setPosture(klass, stance);
+            this._toastAdmiral(`${klass.toUpperCase()} · ${label}`);
             btn.classList.add("flash");
             setTimeout(() => btn.classList.remove("flash"), 240);
           };
           btn.addEventListener("click", handler);
           this._admiralClickHandlers.push({ el: btn, fn: handler });
           postureBar.appendChild(btn);
+        }
+
+        // FOCUS toggle — pile this class onto the admiral's tapped target.
+        {
+          const focused = d.priority === "focus";
+          const fBtn = document.createElement("button");
+          fBtn.className = "posture-btn focus-toggle" + (focused ? " active" : "");
+          fBtn.textContent = "FOCUS";
+          fBtn.title = focused ? "Following focus target — tap to release" : "Tap to follow the focus target";
+          const handler = () => {
+            if (game.setPriority) game.setPriority(klass, focused ? "default" : "focus");
+            this._toastAdmiral(`${klass.toUpperCase()} · FOCUS ${focused ? "OFF" : "ON"}`);
+            fBtn.classList.add("flash");
+            setTimeout(() => fBtn.classList.remove("flash"), 240);
+          };
+          fBtn.addEventListener("click", handler);
+          this._admiralClickHandlers.push({ el: fBtn, fn: handler });
+          postureBar.appendChild(fBtn);
         }
 
         if (missileClasses.has(klass)) {

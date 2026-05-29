@@ -7,6 +7,7 @@
  */
 
 import { DEFAULT_INVENTORY } from "./cosmetics.js";
+import { DEFAULT_PLAYER_DESIGN, DEFAULT_OWNED_COMPONENTS } from "./components.js";
 
 const STORAGE_KEY = "aphelion.save.v1";
 const CURRENT_SCHEMA_VERSION = 3;
@@ -38,6 +39,14 @@ const DEFAULT_SAVE = Object.freeze({
   },
   inventory: [...DEFAULT_INVENTORY],
   entitlements: [],
+  // Persistent player-ship design — the Shipyard mutates this between
+  // runs. Each Frontier deploy spawns the player as this ship. Default
+  // matches the stock Terran fighter exactly so saves before this
+  // feature shipped boot identically.
+  playerShip: { ...DEFAULT_PLAYER_DESIGN, modules: { ...DEFAULT_PLAYER_DESIGN.modules } },
+  shipyardCredits: 0,
+  ownedComponents: [...DEFAULT_OWNED_COMPONENTS],
+  ownedHulls: ["fighter"],
   battlePass: null,
   lastLoginEpochMs: null,
   loginStreak: 0,
@@ -87,10 +96,31 @@ const DEFAULT_SAVE = Object.freeze({
       warProgress: { terran: 0, reavers: 0, hegemony: 0, voidsworn: 0 },
       unlockedPerks: [],
       activePerkKey: null,
-      // All four factions are pre-unlocked. This field exists as the
-      // extensibility gate for a future 5th race — append the key here
-      // and the run-setup overlay will auto-pick it up.
-      unlockedFactions: ["terran", "reavers", "hegemony", "voidsworn"],
+      // All factions are pre-unlocked. Append a new race's key here
+      // and the run-setup overlay will auto-pick it up; existing saves
+      // merge via mergeWithDefaults so the addition lands without a
+      // schema bump.
+      unlockedFactions: ["terran", "reavers", "hegemony", "voidsworn", "thren"],
+      // Service Hall meta-progression (Tier 38). Earned per run on
+      // boss kills + run completions; spent on permanent upgrades.
+      servicePoints: 0,
+      // Per-upgrade rank (0 = not purchased). Keys mirror
+      // SERVICE_UPGRADES in roguelite.js so future additions just
+      // need to land there; mergeWithDefaults preserves zero-rank
+      // entries on first encounter.
+      serviceUpgrades: {
+        "reserve-fighters": 0,
+        "reserve-bombers":  0,
+        "treasury":         0,
+        "fuel-allotment":   0,
+        "captain-lineage":  0,
+        "frontier-veterancy": 0,
+      },
+      // Achievement system (Tier 43) — ids of unlocked achievements.
+      // Checked at recordRunEnd against the ACHIEVEMENTS table in
+      // roguelite.js; new unlocks award service points + a permanent
+      // badge in the player profile.
+      unlockedAchievements: [],
     },
     current: null,
   },
@@ -174,18 +204,54 @@ function mergeWithDefaults(loaded) {
           red:  { ...base.customRoster.red,  ...(loaded.customRoster.red  || {}) },
         }
       : base.customRoster,
+    // Player-ship design: deep-merge so a partial saved design (older
+    // schema) gets default slots filled in. Modules union: if a new
+    // default component is added to the library later, existing
+    // designs already running keep their selections.
+    playerShip: (() => {
+      const lp = loaded.playerShip || {};
+      return {
+        ...base.playerShip,
+        ...lp,
+        modules: { ...base.playerShip.modules, ...(lp.modules || {}) },
+      };
+    })(),
+    shipyardCredits: typeof loaded.shipyardCredits === "number" ? loaded.shipyardCredits : 0,
+    ownedComponents: (() => {
+      const loadedSet = new Set(Array.isArray(loaded.ownedComponents) ? loaded.ownedComponents : []);
+      for (const id of base.ownedComponents) loadedSet.add(id);
+      return [...loadedSet];
+    })(),
+    ownedHulls: (() => {
+      const loadedSet = new Set(Array.isArray(loaded.ownedHulls) ? loaded.ownedHulls : []);
+      for (const h of base.ownedHulls) loadedSet.add(h);
+      return [...loadedSet];
+    })(),
     // Roguelite: deep-merge `meta` so future perk additions / faction
     // unlocks ship without a migration bump. `current` is preserved
     // verbatim — a live run shouldn't get default fields stamped over it.
     roguelite: {
-      meta: {
-        ...base.roguelite.meta,
-        ...((loaded.roguelite && loaded.roguelite.meta) || {}),
-        warProgress: {
-          ...base.roguelite.meta.warProgress,
-          ...((loaded.roguelite && loaded.roguelite.meta && loaded.roguelite.meta.warProgress) || {}),
-        },
-      },
+      meta: (() => {
+        const merged = {
+          ...base.roguelite.meta,
+          ...((loaded.roguelite && loaded.roguelite.meta) || {}),
+          warProgress: {
+            ...base.roguelite.meta.warProgress,
+            ...((loaded.roguelite && loaded.roguelite.meta && loaded.roguelite.meta.warProgress) || {}),
+          },
+        };
+        // Union-merge `unlockedFactions` so a new race added in
+        // DEFAULT_SAVE shows up for existing saves too. (The shallow
+        // spread above would otherwise keep the loaded array intact
+        // and the new race would be missing.)
+        const loadedFactions = Array.isArray(merged.unlockedFactions) ? merged.unlockedFactions : [];
+        const defaultFactions = base.roguelite.meta.unlockedFactions || [];
+        const seen = new Set(loadedFactions);
+        const union = [...loadedFactions];
+        for (const f of defaultFactions) if (!seen.has(f)) { union.push(f); seen.add(f); }
+        merged.unlockedFactions = union;
+        return merged;
+      })(),
       current: (loaded.roguelite && loaded.roguelite.current) || null,
     },
   };
@@ -278,4 +344,16 @@ export const saveStore = new SaveStore();
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", () => saveStore.flush());
   window.addEventListener("beforeunload", () => saveStore.flush());
+  // CRITICAL for mobile / Capacitor: backgrounding the app (home button,
+  // app switcher) fires `visibilitychange` → hidden, but often NOT
+  // `pagehide`/`beforeunload` — and the OS may kill the app later without
+  // either firing. Without flushing here, the debounced write of a recent
+  // change (e.g. equipping a module in the shipyard) is lost, and on next
+  // launch the save reloads PRE-change — the classic "I equipped it, left,
+  // came back, and it reverted" bug. Flush synchronously on hide.
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) saveStore.flush();
+    });
+  }
 }

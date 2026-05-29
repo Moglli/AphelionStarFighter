@@ -72,8 +72,14 @@ export const wavesMode = {
 
   checkEnd(game) {
     // Player gone → loss. No respawns in waves.
-    const player = game.ships.find((s) => s.isPlayer);
-    if (!player || player.dead) return "red";
+    // NB: match on `isPlayer || wasPlayerShip` — TAKE COMMAND / voluntary
+    // spectate hands the live hull to AI and clears `isPlayer` (the hull
+    // gets `wasPlayerShip` instead). Sniffing only `isPlayer` would forfeit
+    // the match the instant the player drops to the admiral view, even
+    // though their ship is alive and fighting. The loss fires when that
+    // hull is actually dead/gone, whether piloted or AI-flown.
+    const hull = game.ships.find((s) => (s.isPlayer || s.wasPlayerShip) && !s.dead);
+    if (!hull) return "red";
     return null;
   },
 };

@@ -32,7 +32,7 @@ export const CLASSES = {
     accel: 700,
     drag: 0.985,
     turnRate: 3.2,
-    radius: 10,
+    radius: 24,           // strike craft enlarged for visibility (was 14)
     color: "#9cf",
     firingMode: "forward",
     weapon: {
@@ -50,16 +50,42 @@ export const CLASSES = {
       reloadTime: 0.6,
     },
     shield: { max: 40, regen: 11, regenDelay: 2.5 },
+    // Air-to-air intercept missile — 1.5× faster than baseline, 1.3× damage
+    // vs small craft (fighter/bomber). Weak vs capital armor.
+    // Air-to-air intercept missile — 1.5× faster than baseline, 1.3×
+    // damage vs small craft. Bypasses shields.
     missile: {
       damage: 28,
       cooldown: 7.0,
-      projectileSpeed: 360,
+      projectileSpeed: 540,
       range: 1500,
-      ttl: 5.0,
-      turnRate: 2.6,
+      ttl: 4.0,
+      turnRate: 3.0,
       hp: 1,
       radius: 4,
       acquireRange: 1800,
+      antiCraftBonus: 1.3,
+      bypassShield: true,
+      blastRadius: 12,
+    },
+    // Speed boost — hold to burn charge for a burst of speed + accel.
+    // Only the player consumes this (AI ignores controller.boost). Per-
+    // class config so cruisers/BBs could opt in later with a slower
+    // ramp + smaller multipliers.
+    //   maxCharge   total seconds of boost available when full
+    //   drainRate   charge-per-second drained while boost is held
+    //   rechargeRate charge-per-second restored when boost is off
+    //                AND has been off for `rechargeDelay` seconds
+    //   rechargeDelay seconds after release before recharge starts
+    //   speedMul    maxSpeed multiplier while boost is active
+    //   accelMul    accel multiplier while boost is active
+    boost: {
+      maxCharge: 3.0,
+      drainRate: 1.0,
+      rechargeRate: 0.6,
+      rechargeDelay: 0.4,
+      speedMul: 1.55,
+      accelMul: 1.75,
     },
     aiRange: 380,
     aiOrbit: 220,
@@ -73,7 +99,7 @@ export const CLASSES = {
     accel: 350,
     drag: 0.985,
     turnRate: 1.6,        // sluggish vs fighter's 3.2 — they can't dogfight
-    radius: 16,           // visibly bigger silhouette than a fighter
+    radius: 28,           // strike craft enlarged for visibility (was 16); still reads bigger than a fighter
     color: "#cdf",
     firingMode: "forward",
     // Light defensive cannon — bombers don't dogfight, they alpha-strike.
@@ -98,6 +124,7 @@ export const CLASSES = {
     // tougher than a frigate's missile (more hp) so it survives some PD.
     // Five pods, faster propellant, better tracking — bombers were
     // getting overrun before they could deliver a meaningful strike.
+    // Bypasses shields — the hull takes it directly.
     missilePods: {
       count: 5,
       damage: 70,
@@ -109,6 +136,8 @@ export const CLASSES = {
       hp: 4,
       radius: 7,
       acquireRange: 2100,
+      bypassShield: true,
+      blastRadius: 40,
       colors: { blue: "#9cf", red: "#fa6" },
     },
     // Twin light PD turrets. Anti-missile only in practice — the
@@ -133,7 +162,7 @@ export const CLASSES = {
     accel: 220,
     drag: 0.99,
     turnRate: 1.0,
-    radius: 54,
+    radius: 62,           // +15%: bigger hull gives the upgraded modules room (see modules.js MODULE_RADIUS_SCALE)
     color: "#bdf",
     // Four fixed cannon mounts arranged at the cardinal points of the
     // hull (front / starboard / aft / port). Each fires independently
@@ -164,19 +193,21 @@ export const CLASSES = {
       projectileRadius: 2.5,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
-    // Three light pods give the frigate a token anti-capital option but
-    // they're on a long cooldown — the cannons do the work.
+    // Multi-purpose pods — fast enough to threaten strike craft, hit
+    // hard enough to matter against capitals. Bypasses shields.
     missilePods: {
       count: 3,
       damage: 36,
       cooldown: 11.0,
-      projectileSpeed: 340,
+      projectileSpeed: 420,
       range: 1300,
       ttl: 5.5,
       turnRate: 2.2,
       hp: 2,
       radius: 5,
       acquireRange: 1600,
+      bypassShield: true,
+      blastRadius: 22,
       colors: { blue: "#cef", red: "#fc8" },
     },
     aiRange: 620,
@@ -190,9 +221,14 @@ export const CLASSES = {
     accel: 130,
     drag: 0.992,
     turnRate: 0.4,
-    radius: 90,
+    radius: 106,          // +18%: room for modules (see modules.js MODULE_RADIUS_SCALE)
     color: "#aaf",
     firingMode: "forward",
+    // Main cannon turret traverse: HALF-arc (radians) the bow turret can
+    // swing off the centreline (slewCannonAimForWeapon clamps to ±this).
+    // π/2 = a full 180° forward arc, so the cruiser can engage anything from
+    // dead ahead to abeam on either side without turning the hull.
+    cannonArc: Math.PI / 2,
     // Multi-stage salvo: each forward bank looses a tight 4-shot burst
     // (0.10 s between shells) on a ~1.8 s cooldown. Per-shot damage is
     // lower than the old single-shot to leave room for the volume, so
@@ -206,7 +242,7 @@ export const CLASSES = {
       muzzles: 2,
       muzzleSpread: 55,
       projectileRadius: 7,
-      projectileColors: { blue: "#5fc", red: "#fc3" },
+      projectileColors: { blue: "#9bd", red: "#b98" },
       salvo: { shotsPerVolley: 4, intraShotDelay: 0.10 },
     },
     shield: { max: 420, regen: 18, regenDelay: 4.0 },
@@ -221,10 +257,10 @@ export const CLASSES = {
       projectileColors: { blue: "#cef", red: "#fda" },
     },
     // Cluster missile pods. Each parent is a slow heavy carrier; the
-    // headline payload comes from the four warheads it splits into
-    // outside PD range. Direct-hit damage (60) is intentionally lower
-    // than the cluster total (4 × 30 = 120) so the bloom is the
-    // optimal play instead of a point-blank ram.
+    // headline payload comes from the warheads it splits into outside
+    // PD range. Bypasses shields — hull and armor take the full hit.
+    // Parent direct-hit damage is lower than cluster total so the bloom
+    // is always the optimal play.
     missilePods: {
       count: 4,
       damage: 60,
@@ -236,6 +272,8 @@ export const CLASSES = {
       hp: 5,
       radius: 10,
       acquireRange: 2200,
+      bypassShield: true,
+      blastRadius: 20,
       colors: { blue: "#3df", red: "#f4a" },
       cluster: {
         bloomDistance: 360,
@@ -251,6 +289,7 @@ export const CLASSES = {
         childDamage: 24,
         childRadius: 4,
         childHp: 1,
+        childBlastRadius: 6,
       },
     },
     aiRange: 1050,
@@ -264,12 +303,17 @@ export const CLASSES = {
     accel: 50,
     drag: 0.994,
     turnRate: 0.15,
-    radius: 156,
+    radius: 184,          // +18%: room for modules (see modules.js MODULE_RADIUS_SCALE)
     color: "#88f",
     firingMode: "broadside",
-    // ±arc (radians) around each side perpendicular within which broadside
-    // barrage guns will fire. Small enough that you have to position the ship.
-    broadsideArc: Math.PI / 4,
+    // HALF-arc (radians) around each side perpendicular within which the
+    // broadside battery traverses + fires. 25° → a 50° total firing arc per
+    // side: the cannons rotate to track a target inside it (see
+    // slewBroadsideAim in ship.js) and hold fire outside it, so positioning
+    // the hull beam-on still matters.
+    broadsideArc: (25 * Math.PI) / 180,
+    // Battery traverse speed (rad/s) as the cannons slew to track a target.
+    broadsideTraverse: 1.4,
     weapon: {
       // Barrage cannons: 3 ports per side, fire as a multi-stage salvo.
       // Each side, on cooldown, looses a 3-stage volley: all 3 gun ports
@@ -288,7 +332,7 @@ export const CLASSES = {
       muzzles: 3, // gun ports per side
       muzzleSpread: 70, // spaced along the much longer hull
       projectileRadius: 8,
-      projectileColors: { blue: "#a3f", red: "#f25" },
+      projectileColors: { blue: "#aac", red: "#ca8" },
       salvo: { shotsPerVolley: 3, intraShotDelay: 0.15 },
     },
     shield: { max: 950, regen: 32, regenDelay: 4.5 },
@@ -302,12 +346,10 @@ export const CLASSES = {
       projectileRadius: 3,
       projectileColors: { blue: "#cef", red: "#fda" },
     },
+    // Cluster pods: 4 launchers, each splits into 6 warheads outside
+    // PD range. Bypasses shields. Designed to overwhelm PD screens.
     missilePods: {
-      count: 6,
-      // Parent missile is a slow heavy carrier — most of its job is
-      // delivering the cluster payload to bloom range. The headline
-      // `damage` is the direct-hit damage if it ever connects without
-      // splitting; total *cluster* damage = childCount * childDamage.
+      count: 4,
       damage: 25,
       cooldown: 9.5,
       projectileSpeed: 300,
@@ -317,16 +359,12 @@ export const CLASSES = {
       hp: 4,
       radius: 9,
       acquireRange: 2400,
+      bypassShield: true,
+      blastRadius: 20,
       colors: { blue: "#fff", red: "#fc8" },
-      // Cluster bloom: parent missile splits into N small homing
-      // warheads once it comes within bloomDistance of its target.
-      // Children fan out across childSpread radians from the
-      // approach heading so PD has to engage multiple tracks instead
-      // of one fat round.
       cluster: {
         bloomDistance: 420,
         childCount: 6,
-        // 160° angular spread — same shape as the cruiser cluster.
         childSpread: Math.PI * 160 / 180,
         childSpeed: 360,
         childTurnRate: 3.2,
@@ -334,7 +372,26 @@ export const CLASSES = {
         childDamage: 24,
         childRadius: 4,
         childHp: 1,
+        childBlastRadius: 6,
       },
+    },
+    // Torpedoes: 2 tubes, slow homing, massive hull damage. Bypasses
+    // shields AND armor — pure hull/block penetrators. 6 hits kills a BB.
+    torpedoes: {
+      count: 2,
+      damage: 300,
+      cooldown: 18.0,
+      projectileSpeed: 240,
+      range: 2800,
+      ttl: 12.0,
+      turnRate: 1.8,
+      hp: 5,
+      radius: 14,
+      acquireRange: 2400,
+      bypassShield: true,
+      armorPiercing: true,
+      blastRadius: 65,
+      colors: { blue: "#4ff", red: "#f84" },
     },
     heavyLaser: {
       // Sustained beam: damage is spread across beamDuration (dps =
@@ -361,7 +418,7 @@ export const CLASSES = {
     accel: 60,
     drag: 0.994,
     turnRate: 0.18,
-    radius: 180,         // largest hull
+    radius: 208,         // largest hull (+16%: room for modules, see modules.js MODULE_RADIUS_SCALE)
     color: "#9bf",
     // "none" = no primary weapon. The carrier defends with PD only.
     firingMode: "none",
@@ -375,6 +432,23 @@ export const CLASSES = {
       range: 580,
       projectileRadius: 3,
       projectileColors: { blue: "#cef", red: "#fda" },
+    },
+    // Light self-defence pods — same fast loadout as the frigate so the
+    // carrier isn't completely helpless up close. Bypasses shields.
+    missilePods: {
+      count: 3,
+      damage: 36,
+      cooldown: 11.0,
+      projectileSpeed: 420,
+      range: 1300,
+      ttl: 5.5,
+      turnRate: 2.2,
+      hp: 2,
+      radius: 5,
+      acquireRange: 1600,
+      bypassShield: true,
+      blastRadius: 22,
+      colors: { blue: "#cef", red: "#fc8" },
     },
     // Replenishment cadence (seconds per launch). Bomber cycle is double
     // the fighter cycle, so over time the carrier sends 2 fighters for

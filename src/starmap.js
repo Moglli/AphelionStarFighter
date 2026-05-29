@@ -18,6 +18,7 @@
 import {
   currentGraph, nodeAt, currentNode, reachableEdges, canEnter,
   ACTS_PER_RUN, COLS_PER_ACT, ROWS_PER_ACT,
+  buildNpcRoster, COMMANDER_PERKS, commanderPendingPicks,
 } from "./roguelite.js";
 import { RACES } from "./races.js";
 
@@ -130,10 +131,15 @@ export function createStarmap(mountEl, run) {
   // Background layers
   const bgLayer = document.createElement("div");
   bgLayer.className = "starmap-bg-layer";
+  // Drifting nebula clouds — large blurred colour fields that slowly
+  // pan, giving the void depth + atmosphere behind the node lattice.
+  const nebula = document.createElement("div");
+  nebula.className = "starmap-nebula";
   const gridDiv = document.createElement("div");
   gridDiv.className = "starmap-grid";
   const starfield = document.createElement("div");
   starfield.className = "starmap-starfield";
+  bgLayer.appendChild(nebula);
   bgLayer.appendChild(gridDiv);
   bgLayer.appendChild(starfield);
 
@@ -159,60 +165,96 @@ export function createStarmap(mountEl, run) {
   world.appendChild(edgesSvg);
   world.appendChild(nodesContainer);
 
-  // Fleet panel (right sidebar)
-  const fleetPanel = document.createElement("aside");
-  fleetPanel.id = "starmap-fleet-panel";
-  fleetPanel.className = "starmap-fleet-panel";
-  fleetPanel.setAttribute("aria-label", "Fleet status");
-  fleetPanel.innerHTML = `
-    <header class="fleet-panel-header">FLEET ROSTER</header>
-    <div class="fleet-panel-capitals" id="fleet-capitals"></div>
-    <div class="fleet-panel-divider"></div>
-    <div class="fleet-panel-craft" id="fleet-craft"></div>
-    <div class="fleet-panel-boons" id="fleet-boons"></div>
-  `;
-
-  // Header HUD
+  // Header HUD — slim top strip with act + commanding faction +
+  // currency chips on the right.
   const header = document.createElement("header");
   header.id = "starmap-header";
   header.className = "starmap-header";
   header.innerHTML = `
-    <div class="header-badge">
-      <span class="badge-label">CURRENT ACT</span>
-      <span class="badge-value" id="header-act">1 / 3</span>
-    </div>
-    <div class="header-faction">
-      <span class="faction-label">COMMANDING</span>
-      <span class="faction-value" id="header-faction">Terran</span>
+    <div class="header-left">
+      <div class="header-badge">
+        <span class="badge-label">ACT</span>
+        <span class="badge-value" id="header-act">1 / 5</span>
+      </div>
+      <div class="header-faction">
+        <span class="faction-label">COMMANDING</span>
+        <span class="faction-value" id="header-faction">Terran</span>
+      </div>
     </div>
     <div class="header-currencies">
-      <div class="cred-chip">
+      <div class="cred-chip" title="Credits">
         <span class="cred-icon">$</span>
         <span id="header-credits">0</span>
       </div>
-      <div class="fuel-chip">
-        <span class="fuel-icon">R</span>
+      <div class="fuel-chip" title="Fuel">
+        <span class="fuel-icon">⛽</span>
         <span id="header-fuel">0</span>
       </div>
+      <button class="header-menu-btn" id="header-menu-btn" title="Menu">⋯</button>
     </div>
   `;
 
-  // Footer buttons
-  const footer = document.createElement("footer");
-  footer.className = "starmap-footer";
+  // Tab content overlay — slides up over the map when a non-map tab
+  // is selected. Built once; content rebuilt per tab on switch.
+  const tabPanel = document.createElement("div");
+  tabPanel.id = "starmap-tab-panel";
+  tabPanel.className = "starmap-tab-panel";
+  tabPanel.setAttribute("aria-hidden", "true");
+  tabPanel.innerHTML = `
+    <header class="tab-panel-header">
+      <button class="tab-back-btn" id="tab-back-btn" title="Back to map">←</button>
+      <h2 class="tab-panel-title" id="tab-panel-title">PANEL</h2>
+      <div class="tab-panel-spacer"></div>
+    </header>
+    <div class="tab-panel-body" id="tab-panel-body"></div>
+  `;
 
-  const abandonBtn = document.createElement("button");
-  abandonBtn.id = "starmap-abandon";
-  abandonBtn.className = "starmap-btn abandon-btn";
-  abandonBtn.textContent = "ABANDON CAMPAIGN";
+  // Bottom tab bar — fixed at the bottom. Each tab opens a fullscreen
+  // panel above the map (except MAP which closes the panel).
+  const tabBar = document.createElement("nav");
+  tabBar.id = "starmap-tab-bar";
+  tabBar.className = "starmap-tab-bar";
+  tabBar.innerHTML = `
+    <button class="tab-btn active" data-tab="map">
+      <span class="tab-icon">▣</span>
+      <span class="tab-label">MAP</span>
+    </button>
+    <button class="tab-btn" data-tab="player">
+      <span class="tab-icon">★</span>
+      <span class="tab-label">PLAYER</span>
+    </button>
+    <button class="tab-btn" data-tab="commanders">
+      <span class="tab-icon">▲</span>
+      <span class="tab-label">COMMANDERS</span>
+    </button>
+    <button class="tab-btn" data-tab="fleet">
+      <span class="tab-icon">⊿</span>
+      <span class="tab-label">FLEET</span>
+    </button>
+    <button class="tab-btn" data-tab="factions">
+      <span class="tab-icon">◆</span>
+      <span class="tab-label">FACTIONS</span>
+    </button>
+    <button class="tab-btn" data-tab="rivals">
+      <span class="tab-icon">⚔</span>
+      <span class="tab-label">RIVALS</span>
+    </button>
+    <button class="tab-btn" data-tab="log">
+      <span class="tab-icon">≡</span>
+      <span class="tab-label">LOG</span>
+    </button>
+  `;
 
-  const closeBtn = document.createElement("button");
-  closeBtn.id = "starmap-close";
-  closeBtn.className = "starmap-btn close-btn";
-  closeBtn.textContent = "BACK TO MENU";
-
-  footer.appendChild(abandonBtn);
-  footer.appendChild(closeBtn);
+  // Overflow menu (popup) for ABANDON / BACK TO MENU / SETTINGS.
+  const overflowMenu = document.createElement("div");
+  overflowMenu.id = "starmap-overflow";
+  overflowMenu.className = "starmap-overflow";
+  overflowMenu.setAttribute("aria-hidden", "true");
+  overflowMenu.innerHTML = `
+    <button class="overflow-item" id="overflow-stats">RUN STATS</button>
+    <button class="overflow-item" id="overflow-abandon">ABANDON CAMPAIGN</button>
+    <button class="overflow-item" id="overflow-close">BACK TO MAIN MENU</button>
+  `;
 
   // Tooltip
   const tooltip = document.createElement("div");
@@ -238,12 +280,15 @@ export function createStarmap(mountEl, run) {
     <button class="jump-cancel-btn" id="jump-cancel-btn">CANCEL</button>
   `;
 
-  // Assemble
+  // Assemble — header on top, world fills the middle, tabPanel overlay
+  // (hidden by default), tab bar pinned to the bottom, overflow popup
+  // anchored to the header menu button.
   root.appendChild(bgLayer);
   root.appendChild(world);
-  root.appendChild(fleetPanel);
   root.appendChild(header);
-  root.appendChild(footer);
+  root.appendChild(tabPanel);
+  root.appendChild(tabBar);
+  root.appendChild(overflowMenu);
   root.appendChild(tooltip);
   root.appendChild(jumpConfirm);
 
@@ -255,8 +300,11 @@ export function createStarmap(mountEl, run) {
     world,
     edgesSvg,
     nodesContainer,
-    fleetPanel,
     header,
+    tabPanel,
+    tabBar,
+    overflowMenu,
+    activeTab: "map",
     tooltip,
     jumpConfirm,
     panX: 0,
@@ -284,11 +332,40 @@ export function createStarmap(mountEl, run) {
     control._listeners.push({ el, type, fn });
   };
 
-  addListener(abandonBtn, "click", () => {
+  // Bottom tab bar — each tab opens its detail panel (or closes back
+  // to the map for the MAP tab).
+  for (const btn of tabBar.querySelectorAll(".tab-btn")) {
+    addListener(btn, "click", () => {
+      setActiveTab(control, btn.dataset.tab);
+    });
+  }
+  // Tab back button — same as tapping MAP.
+  addListener(tabPanel.querySelector("#tab-back-btn"), "click", () => {
+    setActiveTab(control, "map");
+  });
+  // Header menu (overflow) button.
+  const menuBtn = header.querySelector("#header-menu-btn");
+  addListener(menuBtn, "click", (e) => {
+    e.stopPropagation();
+    const hidden = overflowMenu.getAttribute("aria-hidden") === "true";
+    overflowMenu.setAttribute("aria-hidden", hidden ? "false" : "true");
+  });
+  // Click-away to close overflow.
+  addListener(document, "click", (e) => {
+    if (overflowMenu.contains(e.target) || menuBtn.contains(e.target)) return;
+    overflowMenu.setAttribute("aria-hidden", "true");
+  });
+  // Overflow menu items.
+  addListener(overflowMenu.querySelector("#overflow-stats"), "click", () => {
+    overflowMenu.setAttribute("aria-hidden", "true");
+    if (control.callbacks.onStats) control.callbacks.onStats();
+  });
+  addListener(overflowMenu.querySelector("#overflow-abandon"), "click", () => {
+    overflowMenu.setAttribute("aria-hidden", "true");
     if (control.callbacks.onAbandon) control.callbacks.onAbandon();
   });
-
-  addListener(closeBtn, "click", () => {
+  addListener(overflowMenu.querySelector("#overflow-close"), "click", () => {
+    overflowMenu.setAttribute("aria-hidden", "true");
     if (control.callbacks.onClose) control.callbacks.onClose();
   });
 
@@ -551,8 +628,13 @@ export function updateStarmap(control, run) {
   // Update HUD: header
   updateHeader(control, run);
 
-  // Update HUD: fleet panel
-  updateFleetPanel(control, run);
+  // Cache the run snapshot so tab switches can re-render without
+  // requiring an updateStarmap pass.
+  control.run = run;
+  // If a non-map tab is currently open, refresh its content.
+  if (control.activeTab && control.activeTab !== "map") {
+    renderActiveTab(control);
+  }
 
   // Apply pan
   applyPan(control);
@@ -561,11 +643,74 @@ export function updateStarmap(control, run) {
 // ---------------------------------------------------------------------------
 // Internal: create a node DOM element
 // ---------------------------------------------------------------------------
+// Per-type SVG icons for nodes \u2014 drawn inside the glyph layer. Reads
+// crisp at any zoom and scales with the node size. (Tier 41 polish.)
+const NODE_ICONS = {
+  battle:   `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 14 L10 8 L12 10 L18 4 L20 6 L14 12 L16 14 L10 20 Z" fill="currentColor"/></svg>`,
+  elite:    `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2 L14.5 9 L22 9 L16 13.5 L18.5 21 L12 16.5 L5.5 21 L8 13.5 L2 9 L9.5 9 Z" fill="currentColor"/></svg>`,
+  boss:     `<svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 2 L21 7 L21 13 C21 18 17 21.5 12 22 C7 21.5 3 18 3 13 L3 7 Z" fill="currentColor"/></svg>`,
+  event:    `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3 A9 9 0 1 1 12 21 A9 9 0 1 1 12 3 M11 7 L13 7 L13 13 L11 13 Z M11 15 L13 15 L13 17 L11 17 Z" fill="currentColor"/></svg>`,
+  resupply: `<svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 8 L20 8 L20 20 L4 20 Z M9 8 L9 4 L15 4 L15 8 M11 12 L11 17 L13 17 L13 12 Z M8 13 L16 13 L16 15 L8 15 Z" fill="currentColor"/></svg>`,
+  anomaly:  `<svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 2 C8 8 16 8 12 14 C8 20 16 20 12 22" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>`,
+};
+
+// Deterministic per-node hash → drives all visual variation so the
+// same node always looks identical across re-renders + save/reload,
+// but no two nodes look the same.
+function hashNodeId(id) {
+  let h = ((id | 0) + 1) * 2654435761;
+  h ^= h >>> 15; h = (h * 0x85ebca6b) | 0; h ^= h >>> 13;
+  return h >>> 0;
+}
+
+// Per-node visual variant. Continuous knobs (hue / scale / speed /
+// spin) make every node unique; rolled decoration flags add celestial
+// flourishes (orbiting satellite, planetary ring, asteroid speckles,
+// star corona). Decoration probabilities are type-aware so each type
+// keeps its read while still varying node-to-node.
+function nodeVisualVariant(node) {
+  const h = hashNodeId(node.id);
+  const bit = (n) => ((h >>> n) & 1) === 1;
+  const type = node.type;
+  const variant = {
+    hue: (h % 31) - 15,                     // -15..+15deg hue shift
+    scale: 0.82 + ((h >>> 5) % 36) / 100,   // 0.82..1.17
+    bobDur: 2.2 + ((h >>> 10) % 20) / 10,   // 2.2..4.1s
+    spin: (h >>> 14) % 360,                 // base rotation offset
+    orbitDur: 6 + ((h >>> 7) % 9),          // 6..14s orbit period
+    ringTilt: (h % 120) - 60,               // -60..+60deg ring tilt
+    orbitRev: bit(9),                       // orbit direction
+    ring: false, orbit: false, speckle: false, corona: false,
+  };
+  switch (type) {
+    case "boss":     variant.ring = true;  variant.corona = true; variant.orbit = bit(2); break;
+    case "elite":    variant.corona = true; variant.orbit = bit(3); variant.ring = bit(8); break;
+    case "resupply": variant.ring = true;  variant.orbit = bit(3); break;
+    case "battle":   variant.corona = bit(2); variant.speckle = bit(4); variant.orbit = bit(6); break;
+    case "event":
+    case "anomaly":  variant.orbit = bit(2); variant.speckle = bit(5); break;
+    default:         variant.orbit = bit(2); break;
+  }
+  return variant;
+}
+
 function createNodeElement(node, x, y) {
   const el = document.createElement("div");
   el.className = `starmap-node node-${node.type}`;
   el.style.left = `${x}px`;
   el.style.top = `${y}px`;
+
+  // Stamp per-node visual variant as CSS custom properties + decoration
+  // flag classes. The CSS reads these to vary hue / size / speed and
+  // toggle the decoration layers below.
+  const v = nodeVisualVariant(node);
+  el.style.setProperty("--node-hue", `${v.hue}deg`);
+  el.style.setProperty("--node-scale", v.scale.toFixed(3));
+  el.style.setProperty("--node-bob-dur", `${v.bobDur.toFixed(2)}s`);
+  el.style.setProperty("--node-spin", `${v.spin}deg`);
+  el.style.setProperty("--orbit-dur", `${v.orbitDur}s`);
+  el.style.setProperty("--ring-tilt", `${v.ringTilt}deg`);
+  if (v.orbitRev) el.classList.add("node-orbit-rev");
 
   const glow = document.createElement("div");
   glow.className = "node-glow";
@@ -575,9 +720,29 @@ function createNodeElement(node, x, y) {
 
   const glyph = document.createElement("div");
   glyph.className = "node-glyph";
+  // Inject per-type SVG icon. Falls back to a small dot if the type
+  // isn't in the icon table (defensive \u2014 keeps the layout valid).
+  glyph.innerHTML = NODE_ICONS[node.type] || `<svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>`;
 
   const ring = document.createElement("div");
   ring.className = "node-ring";
+
+  // Boss/elite/ace flag \u2014 small label below the node so the player
+  // can read what's there without hovering for the tooltip.
+  const flag = document.createElement("div");
+  flag.className = "node-flag";
+  if (node.type === "boss") {
+    flag.textContent = node.bossName || "BOSS";
+  } else if (node.aceName) {
+    flag.textContent = node.aceName;
+  } else if (node.type === "elite") {
+    flag.textContent = "ELITE";
+  } else if (node.type === "resupply" && node.vendor) {
+    flag.textContent = (node.vendor.label || "RESUPPLY").toUpperCase();
+  } else {
+    flag.textContent = "";
+    flag.style.display = "none";
+  }
 
   const stamp = document.createElement("div");
   stamp.className = "node-visited-stamp";
@@ -589,9 +754,37 @@ function createNodeElement(node, x, y) {
   chevron.style.display = "none";
 
   el.appendChild(glow);
+  // Star corona — radiating spikes behind the core (stars / bosses).
+  if (v.corona) {
+    const corona = document.createElement("div");
+    corona.className = "node-corona";
+    el.appendChild(corona);
+  }
+  // Planetary ring — tilted ellipse around the body (gas giants / depots).
+  if (v.ring) {
+    const pring = document.createElement("div");
+    pring.className = "node-pring";
+    el.appendChild(pring);
+  }
   el.appendChild(core);
+  // Asteroid speckles — a few drifting motes around the node.
+  if (v.speckle) {
+    const speck = document.createElement("div");
+    speck.className = "node-speckles";
+    el.appendChild(speck);
+  }
   el.appendChild(glyph);
   el.appendChild(ring);
+  // Orbiting satellite — a small body revolving around the node.
+  if (v.orbit) {
+    const orbit = document.createElement("div");
+    orbit.className = "node-orbit";
+    const dot = document.createElement("i");
+    dot.className = "node-orbit-dot";
+    orbit.appendChild(dot);
+    el.appendChild(orbit);
+  }
+  el.appendChild(flag);
   el.appendChild(stamp);
   el.appendChild(chevron);
 
@@ -708,58 +901,312 @@ function updateHeader(control, run) {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: update fleet panel from run data
+// Tab system (Tier 41) \u2014 bottom tab bar + fullscreen tab panel.
+// activeTab="map" hides the panel; other tabs render content into
+// #tab-panel-body via the per-tab renderer below.
 // ---------------------------------------------------------------------------
-function updateFleetPanel(control, run) {
-  const capitalsContainer = control.fleetPanel.querySelector("#fleet-capitals");
-  const craftContainer = control.fleetPanel.querySelector("#fleet-craft");
-  const boonsContainer = control.fleetPanel.querySelector("#fleet-boons");
 
-  // Capital ships
-  let capHtml = "";
-  for (const cap of run.capitals) {
-    const name = capitalName(cap.klass);
-    const hpPct = Math.round(cap.hpFrac * 100);
+function setActiveTab(control, tabKey) {
+  control.activeTab = tabKey;
+  // Toggle .active state on tab buttons.
+  for (const btn of control.tabBar.querySelectorAll(".tab-btn")) {
+    btn.classList.toggle("active", btn.dataset.tab === tabKey);
+  }
+  if (tabKey === "map") {
+    control.tabPanel.setAttribute("aria-hidden", "true");
+    control.tabPanel.classList.remove("open");
+    return;
+  }
+  control.tabPanel.setAttribute("aria-hidden", "false");
+  control.tabPanel.classList.add("open");
+  // Re-render content using the cached run snapshot.
+  renderActiveTab(control);
+}
+
+function renderActiveTab(control) {
+  if (!control.run) return;
+  const title = control.tabPanel.querySelector("#tab-panel-title");
+  const body = control.tabPanel.querySelector("#tab-panel-body");
+  const run = control.run;
+  switch (control.activeTab) {
+    case "player":     title.textContent = "PLAYER";     renderPlayerTab(body, run); break;
+    case "commanders": title.textContent = "COMMANDERS"; renderCommandersTab(body, run, control); break;
+    case "fleet":      title.textContent = "FLEET";      renderFleetTab(body, run); break;
+    case "factions":   title.textContent = "FACTIONS";   renderFactionsTab(body, run); break;
+    case "rivals":     title.textContent = "RIVALS";     renderRivalsTab(body, run); break;
+    case "log":        title.textContent = "CAREER LOG"; renderLogTab(body, run); break;
+    default: break;
+  }
+}
+
+function renderPlayerTab(body, run) {
+  const st = run.stats || {};
+  const totalKills = Object.values(st.shipsKilled || {}).reduce((a, b) => a + b, 0);
+  const totalLost  = Object.values(st.shipsLost   || {}).reduce((a, b) => a + b, 0);
+  const traitChips = (run.traits || []).map((k) => `<span class="td-chip">${k}</span>`).join("") || '<span class="td-muted">No traits yet</span>';
+  body.innerHTML = `
+    <div class="td-card">
+      <div class="td-eyebrow">OFFICER</div>
+      <div class="td-headline">${(run.callsign || "UNKNOWN").toUpperCase()}</div>
+      <div class="td-sub">Act ${run.act}/5 \u00B7 ${(run.visitedNodeIds || []).length} jumps</div>
+    </div>
+    <div class="td-grid-2">
+      <div class="td-card">
+        <div class="td-eyebrow">CREDITS</div>
+        <div class="td-bignum">${run.resources && run.resources.credits || 0}</div>
+      </div>
+      <div class="td-card">
+        <div class="td-eyebrow">FUEL</div>
+        <div class="td-bignum">${run.resources && run.resources.fuel || 0}</div>
+      </div>
+    </div>
+    <div class="td-card">
+      <div class="td-eyebrow">OFFICER TRAITS</div>
+      <div class="td-chips">${traitChips}</div>
+    </div>
+    <div class="td-card">
+      <div class="td-eyebrow">CAREER STATS</div>
+      <div class="td-statgrid">
+        <div><span>Nodes cleared</span><b>${st.nodesCleared || 0}</b></div>
+        <div><span>Bosses killed</span><b>${st.bossesKilled || 0}</b></div>
+        <div><span>Ships destroyed</span><b>${totalKills}</b></div>
+        <div><span>Ships lost</span><b>${totalLost}</b></div>
+        <div><span>Credits earned</span><b>${st.creditsEarned || 0}</b></div>
+        <div><span>Promotions</span><b>${st.promotionsEarned || 0}</b></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderCommandersTab(body, run, control) {
+  const caps = run.capitals || [];
+  const wings = [
+    ...(run.fighterWings || []).map((w) => ({ w, craft: "fighter" })),
+    ...(run.bomberWings || []).map((w) => ({ w, craft: "bomber" })),
+  ].filter((x) => x.w.commander);
+  if (caps.length === 0 && wings.length === 0) {
+    body.innerHTML = `<div class="td-empty">No commanders in service.</div>`;
+    return;
+  }
+  const stars = (level) => level > 1 ? "\u2605".repeat(Math.min(5, level - 1)) : "";
+  const perkChips = (perks) => {
+    const chips = (perks || []).map((k) => {
+      const p = COMMANDER_PERKS[k];
+      return p ? `<span class="td-perk-chip" title="${p.blurb}">${p.name}</span>` : "";
+    }).join("");
+    return chips ? `<div class="td-perk-row">${chips}</div>` : "";
+  };
+  // Inline perk-pick buttons when a commander has an unspent pick.
+  const pickUI = (refAttrs, c) => {
+    if (!c || !(c.pendingPerks > 0) || !Array.isArray(c.perkDraw) || !c.perkDraw.length) return "";
+    const btns = c.perkDraw.map((k) => {
+      const p = COMMANDER_PERKS[k];
+      if (!p) return "";
+      return `<button class="td-perk-pick" ${refAttrs} data-perk="${k}">
+        <span class="td-perk-pick-name">${p.name}</span>
+        <span class="td-perk-pick-blurb">${p.blurb}</span></button>`;
+    }).join("");
+    return `<div class="td-perk-pick-label">CHOOSE A PERK</div><div class="td-perk-pick-row">${btns}</div>`;
+  };
+
+  let html = "";
+  const pending = commanderPendingPicks(run);
+  if (pending > 0) {
+    html += `<div class="td-perk-banner">${pending} perk pick${pending === 1 ? "" : "s"} ready \u2014 choose below.</div>`;
+  }
+  // Capital captains.
+  for (const cap of caps) {
+    const klassLabel = capitalName(cap.klass);
+    const hpPct = Math.round((cap.hpFrac || 0) * 100);
     const hpClass = cap.hpFrac > 0.6 ? "hp-high" : cap.hpFrac > 0.3 ? "hp-mid" : "hp-low";
-    capHtml += `
-      <div class="fleet-capital-row">
-        <div class="fleet-capital-info">
-          <span class="fleet-capital-glyph">\u25B2</span>
-          <span class="fleet-capital-name">${name}</span>
-          <span class="fleet-capital-hp-label">HULL ${hpPct}%</span>
+    const refAttrs = `data-ref-kind="capital" data-ref-id="${cap.instanceId}"`;
+    html += `
+      <div class="td-row td-row-cmd td-row-tap" data-tap-kind="capital" data-tap-id="${cap.instanceId}">
+        <div class="td-row-head">
+          <span class="td-row-name">${cap.name || klassLabel}</span>
+          ${stars(cap.level || 1) ? `<span class="td-row-rank">${stars(cap.level || 1)}</span>` : ""}
+          <span class="td-row-pct">${hpPct}%</span>
+          <span class="td-row-chev">›</span>
         </div>
-        <div class="fleet-hp-bar-bg">
-          <div class="fleet-hp-bar-fill ${hpClass}" style="width:${hpPct}%"></div>
+        <div class="td-row-sub">
+          <span class="td-row-class">${klassLabel.toUpperCase()}</span>
+          ${cap.captain ? `<span class="td-row-captain">${cap.captain}</span>` : ""}
+          ${cap.captainTraitLabel ? `<span class="td-row-trait">${cap.captainTraitLabel}</span>` : ""}
+        </div>
+        ${perkChips(cap.perks)}
+        <div class="td-row-hpbar"><div class="td-row-hpfill ${hpClass}" style="width:${hpPct}%"></div></div>
+        ${pickUI(refAttrs, cap)}
+      </div>`;
+  }
+  // Wing commanders (fighter + bomber wings).
+  for (const { w, craft } of wings) {
+    const c = w.commander;
+    const refAttrs = `data-ref-kind="wing" data-ref-craft="${craft}" data-ref-wing="${w.id}"`;
+    html += `
+      <div class="td-row td-row-cmd td-row-wingcmd td-row-tap" data-tap-kind="wing" data-tap-craft="${craft}" data-tap-wing="${w.id}">
+        <div class="td-row-head">
+          <span class="td-row-name">${c.name}</span>
+          ${stars(c.level || 1) ? `<span class="td-row-rank">${stars(c.level || 1)}</span>` : ""}
+          <span class="td-row-chev">›</span>
+        </div>
+        <div class="td-row-sub">
+          <span class="td-row-class">${w.name.toUpperCase()} WING \u00b7 ${craft.toUpperCase()}</span>
+          ${c.traitLabel ? `<span class="td-row-trait">${c.traitLabel}</span>` : ""}
+        </div>
+        ${perkChips(c.perks)}
+        ${pickUI(refAttrs, c)}
+      </div>`;
+  }
+  body.innerHTML = html;
+  // Whole row \u2192 full commander detail overlay (capital captain OR wing
+  // commander). Perk-pick buttons inside the row stopPropagation so they
+  // don't also open the detail.
+  for (const row of body.querySelectorAll(".td-row-tap")) {
+    row.addEventListener("click", () => {
+      const cb = control.callbacks;
+      if (!cb) return;
+      if (row.dataset.tapKind === "capital") {
+        const id = parseInt(row.dataset.tapId, 10);
+        if (Number.isFinite(id) && cb.onCapitalClick) cb.onCapitalClick(id);
+      } else if (row.dataset.tapKind === "wing" && cb.onWingCommanderClick) {
+        cb.onWingCommanderClick(row.dataset.tapCraft, row.dataset.tapWing);
+      }
+    });
+  }
+  // Perk-pick buttons \u2192 onPickPerk(ref, perkKey).
+  for (const btn of body.querySelectorAll(".td-perk-pick")) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const perk = btn.dataset.perk;
+      const ref = btn.dataset.refKind === "capital"
+        ? { kind: "capital", id: parseInt(btn.dataset.refId, 10) }
+        : { kind: "wing", craft: btn.dataset.refCraft, wingId: btn.dataset.refWing };
+      if (control.callbacks && control.callbacks.onPickPerk) control.callbacks.onPickPerk(ref, perk);
+    });
+  }
+}
+
+function renderFleetTab(body, run) {
+  const passengers = (run.passengers || []).map((p) => `
+    <div class="td-row td-row-passenger">
+      <div class="td-row-head">
+        <span class="td-row-name">${p.name}</span>
+        <span class="td-row-pct">${p.jumpsLeft} jump${p.jumpsLeft === 1 ? "" : "s"} left</span>
+      </div>
+      <div class="td-row-sub"><span class="td-row-detail">${p.description || ""}</span></div>
+    </div>
+  `).join("") || `<div class="td-empty">No passengers aboard.</div>`;
+  const contracts = ((run.contracts || []).filter(c => c.status === "active")).map((c) => `
+    <div class="td-row td-row-contract">
+      <div class="td-row-head">
+        <span class="td-row-name">${c.name}</span>
+        <span class="td-row-pct">${c.jumpsLeft} left</span>
+      </div>
+      <div class="td-row-sub"><span class="td-row-detail">${c.description || ""}</span></div>
+    </div>
+  `).join("") || `<div class="td-empty">No active contracts.</div>`;
+  const boons = (run.boons || []).map((b) => `
+    <div class="td-row td-row-boon">
+      <div class="td-row-head"><span class="td-row-name">${b.desc || b.key}</span></div>
+    </div>
+  `).join("") || `<div class="td-empty">No boons acquired.</div>`;
+  body.innerHTML = `
+    <div class="td-grid-2">
+      <div class="td-card">
+        <div class="td-eyebrow">FIGHTERS</div>
+        <div class="td-bignum">${run.smallCraft && run.smallCraft.fighter || 0}</div>
+      </div>
+      <div class="td-card">
+        <div class="td-eyebrow">BOMBERS</div>
+        <div class="td-bignum">${run.smallCraft && run.smallCraft.bomber || 0}</div>
+      </div>
+    </div>
+    <div class="td-card">
+      <div class="td-eyebrow">PASSENGERS</div>
+      ${passengers}
+    </div>
+    <div class="td-card">
+      <div class="td-eyebrow">CONTRACTS</div>
+      ${contracts}
+    </div>
+    <div class="td-card">
+      <div class="td-eyebrow">BOONS</div>
+      ${boons}
+    </div>
+  `;
+}
+
+function renderFactionsTab(body, run) {
+  const labels = { coalition: "COALITION", hegemony: "HEGEMONY", reavers: "REAVERS", voidsworn: "VOIDSWORN" };
+  const rep = run.reputation || {};
+  let html = "";
+  for (const key of ["coalition", "hegemony", "reavers", "voidsworn"]) {
+    const v = rep[key] || 0;
+    const pct = Math.round((v + 100) / 2); // -100..+100 \u2192 0..100
+    const tone = v >= 30 ? "ally" : (v <= -30 ? "rival" : "neutral");
+    const label = v >= 70 ? "Allied" : v >= 30 ? "Friendly" : v >= -10 ? "Neutral" : v >= -50 ? "Hostile" : "Marked";
+    html += `
+      <div class="td-faction-row td-faction-${tone}">
+        <div class="td-faction-head">
+          <span class="td-faction-name">${labels[key]}</span>
+          <span class="td-faction-value">${label} \u00B7 ${v > 0 ? "+" : ""}${v}</span>
+        </div>
+        <div class="td-faction-bar">
+          <div class="td-faction-axis"></div>
+          <div class="td-faction-fill" style="left:${pct}%"></div>
         </div>
       </div>
     `;
   }
-  capitalsContainer.innerHTML = capHtml || '<div style="color:var(--text-secondary);font-size:12px;">No capitals</div>';
+  body.innerHTML = html;
+}
 
-  // Small craft
-  craftContainer.innerHTML = `
-    <div class="fleet-craft-row">
-      <span class="fleet-craft-name">Fighters</span>
-      <span class="fleet-craft-count">\u00D7 ${run.smallCraft.fighter}</span>
+function renderRivalsTab(body, run) {
+  const rivalsHtml = (run.rivals || []).map((r) => {
+    const status = r.status || "active";
+    const tone = status === "active" ? "rival" : (status === "defeated" ? "memorial" : "note");
+    const statusLabel = status === "active" ? "ACTIVE TARGET" : status === "defeated" ? `DOWN \u00B7 ACT ${r.defeatedAct || "?"}` : status.toUpperCase();
+    return `
+      <div class="td-row td-row-rival td-tone-${tone}">
+        <div class="td-row-head">
+          <span class="td-row-name">${r.name}</span>
+          <span class="td-row-pct">${statusLabel}</span>
+        </div>
+        <div class="td-row-sub"><span class="td-row-detail">${r.motivation || ""}</span></div>
+      </div>
+    `;
+  }).join("");
+  const wingHtml = (run.wingRoster || []).slice(-12).reverse().map((p) => `
+    <div class="td-row td-row-wing">
+      <div class="td-row-head">
+        <span class="td-row-name">${p.name}</span>
+        <span class="td-row-pct">${(p.role || "Wing pilot").toUpperCase()}</span>
+      </div>
     </div>
-    <div class="fleet-craft-row">
-      <span class="fleet-craft-name">Bombers</span>
-      <span class="fleet-craft-count">\u00D7 ${run.smallCraft.bomber}</span>
+  `).join("") || `<div class="td-empty">No wing pilots yet.</div>`;
+  body.innerHTML = `
+    <div class="td-card">
+      <div class="td-eyebrow">MARKED RIVALS</div>
+      ${rivalsHtml || `<div class="td-empty">No rivals on record.</div>`}
+    </div>
+    <div class="td-card">
+      <div class="td-eyebrow">WING ROSTER</div>
+      ${wingHtml}
     </div>
   `;
+}
 
-  // Boons
-  if (run.boons && run.boons.length > 0) {
-    let boonHtml = '<div class="fleet-panel-section-title">Boons</div>';
-    for (const b of run.boons) {
-      boonHtml += `<div class="fleet-boon-item">\u25C6 ${b.desc}</div>`;
-    }
-    boonsContainer.innerHTML = boonHtml;
-    boonsContainer.style.display = "flex";
-  } else {
-    boonsContainer.innerHTML = "";
-    boonsContainer.style.display = "none";
+function renderLogTab(body, run) {
+  const log = run.log || [];
+  if (log.length === 0) {
+    body.innerHTML = `<div class="td-empty">Career log empty.</div>`;
+    return;
   }
+  const items = log.slice().reverse().map((l) => {
+    const kind = String(l.kind || "note");
+    return `<li class="td-log-line td-log-${kind}"><span class="td-log-act">A${l.act}</span> ${l.text}</li>`;
+  }).join("");
+  body.innerHTML = `<ul class="td-log-list">${items}</ul>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -800,8 +1247,10 @@ export function destroyStarmap(control) {
   control.world = null;
   control.edgesSvg = null;
   control.nodesContainer = null;
-  control.fleetPanel = null;
   control.header = null;
+  control.tabPanel = null;
+  control.tabBar = null;
+  control.overflowMenu = null;
   control.tooltip = null;
   control.jumpConfirm = null;
 }

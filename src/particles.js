@@ -134,6 +134,23 @@ export function createShockwave(x, y, opts = {}) {
   };
 }
 
+// Bright muzzle-of-impact flash — a quick hot bloom at the point a round
+// or missile bites metal. Very short ttl so it reads as the SPARK of
+// contact, not lingering fire. Grows slightly as it fades.
+export function createImpactFlash(x, y, opts = {}) {
+  const ttl = opts.ttl != null ? opts.ttl : 0.12;
+  return {
+    kind: "flash",
+    pos: { x, y },
+    vel: { x: 0, y: 0 },
+    size: opts.size != null ? opts.size : 5,
+    sizeGrowth: opts.sizeGrowth != null ? opts.sizeGrowth : 55,
+    ttl, maxTtl: ttl,
+    color: opts.color || "255,235,180",   // r,g,b (no rgba wrapper)
+    dead: false,
+  };
+}
+
 export function updateParticle(p, dt) {
   p.pos.x += p.vel.x * dt;
   p.pos.y += p.vel.y * dt;
@@ -218,6 +235,22 @@ export function drawParticle(ctx, p) {
     ctx.beginPath();
     ctx.arc(p.pos.x, p.pos.y, p.size, 0, Math.PI * 2);
     ctx.stroke();
+  } else if (p.kind === "flash") {
+    // Hot white-ish core + soft coloured glow halo. Additive blend so
+    // overlapping impact flashes read as a bright burst of contact.
+    const prevOp = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = "lighter";
+    // Outer glow.
+    ctx.fillStyle = "rgba(" + p.color + "," + (alpha * 0.45).toFixed(3) + ")";
+    ctx.beginPath();
+    ctx.arc(p.pos.x, p.pos.y, p.size * 2.0, 0, Math.PI * 2);
+    ctx.fill();
+    // Hot core.
+    ctx.fillStyle = "rgba(255,250,235," + alpha.toFixed(3) + ")";
+    ctx.beginPath();
+    ctx.arc(p.pos.x, p.pos.y, p.size * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = prevOp;
   }
 }
 
@@ -234,8 +267,16 @@ export function spawnHitSparks(particles, x, y, count = 4) {
 // outwardAngle biases the fragment velocity away from the ship centre
 // (caller passes the direction from ship centre to impact point).
 export function spawnArmorFlakes(particles, x, y, damage, outwardAngle = null) {
-  const count = damage >= 50 ? 2 : 1;
-  for (let i = 0; i < count; i++) {
+  // Metal-on-metal: a bright flash + a fan of hot sparks ricocheting off
+  // the plate + a couple of flaked fragments. Counts scale with the hit
+  // so a heavy shell sprays where a light round just pings.
+  const heavy = damage >= 50;
+  particles.push(createImpactFlash(x, y, {
+    size: 3.5 + Math.min(7, damage * 0.06),
+    color: "255,225,150",
+  }));
+  const flakeCount = heavy ? 3 : 2;
+  for (let i = 0; i < flakeCount; i++) {
     const ang = outwardAngle != null
       ? outwardAngle + (Math.random() - 0.5) * 1.2
       : Math.random() * Math.PI * 2;
@@ -248,15 +289,36 @@ export function spawnArmorFlakes(particles, x, y, damage, outwardAngle = null) {
       ttl: 0.7 + Math.random() * 0.6,
     }));
   }
-  particles.push(createSpark(x, y));
+  // Spark fan — biased outward along the impact normal when known.
+  const sparkCount = heavy ? 7 : 4;
+  for (let i = 0; i < sparkCount; i++) {
+    const ang = outwardAngle != null
+      ? outwardAngle + (Math.random() - 0.5) * 1.6
+      : Math.random() * Math.PI * 2;
+    particles.push(createSpark(x, y, {
+      color: "#ffe6a0",
+      angle: ang,
+      speed: 130 + Math.random() * 200,
+    }));
+  }
 }
 
 // Hull plates breaking off — bigger, ship-tinted fragments with longer
 // ttl. `tint` is the ship's primary color; the fragment is rendered in
 // that color so the broken piece reads as part of that ship's hull.
 export function spawnHullBreakoff(particles, x, y, damage, tint, outwardAngle = null) {
+  // BARE HULL — no shield/armour to cushion the strike, so this is the
+  // most violent impact read: bright flash, hull shrapnel, a hot spark
+  // shower, AND a brief flame lick + smoke wisp where the round bites
+  // open metal. Everything scales with the hit so a missile gutting a
+  // hull throws a fireball where a stray round just chips + sparks.
   const heavy = damage >= 80;
-  const count = heavy ? 2 + Math.floor(Math.random() * 2) : 1 + Math.floor(Math.random() * 2);
+  const mid = damage >= 25;
+  particles.push(createImpactFlash(x, y, {
+    size: 4 + Math.min(10, damage * 0.08),
+    color: "255,210,130",
+  }));
+  const count = heavy ? 3 + Math.floor(Math.random() * 2) : 1 + Math.floor(Math.random() * 2);
   for (let i = 0; i < count; i++) {
     const ang = outwardAngle != null
       ? outwardAngle + (Math.random() - 0.5) * 1.5
@@ -270,8 +332,36 @@ export function spawnHullBreakoff(particles, x, y, damage, tint, outwardAngle = 
       ttl: 1.2 + Math.random() * 1.3,
     }));
   }
-  // A few sparks at the breakoff point too.
-  for (let i = 0; i < (heavy ? 4 : 2); i++) particles.push(createSpark(x, y));
+  // Hot spark shower from torn metal.
+  const sparkCount = heavy ? 9 : (mid ? 6 : 3);
+  for (let i = 0; i < sparkCount; i++) {
+    const ang = outwardAngle != null
+      ? outwardAngle + (Math.random() - 0.5) * 1.8
+      : Math.random() * Math.PI * 2;
+    particles.push(createSpark(x, y, {
+      color: "#ffcf7a",
+      angle: ang,
+      speed: 120 + Math.random() * 220,
+    }));
+  }
+  // Flame lick + smoke from the breach — bigger hits ignite more.
+  const fireCount = heavy ? 3 : (mid ? 1 : 0);
+  for (let i = 0; i < fireCount; i++) {
+    particles.push(createFire(x, y, {
+      size: 3 + Math.random() * 3,
+      ttl: 0.4 + Math.random() * 0.4,
+      speed: 30 + Math.random() * 50,
+    }));
+  }
+  if (mid && Math.random() < 0.7) {
+    particles.push(createSmoke(x, y, {
+      color: "rgba(50,46,48,",
+      size: 4 + Math.random() * 4,
+      ttl: 0.9 + Math.random() * 0.7,
+      sizeGrowth: 8 + Math.random() * 8,
+      speed: 18 + Math.random() * 24,
+    }));
+  }
 }
 
 // Module-just-destroyed burst: shockwave + heavy sparks + debris + initial
@@ -314,11 +404,31 @@ export function spawnContinuousSmoke(particles, x, y, isDisabled) {
       sizeGrowth: 12 + Math.random() * 12,
       speed: 15 + Math.random() * 22,
     }));
-    if (Math.random() < 0.55) {
+    // A blown compartment burns hard — near-constant flame (sometimes a
+    // double flame for a real fire) plus arcing electrical sparks.
+    if (Math.random() < 0.8) {
       particles.push(createFire(x, y, {
-        size: 3.5 + Math.random() * 3,
-        ttl: 0.6 + Math.random() * 0.5,
+        size: 4 + Math.random() * 3.5,
+        ttl: 0.6 + Math.random() * 0.6,
       }));
+      if (Math.random() < 0.4) {
+        particles.push(createFire(x, y, {
+          size: 2.5 + Math.random() * 2,
+          ttl: 0.4 + Math.random() * 0.4,
+          speed: 30 + Math.random() * 40,
+        }));
+      }
+    }
+    // Electrical arc sparks spitting from the gutted system.
+    if (Math.random() < 0.5) {
+      const n = 2 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < n; i++) {
+        particles.push(createSpark(x, y, {
+          color: "#bfe6ff",   // cool electrical-blue arc
+          speed: 90 + Math.random() * 150,
+          ttl: 0.15 + Math.random() * 0.2,
+        }));
+      }
     }
   } else {
     particles.push(createSmoke(x, y, {
@@ -351,27 +461,19 @@ export function spawnEnginePlumeVFX(particles, x, y, backwardAngle, severity) {
     sizeGrowth: 10 + severity * 14,
     ttl: 1.4 + severity * 1.6 + Math.random() * 0.5,
   }));
-  // Fire flickers: a flame jet escaping the cracked nozzle. Rate +
-  // size both scale with severity. Above 0.7 we sometimes spawn two
-  // flames per emission for a believable "jet of fire" read.
-  const fireChance = 0.15 + severity * 0.7;
-  if (Math.random() < fireChance) {
-    const flameSpeed = sp * 1.2;
-    const flameSize = 3 + severity * 3.5 + Math.random() * 2;
-    particles.push(createFire(x, y, {
-      angle: ang + (Math.random() - 0.5) * 0.3,
-      speed: flameSpeed,
-      size: flameSize,
-      ttl: 0.5 + severity * 0.6,
+  // Ember glow: dim deep-red smoldering smoke instead of open flame.
+  // Subtle heat bleed from the cracked nozzle — more "damaged engine"
+  // than "on fire".
+  const emberChance = 0.08 + severity * 0.18;
+  if (Math.random() < emberChance) {
+    particles.push(createSmoke(x, y, {
+      color: "rgba(90,22,10,",
+      angle: ang + (Math.random() - 0.5) * 0.4,
+      speed: sp * 0.7 + Math.random() * 10,
+      size: 2 + severity * 2.5 + Math.random() * 1.5,
+      sizeGrowth: 4 + severity * 5,
+      ttl: 0.4 + severity * 0.5,
     }));
-    if (severity > 0.7 && Math.random() < 0.5) {
-      particles.push(createFire(x, y, {
-        angle: ang + (Math.random() - 0.5) * 0.5,
-        speed: flameSpeed * 0.8,
-        size: flameSize * 0.7,
-        ttl: 0.4 + severity * 0.4,
-      }));
-    }
   }
 }
 
@@ -424,23 +526,36 @@ export function spawnHullVentVFX(particles, x, y, outwardAngle, severity) {
     sizeGrowth: 6 + severity * 12,
     ttl: 1.0 + severity * 1.4 + Math.random() * 0.4,
   }));
-  // Fire only appears once the ship is seriously hurt — below 60% hp
-  // (severity > ~0.45). Above 85% severity (critical) a second flame
-  // sometimes spawns so the burning hull looks genuinely on fire.
-  const fireChance = severity > 0.45 ? (severity - 0.35) * 0.85 : 0;
+  // Fire appears once the ship is hurt — earlier + heavier than before
+  // so a wounded hull visibly burns. Below ~70% hp (severity > 0.3) a
+  // flame can lick; deeper into the red it's a steady blaze with a
+  // second flame jet, and a critical hull (severity > 0.8) spits an
+  // electrical spark shower from breached compartments.
+  const fireChance = severity > 0.30 ? (severity - 0.20) * 1.0 : 0;
   if (Math.random() < fireChance) {
     particles.push(createFire(x, y, {
       angle: ang,
       speed: sp * 0.9,
-      size: 2.5 + severity * 3 + Math.random() * 1.5,
-      ttl: 0.55 + severity * 0.7,
+      size: 3 + severity * 4 + Math.random() * 1.5,
+      ttl: 0.6 + severity * 0.8,
     }));
-    if (severity > 0.85 && Math.random() < 0.4) {
+    if (severity > 0.6 && Math.random() < 0.55) {
       particles.push(createFire(x, y, {
         angle: ang + (Math.random() - 0.5) * 0.7,
-        speed: sp * 0.6,
-        size: 2 + Math.random() * 2,
-        ttl: 0.5 + Math.random() * 0.4,
+        speed: sp * 0.7,
+        size: 2.5 + Math.random() * 2.5,
+        ttl: 0.5 + Math.random() * 0.5,
+      }));
+    }
+  }
+  // Critical-hull electrical arcs — sporadic blue spark bursts.
+  if (severity > 0.8 && Math.random() < 0.3) {
+    const n = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < n; i++) {
+      particles.push(createSpark(x, y, {
+        color: "#cfe8ff",
+        speed: 80 + Math.random() * 140,
+        ttl: 0.15 + Math.random() * 0.18,
       }));
     }
   }

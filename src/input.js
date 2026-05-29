@@ -3,12 +3,17 @@
 // center because the camera follows the player unit, so center == player.
 
 import { MAP_SIZES } from "./arena.js";
-import { RACES, RACE_KEYS } from "./races.js";
+import { RACES, RACE_KEYS, resolveSpec } from "./races.js";
 import { SIDES } from "./classes.js";
 import {
   ACTS_PER_RUN, COLS_PER_ACT, ROWS_PER_ACT,
   STARTER_FUEL, FUEL_PER_EDGE,
   repairCostFor, eventCardById, PERKS, TRAITS, BOON_TABLE, BOSSES,
+  pickBattleBanter, consumePrimedFollowup, ACT_RANKS,
+  captainTitleFor, captainNextThreshold, captainHpMul,
+  CAPTAIN_TRAIT_EFFECTS, SERVICE_UPGRADES, COMMANDER_PERKS,
+  ACHIEVEMENTS,
+  battleReputationPreview, getReputation, reputationLabel,
 } from "./roguelite.js";
 import {
   createStarmap, updateStarmap, destroyStarmap,
@@ -19,8 +24,36 @@ import {
   MAX_ENERGY, COST_PER_GAME, PACKAGES,
   canSpend, timeUntilNext, formatDuration,
 } from "./energy.js";
+import {
+  HULLS as SHIPYARD_HULLS, HULL_ORDER, COMPONENTS as SHIPYARD_COMPONENTS,
+  effectiveOwnedComponents, effectiveOwnedHulls, applyDesign, computeDeltas,
+  SLOT_VISUALS,
+} from "./components.js";
+import { getHull } from "./ship.js";
+import { buildModules } from "./modules.js";
+import { buildCells, snapModulesSymmetric } from "./sprites.js";
+import { moduleLabel } from "./hud.js";
+import { saveStore } from "./save.js";
+import {
+  makeDefaultFleetPlan, WING_CRAFT, WING_NAMES, MAX_WINGS, distributeByWeight,
+} from "./fleetcommand.js";
+import { ADMIRAL_CLASSES } from "./modes/admiral.js";
+import { ESCORT_SIZE } from "./game.js";
 
 const DEADZONE = 0.15;
+
+// Slot id → human label. Used by the Shipyard renderer to label each
+// slot row in the design editor.
+function slotLabel(slotId) {
+  if (slotId.startsWith("weapon")) return "Primary Weapon";
+  if (slotId.startsWith("pd")) return "Point Defense";
+  if (slotId.startsWith("missile")) return "Missiles";
+  if (slotId.startsWith("shield")) return "Shield";
+  if (slotId.startsWith("armor")) return "Armor";
+  if (slotId.startsWith("engine")) return "Engine";
+  if (slotId === "hangar") return "Hangar";
+  return slotId;
+}
 
 export class VirtualStick {
   constructor({ side, color, baseEl, knobEl }) {
@@ -265,9 +298,19 @@ export class BoostButton {
   start(pid) { this.pointerId = pid; this.pressed = true; }
   end() { this.pointerId = null; this.pressed = false; }
   consumeJustPressed() { return false; }
-  _updateDOM(domEl) {
+  _updateDOM(domEl, chargeFrac) {
     if (!domEl) return;
     domEl.classList.toggle("pressed", this.pressed);
+    // Charge meter — use the same conic-gradient `--cooldown-angle`
+    // CSS var as the missile button. Empty = 360deg dark sweep covers
+    // the whole button; full = 0deg, no overlay.
+    if (typeof chargeFrac === "number") {
+      const drained = 1 - Math.max(0, Math.min(1, chargeFrac));
+      const angle = Math.round(360 * drained);
+      domEl.style.setProperty("--cooldown-angle", `${angle}deg`);
+      domEl.classList.toggle("boost-ready",  chargeFrac > 0.05);
+      domEl.classList.toggle("boost-empty",  chargeFrac <= 0.05);
+    }
   }
 }
 
@@ -483,6 +526,21 @@ function totalShipCount(counts) {
   return n;
 }
 
+// Collapse a flat `[{race, klass}]` captured-craft list into compact
+// `[{race, klass, count}]` rows for the Battle Plan readout.
+function collapseCapturedCraft(list) {
+  const map = new Map();
+  for (const c of list) {
+    if (!c || !c.klass) continue;
+    const race = c.race || "unknown";
+    const key = `${race}:${c.klass}`;
+    const cur = map.get(key);
+    if (cur) cur.count++;
+    else map.set(key, { race, klass: c.klass, count: 1 });
+  }
+  return [...map.values()];
+}
+
 function classDisplayName(klass) {
   if (klass === "battleship") return "Battleship";
   if (klass === "fighter") return "Fighter";
@@ -529,9 +587,58 @@ export class StartMenu {
     this.showResupply = false;
     this.showEvent = false;
     this.showBattleChoice = false;
+    // Battle Plan overlay — pre-flight orders for a Frontier engagement.
+    // Sits between battle-choice and the actual launch. Stamped with
+    // the node + a stashed copy of (battleMode, doctrine) so the
+    // LAUNCH button can fire the real enter-node action.
+    this.showBattlePlan = false;
+    this._pendingBattlePlan = null;  // { battleMode, doctrine }
+    // Fleet Plan overlay — the run-free sibling of Battle Plan, shown
+    // before EVERY non-Frontier match (skirmish / custom / arena /
+    // waves / daily / open / admiral). Lets the player set per-class
+    // directives + split strike craft into wings; LAUNCH stamps the
+    // assembled plan onto `justStarted.fleetPlan` (game.js#startGame
+    // applies it post-spawn via fleetcommand.js#applyFleetPlan).
+    this.showFleetPlan = false;
+    this._pendingFleetLaunch = null;  // stashed justStarted (sans fleetPlan)
+    // Persisted in-memory across opens so the player's directive/wing
+    // choices survive returning to the menu. Lazily seeded on first open.
+    this._fleetPlanState = null;
+    // Shipyard overlay — design-your-own-ship meta-progression store.
+    // Opens from the home screen card; closes back to home on save.
+    this.showShipyard = false;
     // Promotion overlay — pops automatically when the run controller
     // has a pendingPromotion stamped (boss-clear act transition).
     this.showPromotion = false;
+    // Preamble overlay — pops after promotion dismiss (or at run start)
+    // when run.pendingPreamble is stamped. Sits between promotion and
+    // the starmap so the act-intro war-state briefing reads first.
+    this.showPreamble = false;
+    // Dispatch overlay — procedural radio beat shown AFTER the
+    // preamble dismisses. Sits between preamble and starmap.
+    this.showDispatch = false;
+    // Jump-encounter overlay — fires on ~32% of jumps with a brief
+    // narrative beat. Auto-opens when run.pendingJumpEncounter is
+    // stamped (by enterNode) and clears via clearPendingJumpEncounter.
+    this.showJumpEncounter = false;
+    // Run-stats overlay — opens from the run-map STATS footer button.
+    // Read-only view of run.stats; closes back to the starmap.
+    this.showRunStats = false;
+    // Captain-detail overlay — opens when the player taps a capital
+    // row in the fleet panel. Shows captain XP/level/trait/stats.
+    this.showCaptainDetail = false;
+    this._captainDetailInstanceId = null;
+    this._wingDetailRef = null; // {craft, wingId} when viewing a wing commander
+    // Career-detail overlay — opens when the player taps a memorial
+    // wall entry. Shows that career's full log + stats snapshot.
+    this.showCareerDetail = false;
+    this._careerDetailIdx = null;
+    // Service Hall overlay (Tier 38) — meta-progression spending.
+    this.showServiceHall = false;
+    // New-career confirm overlay — opens when the player taps NEW
+    // CAREER from home/play-hub while an active run exists. Confirm
+    // routes through onRunChoice("abandon-run") + opens run setup.
+    this.showNewCareerConfirm = false;
     // Cached layout rects for each overlay.
     this.runSetupRects = { panel: null, factionChips: [], beginBtn: null, cancelBtn: null };
     this.runMapRects = {
@@ -619,7 +726,7 @@ export class StartMenu {
     this.showSettings = false;
     this.settingsButtonRect = null;
     this.settingsRects = { panel: null, musicToggle: null, sfxToggle: null, close: null };
-    this._settingsGet = () => ({ musicMuted: false, sfxMuted: false });
+    this._settingsGet = () => ({ musicVolume: 0.6, sfxVolume: 0.8, musicMuted: false, sfxMuted: false });
     this._settingsApply = () => {};
   }
 
@@ -782,8 +889,11 @@ export class StartMenu {
           this.showCustom = false;
           return true;
         }
-        this._emitStart();
-        this.showCustom = false;
+        // Route through the Fleet Plan overlay (always shown pre-battle).
+        // Leave showCustom set so BACK from the plan returns to the editor;
+        // onFleetPlanLaunch clears both. consumeCustomRoster clones (doesn't
+        // destroy) the editor state, so re-entry is safe.
+        this._openFleetPlan(this._buildLaunchParams());
         return true;
       }
       return true;
@@ -849,7 +959,7 @@ export class StartMenu {
         this.showRefill = true;
         return true;
       }
-      this._emitStart();
+      this._openFleetPlan(this._buildLaunchParams());
       return true;
     }
     return false;
@@ -859,19 +969,35 @@ export class StartMenu {
     return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   }
 
-  _emitStart() {
+  // Map size lookup for the Tier 44 skirmish form. Returns the
+  // dimension (mapW/mapH) for a given label, falling back to the
+  // middle size if the label doesn't match.
+  _lookupMapSize(label, axis) {
+    const sizeOpts = MAP_SIZES;
+    const match = sizeOpts.find((o) => o.label === label) || sizeOpts[Math.floor(sizeOpts.length / 2)];
+    return axis === "w" ? match.mapW : match.mapH;
+  }
+
+  // Assemble the launch descriptor (would-be justStarted) from the legacy
+  // size/race/fleet/mode selectors. Split out of _emitStart so the Fleet
+  // Plan overlay can stash it and emit later, after the plan is built.
+  _buildLaunchParams() {
     const size = this.sizeRects.find((r) => r.key === this.selectedSize)
               || this.sizeRects[0];
     const fleet = this.fleetRects.find((r) => r.key === this.selectedFleet)
                || this.fleetRects.find((r) => r.key === "medium")
                || { mul: 1 };
-    this.justStarted = {
+    return {
       mapW: size.mapW, mapH: size.mapH,
       race: this.selectedRace,
       mode: this.selectedMode,
       fleetMul: fleet.mul,
       customRoster: this.selectedMode === "custom" ? this.consumeCustomRoster() : null,
     };
+  }
+
+  _emitStart() {
+    this.justStarted = this._buildLaunchParams();
   }
 
   consumeStart() {
@@ -908,23 +1034,58 @@ export class StartMenu {
     } else if ((!run || !run.pendingPromotion) && this.showPromotion) {
       this.showPromotion = false;
     }
+    // Preamble — show after the promotion is dismissed (or at run
+    // start where there is no promotion). Same chicken-and-egg fix as
+    // the promotion auto-open: gated above the sync block.
+    if (run && run.pendingPreamble && !this.showPreamble && this.showRunMap && !this.showPromotion) {
+      this.showPreamble = true;
+    } else if ((!run || !run.pendingPreamble) && this.showPreamble) {
+      this.showPreamble = false;
+    }
+    // Dispatch — show after the preamble is dismissed. Sits behind
+    // preamble + promotion in the gate order.
+    if (run && run.pendingDispatch && !this.showDispatch && this.showRunMap && !this.showPromotion && !this.showPreamble) {
+      this.showDispatch = true;
+    } else if ((!run || !run.pendingDispatch) && this.showDispatch) {
+      this.showDispatch = false;
+    }
+    // Jump encounter — fires as a one-tap overlay between fuel-paid
+    // and the node's normal flow. Top of the overlay stack (above
+    // resupply/event/battle-choice) because the player has already
+    // committed to the jump.
+    if (run && run.pendingJumpEncounter && !this.showJumpEncounter) {
+      this.showJumpEncounter = true;
+    } else if ((!run || !run.pendingJumpEncounter) && this.showJumpEncounter) {
+      this.showJumpEncounter = false;
+    }
 
     let screenName = this._baseScreen || 'home';
     if (this.showSettings) screenName = 'settings';
     else if (this.showRefill) screenName = 'refill';
+    else if (this.showFleetPlan) screenName = 'fleetPlan';
     else if (this.showCustom) screenName = 'custom';
     else if (this.showRunSetup) screenName = 'runSetup';
     else if (this.showPromotion) screenName = 'promotion';
+    else if (this.showPreamble) screenName = 'preamble';
+    else if (this.showDispatch) screenName = 'dispatch';
+    else if (this.showJumpEncounter) screenName = 'jumpEncounter';
+    else if (this.showRunStats) screenName = 'runStats';
+    else if (this.showCaptainDetail) screenName = 'captainDetail';
+    else if (this.showCareerDetail) screenName = 'careerDetail';
+    else if (this.showServiceHall) screenName = 'serviceHall';
+    else if (this.showNewCareerConfirm) screenName = 'newCareerConfirm';
     else if (this.showResupply) screenName = 'resupply';
     else if (this.showEvent) screenName = 'event';
     else if (this.showBattleChoice) screenName = 'battleChoice';
+    else if (this.showBattlePlan) screenName = 'battlePlan';
+    else if (this.showShipyard) screenName = 'shipyard';
 
     // Show the menu root unless we're on the run-map *and* no overlay is
     // up. When an overlay is up during a run, the menu-root (z-index 15)
     // sits above the starmap (z-index 10) and the DOM screen handles the
     // visuals — keeping menu-root hidden here was the JUMP-does-nothing
     // bug, the overlay state flipped but no DOM ever rendered.
-    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice || this.showPromotion;
+    const hasSubOverlay = this.showResupply || this.showEvent || this.showBattleChoice || this.showBattlePlan || this.showPromotion || this.showPreamble || this.showDispatch || this.showJumpEncounter || this.showRunStats || this.showCaptainDetail || this.showCareerDetail || this.showServiceHall || this.showNewCareerConfirm;
     if (!this.showRunMap || hasSubOverlay) {
       this._menuSystem.showScreen(screenName);
       // Dim the canvas behind any base screen (home / main / about /
@@ -1008,6 +1169,592 @@ export class StartMenu {
     this._menuSystem.sync(state);
   }
 
+  // Shipyard menu state — derives the full picker payload from saveStore.
+  // Driven by Phase 3. The menu renderer reads everything from this; no
+  // direct save reads in DOM-land.
+  _buildShipyardMenuState() {
+    const data = saveStore.get();
+    const ship = data.playerShip || { hull: "fighter", modules: {} };
+    const credits = data.shipyardCredits || 0;
+    const ownedComps = effectiveOwnedComponents(data.ownedComponents);
+    const ownedHulls = effectiveOwnedHulls(data.ownedHulls);
+
+    // Hulls — ordered by tier so the UI shows progression linearly.
+    const hulls = HULL_ORDER.map((id) => {
+      const h = SHIPYARD_HULLS[id];
+      const owned = ownedHulls.has(id);
+      const equipped = ship.hull === id;
+      const canBuy = !owned && credits >= h.cost;
+      return { id, label: h.label, cost: h.cost, owned, equipped, canBuy, blurb: h.blurb };
+    });
+
+    const currentHull = SHIPYARD_HULLS[ship.hull] || SHIPYARD_HULLS.fighter;
+
+    // Resolve the base spec once — used as the "before" for delta
+    // comparison so every candidate compares against the same baseline
+    // (player ship's race + hull).
+    let baseSpecForDeltas = null;
+    try {
+      baseSpecForDeltas = resolveSpec("terran", currentHull.klass);
+    } catch (_e) { baseSpecForDeltas = null; }
+
+    // Per-slot data — for each slot the hull has, list compatible
+    // components with their state (owned / equipped / buyable / locked).
+    const slots = currentHull.slots.map((slotId) => {
+      const equippedId = ship.modules && ship.modules[slotId];
+      const equippedComp = equippedId ? SHIPYARD_COMPONENTS[equippedId] : null;
+      const options = [];
+      for (const compId of Object.keys(SHIPYARD_COMPONENTS)) {
+        const c = SHIPYARD_COMPONENTS[compId];
+        if (!c.slots.includes(slotId)) continue;
+        const owned = ownedComps.has(compId);
+        const equipped = compId === equippedId;
+        const canBuy = !owned && credits >= c.cost;
+        // Stat deltas vs the currently equipped component. Returns
+        // empty array for the equipped option (no-op) and for any
+        // candidate that produces identical resolved specs.
+        const deltas = baseSpecForDeltas
+          ? computeDeltas(baseSpecForDeltas, ship, slotId, compId)
+          : [];
+        options.push({
+          id: compId, name: c.name, blurb: c.blurb || "",
+          cost: c.cost, owned, equipped, canBuy,
+          deltas,
+        });
+      }
+      // Sort: equipped first, then owned, then buyable, then locked, by cost.
+      options.sort((a, b) => {
+        const rank = (o) => (o.equipped ? 0 : o.owned ? 1 : o.canBuy ? 2 : 3);
+        const r = rank(a) - rank(b);
+        return r !== 0 ? r : a.cost - b.cost;
+      });
+      return {
+        id: slotId,
+        kindLabel: slotLabel(slotId),
+        equippedName: equippedComp ? equippedComp.name : "—",
+        options,
+      };
+    });
+
+    // Resolve a stat preview from the current design — quick read so
+    // the UI can show "HP 35 / Shield 40 / Speed 400" sticky at top.
+    let stats = null;
+    try {
+      const baseSpec = resolveSpec("terran", currentHull.klass);
+      const designed = applyDesign(baseSpec, ship);
+      stats = {
+        hp: designed.hp,
+        shield: designed.shield ? designed.shield.max : 0,
+        maxSpeed: designed.maxSpeed,
+        // Built-in weapon systems shown in the stat strip for relevant classes.
+        torpedoes: designed.torpedoes
+          ? { damage: designed.torpedoes.damage, cooldown: designed.torpedoes.cooldown,
+              count: designed.torpedoes.count }
+          : null,
+        carrierPods: designed.missilePods && currentHull.klass === "carrier"
+          ? { count: designed.missilePods.count, damage: designed.missilePods.damage }
+          : null,
+      };
+    } catch (_e) {
+      stats = null;
+    }
+
+    // Ship preview data — hull polygon (unit-space verts) + per-slot
+    // hotspot positions, so the Shipyard can render an SVG silhouette
+    // with clickable module dots positioned at the slot's logical hull
+    // location. Race defaults to terran since the player is always
+    // Terran in Frontier; if multi-race designs ship later, pull the
+    // race off the run.
+    const preview = (() => {
+      const poly = getHull("terran", currentHull.klass);
+      if (!poly) return null;
+      // Derive the schematic dots from the ACTUAL physical module layout
+      // (the same buildModules the in-game ship uses) so the blueprint
+      // matches the in-game sprite mount-for-mount — guns at the bow, PD
+      // turrets ringing the edge, engines aft, etc. Abstract slots that
+      // have no physical mount (shield = bubble, armor = layer, and the
+      // fighter's missile which fires from the gun) fall back to the
+      // generic SLOT_VISUALS position so they stay clickable.
+      let mods = [];
+      try {
+        const baseSpec = resolveSpec("terran", currentHull.klass);
+        const designed = applyDesign(baseSpec, ship);
+        mods = buildModules(currentHull.klass, designed, poly) || [];
+        // Snap onto live blocks exactly as createShip does, so the
+        // schematic dots land on the same hull structure the in-game ship
+        // mounts them on (engines pulled in off a tapered stern, etc.).
+        const grid = buildCells(currentHull.klass, designed.radius, "terran");
+        if (grid) snapModulesSymmetric(grid, designed.radius, mods);
+      } catch (_e) { mods = []; }
+
+      const moduleCategory = (name) => {
+        if (name.startsWith("pd-")) return "pd";
+        if (name.startsWith("engine")) return "engine";
+        if (name === "hangar") return "hangar";
+        if (name.startsWith("torpedo-tube")) return "torpedo";   // built-in, not a slot
+        if (name.startsWith("shield-generator")) return "shield-gen"; // built-in, not a slot
+        if (name.includes("missile") || name.includes("torpedo")) return "missile";
+        if (name.includes("gun") || name.includes("cannon") ||
+            name.includes("laser") || name.includes("broadside")) return "weapon";
+        return null;
+      };
+      // Categories that are built-in hardware (no corresponding design slot).
+      // Shown as non-clickable info markers on the blueprint legend.
+      const BUILTIN_CATS = new Set(["shield-gen", "torpedo"]);
+      const slotName = (slot) => {
+        const id = ship.modules && ship.modules[slot];
+        const comp = id ? SHIPYARD_COMPONENTS[id] : null;
+        return comp ? comp.name : "—";
+      };
+
+      // Group physical modules + design slots by category.
+      const modsByCat = {};
+      for (const m of mods) {
+        const c = moduleCategory(m.name);
+        if (c) (modsByCat[c] || (modsByCat[c] = [])).push(m);
+      }
+      const slotsByCat = {};
+      for (const slot of currentHull.slots) {
+        const v = SLOT_VISUALS[slot];
+        if (v) (slotsByCat[v.category] || (slotsByCat[v.category] = [])).push(slot);
+      }
+
+      const hotspots = [];
+      for (const cat of Object.keys(slotsByCat)) {
+        const slots = slotsByCat[cat];
+        const ms = modsByCat[cat] || [];
+        if (ms.length === 0) {
+          // No physical mount for this category — abstract slot(s).
+          for (const slot of slots) {
+            const v = SLOT_VISUALS[slot];
+            hotspots.push({ slot, x: v.x, y: v.y, category: cat, icon: v.icon,
+              equippedName: slotName(slot), primary: true });
+          }
+          continue;
+        }
+        // Zip modules onto slots: module i → slot i (the FIRST module per
+        // slot is the numbered/legend "primary"; any extra modules of the
+        // same category — the PD ring, the second engine, the broadside
+        // pair — attach to the last slot as small unnumbered markers).
+        for (let i = 0; i < ms.length; i++) {
+          const slot = slots[Math.min(i, slots.length - 1)];
+          const v = SLOT_VISUALS[slot] || { icon: "•" };
+          hotspots.push({ slot, x: ms[i].offset.x, y: ms[i].offset.y, category: cat,
+            icon: v.icon, equippedName: slotName(slot), primary: i < slots.length });
+        }
+        // Slots of this category with no module → abstract fallback.
+        for (let i = ms.length; i < slots.length; i++) {
+          const slot = slots[i];
+          const v = SLOT_VISUALS[slot];
+          hotspots.push({ slot, x: v.x, y: v.y, category: cat, icon: v.icon,
+            equippedName: slotName(slot), primary: true });
+        }
+      }
+      // Built-in hardware (shield generators, torpedo tubes) — not
+      // design slots so the zip loop skips them. Append as non-clickable
+      // fixed markers so the blueprint shows every physical system.
+      for (const m of mods) {
+        const c = moduleCategory(m.name);
+        if (!c || !BUILTIN_CATS.has(c)) continue;
+        hotspots.push({
+          slot: null, x: m.offset.x, y: m.offset.y, category: c,
+          icon: c === "torpedo" ? "⊕" : "◈",
+          equippedName: moduleLabel(m.name),
+          primary: true, fixed: true,
+        });
+      }
+      return { hullPoly: poly, hotspots };
+    })();
+
+    return {
+      credits,
+      hullId: ship.hull,
+      hullLabel: currentHull.label,
+      shipName: ship.name || "ISS Spectre",
+      modules: ship.modules || {},
+      ownedHulls: [...ownedHulls],
+      ownedComponents: [...ownedComps],
+      hulls,
+      slots,
+      stats,
+      paintPrimary: ship.paintPrimary || null,
+      paintTrim: ship.paintTrim || null,
+      preview,
+    };
+  }
+
+  // Battle Plan menu state — surfaces the enemy roster + friendly
+  // capitals + wing counts for the new pre-flight orders screen.
+  // Driven off the `_pendingBattleNode` set by the battle-choice flow
+  // + the run's capitals/smallCraft. Wing commands live on the run.
+  _buildBattlePlanMenuState() {
+    if (!this._pendingBattleNode) return null;
+    const run = this.runState && this.runState.run;
+    if (!run) return null;
+    const node = this._pendingBattleNode;
+    // Enemy roster — flatten node.roster into a class-count list.
+    const enemyRoster = [];
+    if (node.roster) {
+      const order = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+      for (const k of order) {
+        const count = node.roster[k];
+        if (count > 0) enemyRoster.push({ klass: k, count });
+      }
+    }
+    const faction = node.faction ? RACES[node.faction] : null;
+    let nodeLabel = "BATTLE";
+    if (node.type === "boss")  nodeLabel = "BOSS · " + (node.bossName || "Boss");
+    else if (node.type === "elite") nodeLabel = "ELITE · " + (node.aceName || "Ace");
+    return {
+      nodeId: node.id,
+      nodeLabel,
+      bossName: node.bossName || null,
+      bossDescription: node.bossDescription || node.aceDescription || null,
+      enemyRoster,
+      enemyFactionName: faction ? faction.name : null,
+      enemyFactionAccent: faction ? faction.accent : null,
+      capitals: (run.capitals || []).map((c) => ({
+        instanceId: c.instanceId,
+        klass: c.klass,
+        name: c.name,
+        captain: c.captain,
+        behavior: c.behavior || "default",
+        // Captured capitals keep their enemy race — surface it so the
+        // Battle Plan can tint / label them as a captured prize.
+        captured: !!c.captured,
+        race: c.race || null,
+      })),
+      // Captured small craft, collapsed to per-(race,klass) counts for
+      // a compact "CAPTURED CRAFT" readout. These fly blue keeping their
+      // original hull/sprite but aren't part of the native wing system.
+      capturedCraft: collapseCapturedCraft(run.capturedCraft || []),
+      fighterCount: run.smallCraft?.fighter || 0,
+      bomberCount:  run.smallCraft?.bomber  || 0,
+      // Legacy single-wing commands (kept for old saves).
+      fighterWingCommand: run.fighterWingCommand || "free",
+      bomberWingCommand:  run.bomberWingCommand  || "free",
+      // Multi-wing data — each entry: { id, name, count, command, commander }.
+      fighterWings: (run.fighterWings || []).map((w) => ({
+        id: w.id, name: w.name, count: w.count,
+        command: w.command || { kind: "free" },
+        commander: w.commander || null,
+      })),
+      bomberWings: (run.bomberWings || []).map((w) => ({
+        id: w.id, name: w.name, count: w.count,
+        command: w.command || { kind: "free" },
+        commander: w.commander || null,
+      })),
+      // Phase 1 — reputation effects on this battle: allied
+      // reinforcements (friendly factions sending ships to your side)
+      // + grudge (a Marked enemy faction throwing a heavier roster).
+      ...(() => {
+        const FACTION_LABELS = { coalition: "Coalition", hegemony: "Hegemony", reavers: "Reavers", voidsworn: "Voidsworn" };
+        const { reinforcements, grudge } = battleReputationPreview(run, node);
+        return {
+          reinforcements: reinforcements.map((r) => ({
+            factionLabel: FACTION_LABELS[r.faction] || r.faction,
+            faction: r.faction,
+            standing: reputationLabel(getReputation(run, r.faction)),
+            fighter: r.fighter || 0,
+            bomber: r.bomber || 0,
+            frigate: r.frigate || 0,
+          })),
+          grudge: grudge ? {
+            factionLabel: FACTION_LABELS[grudge.faction] || grudge.faction,
+            pct: Math.round((grudge.mul - 1) * 100),
+          } : null,
+        };
+      })(),
+    };
+  }
+
+  // --- Fleet Plan (all non-Frontier modes) -------------------------------
+
+  // Open the pre-battle Fleet Plan overlay. `launchParams` is the would-be
+  // `justStarted` object (mode/race/map/fleetMul/customRoster) MINUS the
+  // fleetPlan — that gets assembled + attached on LAUNCH. Seeds the plan
+  // state on first open and reuses it after (directive/wing choices persist
+  // across opens). Called by onStart / onSkirmishStart / onCustomStart in
+  // place of the old direct _emitStart.
+  _openFleetPlan(launchParams) {
+    this._pendingFleetLaunch = launchParams || null;
+    if (!this._fleetPlanState) this._fleetPlanState = makeDefaultFleetPlan();
+    // The plan persists across opens, so a wing's defend-capital / target-
+    // class target from a PREVIOUS battle could point at a class absent
+    // from THIS one. Prune those back to "free" so a reused plan can't
+    // carry a stale order into an unrelated fight.
+    this._sanitizeFleetPlan(launchParams);
+    this.showFleetPlan = true;
+  }
+
+  _sanitizeFleetPlan(params) {
+    if (!this._fleetPlanState) return;
+    const prev = this._resolveFleetPreview(params);
+    const capOk = new Set(["frigate", "cruiser", "battleship"].filter(
+      (k) => (prev.yourCounts[k] || 0) > 0,
+    ));
+    // Enemy may be unknown (randomised modes) — only validate HUNT targets
+    // when we know the enemy composition. An absent HUNT class just degrades
+    // to default AI at spawn, so leaving it is harmless.
+    const enemyOk = prev.enemyCounts
+      ? new Set(ADMIRAL_CLASSES.filter((k) => (prev.enemyCounts[k] || 0) > 0))
+      : null;
+    // Drop an ESCORT whose capital class is absent (revert to FREE ROAM) and a
+    // HUNT whose target class is absent (revert to DEFAULT). Applies to both
+    // wing commands and per-class capital directives.
+    const fix = (c) => {
+      if (!c) return;
+      if (c.assignment === "escort" && !capOk.has(c.escortKlass)) { c.assignment = "free"; c.escortKlass = null; }
+      if (c.priority === "hunt" && enemyOk && !enemyOk.has(c.priorityClass)) { c.priority = "default"; c.priorityClass = null; }
+    };
+    for (const craft of WING_CRAFT) {
+      for (const w of (this._fleetPlanState.wings[craft] || [])) fix(w.command);
+    }
+    for (const k of ["frigate", "cruiser", "battleship"]) fix(this._fleetPlanState.classDirectives[k]);
+  }
+
+  // Resolve the per-class headcounts for both sides from the pending launch
+  // params, mirroring spawnRoster's resolution order (teams → legacy counts
+  // → race-default × fleetMul). The enemy side is often unknown pre-battle
+  // (arena/daily/open randomise the hostile race in mode.setup) — return
+  // null enemy in that case so the UI shows a "randomised" note rather than
+  // a wrong roster. Counts are a preview: the actual wing split at spawn
+  // runs on the real spawned pool.
+  _resolveFleetPreview(params) {
+    const cr = params && params.customRoster;
+    // Mirror spawnRoster's rule (game.js): ANY customRoster makes
+    // `rosterOverride` truthy at spawn → mul forced to 1 (counts taken
+    // verbatim). Only the pure race-default modes (arena/open/daily, no
+    // customRoster) actually apply the fleet-size slider. Using fleetMul
+    // unconditionally previewed up to 3× the fleet that a skirmish (which
+    // passes a race-only customRoster) actually spawns.
+    const mul = cr ? 1 : (params && params.fleetMul ? params.fleetMul : 1);
+    const sumTeams = (teams) => {
+      const out = {};
+      for (const k of ADMIRAL_CLASSES) out[k] = 0;
+      for (const t of teams) {
+        const c = t.counts || t.roster || {};
+        for (const k of ADMIRAL_CLASSES) out[k] += c[k] || 0;
+      }
+      return out;
+    };
+    // spawnRoster bumps the spawned fighter pool by the capitals' escort
+    // demand, but ONLY for the race-default path (no rosterOverride, i.e.
+    // cr falsy) and only when the roster actually fields fighters. Mirror
+    // that here so the previewed fighter count + wing split match what
+    // spawns; otherwise the overlay under-counted fighters whenever the
+    // fleet had capitals.
+    const applyEscortBump = !cr;
+    const scaledDefault = (raceKey) => {
+      const base = rosterForRace(raceKey);
+      const out = {};
+      for (const k of ADMIRAL_CLASSES) {
+        const c = base[k] || 0;
+        out[k] = c > 0 ? Math.max(1, Math.round(c * mul)) : 0;
+      }
+      if (applyEscortBump && (base.fighter || 0) > 0) {
+        let escortDemand = 0;
+        for (const k of ADMIRAL_CLASSES) {
+          if (ESCORT_SIZE[k] && (base[k] || 0) > 0) escortDemand += ESCORT_SIZE[k] * base[k];
+        }
+        out.fighter += escortDemand;
+      }
+      return out;
+    };
+    // Blue (your fleet) — always resolvable.
+    let yourCounts, allyRace;
+    if (cr && Array.isArray(cr.blueTeams) && cr.blueTeams.length > 0) {
+      yourCounts = sumTeams(cr.blueTeams);
+      allyRace = cr.blueTeams.length === 1 ? cr.blueTeams[0].race : "mixed";
+    } else if (cr && cr.blue) {
+      yourCounts = cr.blue;
+      allyRace = cr.alliedRace || params.race;
+    } else {
+      allyRace = (cr && cr.alliedRace) || params.race || "terran";
+      yourCounts = scaledDefault(allyRace);
+    }
+    // Red (enemy) — may be unknown.
+    let enemyCounts = null, enemyRace = null;
+    if (cr && Array.isArray(cr.redTeams) && cr.redTeams.length > 0) {
+      enemyCounts = sumTeams(cr.redTeams);
+      enemyRace = cr.redTeams.length === 1 ? cr.redTeams[0].race : "mixed";
+    } else if (cr && cr.red) {
+      enemyCounts = cr.red;
+      enemyRace = cr.hostileRace || null;
+    } else if (cr && cr.hostileRace) {
+      enemyRace = cr.hostileRace;
+      enemyCounts = scaledDefault(enemyRace);
+    }
+    return { yourCounts, allyRace, enemyCounts, enemyRace };
+  }
+
+  _classCountsToList(counts) {
+    const list = [];
+    for (const k of ADMIRAL_CLASSES) {
+      const c = counts[k] || 0;
+      if (c > 0) list.push({ klass: k, count: c });
+    }
+    return list;
+  }
+
+  // Build the menuState.fleetPlan payload the DOM overlay renders from.
+  _buildFleetPlanMenuState() {
+    if (!this.showFleetPlan || !this._pendingFleetLaunch) return null;
+    const params = this._pendingFleetLaunch;
+    const plan = this._fleetPlanState || makeDefaultFleetPlan();
+    const prev = this._resolveFleetPreview(params);
+    const allyRaceObj = RACES[prev.allyRace] || null;
+    const enemyRaceObj = prev.enemyRace ? RACES[prev.enemyRace] : null;
+
+    // Picker option lists: HUNT targets = enemy classes on the field;
+    // ESCORT targets = friendly capital classes the fleet fields.
+    const enemyKlasses = prev.enemyCounts
+      ? ADMIRAL_CLASSES.filter((k) => (prev.enemyCounts[k] || 0) > 0)
+      : ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
+    const capitalKlasses = ["frigate", "cruiser", "battleship"].filter(
+      (k) => (prev.yourCounts[k] || 0) > 0,
+    );
+
+    // Per-class command rows — capitals that fight in formation only
+    // (frigate/cruiser/battleship). Fighters/bombers are commanded via wings
+    // below; carriers/stations run their own passive AI (the stance layer
+    // never touches them) so they're not commandable.
+    const COMMANDABLE_CAPS = ["frigate", "cruiser", "battleship"];
+    const POD_CAPS = new Set(["frigate", "cruiser", "battleship"]);
+    const orderRow = (src) => ({
+      stance: src.stance || "engage",
+      priority: src.priority || "default",
+      priorityClass: src.priorityClass || null,
+      assignment: src.assignment || "free",
+      escortKlass: src.escortKlass || null,
+    });
+    const classRows = [];
+    for (const k of COMMANDABLE_CAPS) {
+      const count = (prev.yourCounts && prev.yourCounts[k]) || 0;
+      if (count <= 0) continue;
+      const d = plan.classDirectives[k] || {};
+      classRows.push({
+        klass: k, count, ...orderRow(d),
+        missiles: d.missiles || "on",
+        hasMissiles: POD_CAPS.has(k),
+      });
+    }
+
+    // Strike-craft wings — project headcounts from the live pool. Each wing
+    // carries the full 3-axis order. A section-level missile toggle rides on
+    // the per-class directive (missiles are gated per-class in ship.js).
+    const wingsByCraft = {};
+    for (const craft of WING_CRAFT) {
+      const pool = (prev.yourCounts && prev.yourCounts[craft]) || 0;
+      const wings = (plan.wings && plan.wings[craft]) || [];
+      const counts = distributeByWeight(pool, wings);
+      wingsByCraft[craft] = wings.map((w, i) => ({
+        id: w.id, name: w.name, count: counts[i] || 0,
+        ...orderRow(w.command || {}),
+      }));
+    }
+
+    return {
+      modeLabel: this._fleetPlanModeLabel(params.mode),
+      allyFactionName: allyRaceObj ? allyRaceObj.name : (prev.allyRace || "").toUpperCase(),
+      allyFactionAccent: allyRaceObj ? allyRaceObj.accent : "#5cf",
+      enemyKnown: !!prev.enemyCounts,
+      enemyFactionName: enemyRaceObj ? enemyRaceObj.name : (prev.enemyRace ? prev.enemyRace.toUpperCase() : null),
+      enemyFactionAccent: enemyRaceObj ? enemyRaceObj.accent : "#fc8",
+      enemyRoster: prev.enemyCounts ? this._classCountsToList(prev.enemyCounts) : [],
+      yourRoster: this._classCountsToList(prev.yourCounts),
+      classRows,
+      fighterWings: wingsByCraft.fighter || [],
+      bomberWings: wingsByCraft.bomber || [],
+      fighterMissiles: (plan.classDirectives.fighter || {}).missiles || "on",
+      bomberMissiles: (plan.classDirectives.bomber || {}).missiles || "on",
+      canAddFighterWing: (plan.wings.fighter || []).length < MAX_WINGS && (prev.yourCounts.fighter || 0) > (plan.wings.fighter || []).length,
+      canAddBomberWing: (plan.wings.bomber || []).length < MAX_WINGS && (prev.yourCounts.bomber || 0) > (plan.wings.bomber || []).length,
+      enemyKlasses,
+      capitalKlasses,
+    };
+  }
+
+  _fleetPlanModeLabel(mode) {
+    const map = { custom: "CUSTOM BATTLE", open: "OPEN BATTLE", arena: "ARENA",
+      waves: "WAVE SURVIVAL", daily: "DAILY CHALLENGE", admiral: "ADMIRAL" };
+    return map[mode] || (mode || "BATTLE").toUpperCase();
+  }
+
+  // --- Fleet Plan state mutators (called from menu callbacks) ------------
+
+  _fpSetClassDirective(klass, field, value) {
+    if (!this._fleetPlanState) return;
+    const cd = this._fleetPlanState.classDirectives;
+    if (!cd[klass]) cd[klass] = { stance: "engage", missiles: "on", priority: "default", priorityClass: null, assignment: "free", escortKlass: null };
+    cd[klass] = { ...cd[klass], [field]: value };
+  }
+
+  // Set one field of a wing's command (stance/priority/priorityClass/
+  // assignment/escortKlass). When switching to HUNT/ESCORT, the caller seeds
+  // a sensible default target so the order takes effect immediately.
+  _fpSetWingField(craft, wingId, field, value) {
+    if (!this._fleetPlanState) return;
+    const wings = this._fleetPlanState.wings[craft] || [];
+    const w = wings.find((x) => x.id === wingId);
+    if (!w) return;
+    w.command = { ...w.command, [field]: value };
+  }
+
+  _fpAdjustWingWeight(craft, wingId, delta) {
+    if (!this._fleetPlanState) return;
+    const wings = this._fleetPlanState.wings[craft] || [];
+    const w = wings.find((x) => x.id === wingId);
+    if (!w) return;
+    w.weight = Math.max(1, (w.weight || 1) + delta);
+  }
+
+  // Append a fresh wing for this craft, named by the next free callsign.
+  _fpAddWing(craft) {
+    if (!this._fleetPlanState) return;
+    const wings = this._fleetPlanState.wings[craft] || (this._fleetPlanState.wings[craft] = []);
+    if (wings.length >= MAX_WINGS) return;
+    const idx = wings.length;
+    wings.push({
+      id: `${craft}-${idx}`,
+      name: WING_NAMES[idx] || `Wing ${idx + 1}`,
+      weight: 1,
+      command: { stance: "engage", priority: "default", priorityClass: null, assignment: "free", escortKlass: null },
+    });
+  }
+
+  // Remove a wing; never drop the last one (a craft always has ≥1 wing so
+  // every fielded ship is assigned). Re-index ids/names so they stay
+  // contiguous Alpha/Bravo/... for the next add.
+  _fpRemoveWing(craft, wingId) {
+    if (!this._fleetPlanState) return;
+    let wings = this._fleetPlanState.wings[craft] || [];
+    if (wings.length <= 1) return;
+    wings = wings.filter((w) => w.id !== wingId);
+    wings.forEach((w, i) => { w.id = `${craft}-${i}`; w.name = WING_NAMES[i] || `Wing ${i + 1}`; });
+    this._fleetPlanState.wings[craft] = wings;
+  }
+
+  // Assemble the transient fleetPlan that rides on justStarted → modeConfig.
+  // Drops the UI-only `weight` display detail; fleetcommand.js reads weight
+  // off the wing objects, so we keep them intact and just deep-copy.
+  _assembleFleetPlan() {
+    const src = this._fleetPlanState || makeDefaultFleetPlan();
+    const wings = {};
+    for (const craft of WING_CRAFT) {
+      wings[craft] = (src.wings[craft] || []).map((w) => ({
+        id: w.id, name: w.name, weight: w.weight || 1,
+        command: { ...w.command },
+      }));
+    }
+    const classDirectives = {};
+    for (const k of ADMIRAL_CLASSES) {
+      const d = src.classDirectives[k] || { stance: "engage", missiles: "on", priority: "default", priorityClass: null, assignment: "free", escortKlass: null };
+      classDirectives[k] = { ...d };
+    }
+    return { classDirectives, wings };
+  }
+
   _buildMenuState(viewW, viewH) {
     const run = this.runState && this.runState.run;
     const meta = this.runState && this.runState.meta;
@@ -1030,42 +1777,102 @@ export class StartMenu {
     const blueTotal = this.customBlueTeams.reduce((n, t) => n + totalShipCount(t.counts), 0);
     const redTotal  = this.customRedTeams.reduce((n, t) => n + totalShipCount(t.counts), 0);
 
-    // Build resupply state
+    // Build resupply state — vendor archetype on the node controls
+    // pricing modifiers + offered boon inventory. Falls back to a
+    // book-rate Coalition Quartermaster if a node is missing the
+    // vendor field (older saves or non-procedural test paths).
     let resupplyState = null;
     if (this.showResupply && this._pendingResupplyNode) {
       const run = this.runState && this.runState.run;
+      const node = this._pendingResupplyNode;
+      const vendor = (node && node.vendor) || {
+        key: "quartermaster",
+        name: "Q.M. Astren",
+        label: "Coalition Quartermaster",
+        pricing: { fuel: 1, fighter: 1, bomber: 1, repair: 1, boon: 1 },
+        pitch: "Coalition stamp. Book rate.",
+        color: "#9df",
+        serviceTag: null,
+      };
+      // Per-class base prices (kept in sync with RECRUIT_COST +
+      // FUEL_PER_REFUEL_CREDIT in roguelite.js — change one, change both).
+      // Reputation discount/premium also layers in via a per-vendor
+      // multiplier; keep UI prices in sync with buyX() implementations.
+      const baseFighter = 20;
+      const baseBomber = 56;
+      const baseFuel = 8;
+      // Coalition rep nudges Quartermaster prices ±10%. Same shape as
+      // the reputationVendorMul helper in roguelite.js.
+      let repMul = 1;
+      if (vendor.key === "quartermaster" && run && run.reputation) {
+        const c = run.reputation.coalition || 0;
+        if (c >= 50) repMul = 0.90;
+        else if (c <= -30) repMul = 1.10;
+      }
+      const fighterPrice = Math.round(baseFighter * vendor.pricing.fighter * repMul);
+      const bomberPrice = Math.round(baseBomber * vendor.pricing.bomber * repMul);
+      const fuelPrice = Math.round(baseFuel * vendor.pricing.fuel * repMul);
+      const credits = run ? run.resources.credits : 0;
       resupplyState = {
+        vendor,
         capitals: run ? run.capitals.map(cap => ({
           klass: cap.klass,
           instanceId: cap.instanceId,
           hpFrac: cap.hpFrac,
-          repairCost: repairCostFor(cap),
+          name: cap.name || null,
+          captain: cap.captain || null,
+          repairCost: Math.round(repairCostFor(cap) * vendor.pricing.repair),
         })) : [],
         smallCraft: run ? { ...run.smallCraft } : { fighter: 0, bomber: 0 },
         boons: run ? [...run.boons] : [],
         boonOffers: this._resupplyBoonOffers || [],
-        fuelPrice: 30,
-        fighterPrice: 40,
-        bomberPrice: 60,
-        canAffordFighter: run ? run.resources.credits >= 40 : false,
-        canAffordBomber: run ? run.resources.credits >= 60 : false,
-        canAffordRefuel: run ? run.resources.credits >= 30 : false,
-        credits: run ? run.resources.credits : 0,
+        fuelPrice,
+        fighterPrice,
+        bomberPrice,
+        canAffordFighter: credits >= fighterPrice,
+        canAffordBomber:  credits >= bomberPrice,
+        canAffordRefuel:  credits >= fuelPrice,
+        credits,
+        // Current fuel — the boon rows gate on this (each boon costs 1
+        // fuel). Was omitted, so `rs.fuel` read undefined and every boon
+        // button was permanently disabled — you could never spend fuel.
+        fuel: run ? run.resources.fuel : 0,
       };
     }
 
-    // Build event state
+    // Build event state. Card title/body may be either strings or
+    // functions of the run — arc cards use the latter to pull slot
+    // data (NPC names, ship names) at render time so the text reflects
+    // the run's procedural state. Options may also carry their own
+    // `precondition(run)` for branch-gated choices (e.g. the defector
+    // arc shows "Welcome them" only on the trusted branch).
     let eventState = null;
     if (this.showEvent && this._pendingEventNode) {
       const card = eventCardById && this._pendingEventNode.eventId ? eventCardById(this._pendingEventNode.eventId) : null;
+      const resolve = (v) => typeof v === "function" ? v(run) : v;
+      let visibleChoices = [];
+      if (card) {
+        // Preserve original index so applyEventChoice resolves the
+        // right option after filtering.
+        card.options.forEach((c, origIdx) => {
+          if (c.precondition && !c.precondition(run)) return;
+          visibleChoices.push({
+            key: String(origIdx),
+            label: resolve(c.label),
+            hint: resolve(c.hint) || "",
+          });
+        });
+      }
       eventState = {
-        title: card ? card.title : "Anomaly Detected",
-        body: card ? card.body : "Something unusual is happening in this sector...",
-        choices: card ? card.options.map((c, i) => ({
-          key: String(i),
-          label: c.label,
-          hint: c.hint || "",
-        })) : [],
+        title: card ? (resolve(card.title) || "Anomaly Detected") : "Anomaly Detected",
+        body: card ? (resolve(card.body) || "") : "Something unusual is happening in this sector...",
+        choices: visibleChoices,
+        // Once a choice is applied we flip to the RESULT view so the
+        // player SEES the consequence (outcome text + resource deltas)
+        // before advancing. run._lastEventResult is stamped by main.js's
+        // apply-event handler.
+        resolved: !!this._eventResolved,
+        result: this._eventResolved ? (run && run._lastEventResult) || null : null,
       };
     }
 
@@ -1088,6 +1895,18 @@ export class StartMenu {
         battleState.bossName = b.name;
         battleState.bossDescription = b.description;
         battleState.bossFaction = b.faction;
+      }
+      // Elite ace briefing — same shape as boss, but eyebrow text
+      // reads "ACE PILOT" and the briefing block uses the ace tone.
+      if (node.aceName) {
+        battleState.aceName = node.aceName;
+        battleState.aceDescription = node.aceDescription;
+        battleState.aceFaction = node.faction;
+      }
+      // Contextual battle banter — short comms lines surfaced above
+      // the briefing. Picker reads run state + node tags.
+      if (pickBattleBanter) {
+        battleState.banter = pickBattleBanter(run, node);
       }
     }
 
@@ -1115,8 +1934,20 @@ export class StartMenu {
         key: k,
         name: TRAITS[k] ? TRAITS[k].name : k,
       }));
+      // Enrich addedCapitals with their currently-selected variant
+      // (looked up from run.capitals via instanceId). Tier 40 variant
+      // picker reads this to highlight the chosen chip.
+      const added = run.pendingPromotion.added || { capitals: [] };
+      const enrichedCapitals = (added.capitals || []).map((c) => {
+        const live = (run.capitals || []).find((rc) => rc.instanceId === c.instanceId);
+        return {
+          ...c,
+          selectedVariant: live ? (live.variant || null) : null,
+        };
+      });
       promotionState = {
         ...run.pendingPromotion,
+        added: { ...added, capitals: enrichedCapitals },
         traitDraw: draw,
         ownedTraits: owned,
       };
@@ -1186,8 +2017,140 @@ export class StartMenu {
       resupply: resupplyState,
       event: eventState,
       promotion: promotionState,
+      preamble: (run && run.pendingPreamble) ? run.pendingPreamble : null,
+      dispatch: (run && run.pendingDispatch) ? run.pendingDispatch : null,
+      jumpEncounter: (run && run.pendingJumpEncounter) ? run.pendingJumpEncounter : null,
+      // Run-stats payload — read by the STATS overlay. Built from
+      // run.stats plus a few summary fields (rank, act) for the header.
+      runStats: run ? {
+        title: "RUN STATS",
+        handle: run.callsign
+          ? `${(ACT_RANKS[run.act] || {}).rank || "Officer"} ${run.callsign}`
+          : null,
+        rank: (ACT_RANKS[run.act] || {}).rank || "Officer",
+        act: run.act,
+        actsTotal: ACTS_PER_RUN,
+        stats: run.stats || null,
+      } : null,
+      // Service Hall payload — pulled from meta.servicePoints +
+      // meta.serviceUpgrades. Builds a renderable upgrade list with
+      // current rank, cost-of-next-rank, max rank.
+      serviceHall: this.showServiceHall ? (() => {
+        const points = (meta && meta.servicePoints) || 0;
+        const ranks = (meta && meta.serviceUpgrades) || {};
+        const upgrades = Object.entries(SERVICE_UPGRADES || {}).map(([key, def]) => {
+          const rank = ranks[key] || 0;
+          const isMaxed = rank >= def.maxRank;
+          return {
+            key,
+            name: def.name,
+            description: def.description,
+            maxRank: def.maxRank,
+            rank,
+            nextCost: isMaxed ? null : def.cost(rank + 1),
+          };
+        });
+        return { points, upgrades, ranks };
+      })() : null,
+      // Achievements payload — always available (cheap to compute).
+      // Drives the ACHIEVEMENTS panel + the home avatar progress chip.
+      achievements: {
+        list: (ACHIEVEMENTS || []).map((a) => ({
+          id: a.id, name: a.name, description: a.description,
+          icon: a.icon, reward: a.reward,
+        })),
+        unlocked: (meta && meta.unlockedAchievements) || [],
+      },
+      // Career-detail payload — pulled from meta.memorial[idx] when
+      // the player taps a row on the memorial wall.
+      careerDetail: (this.showCareerDetail && meta && Array.isArray(meta.memorial)) ? (() => {
+        const entry = meta.memorial[this._careerDetailIdx];
+        if (!entry) return null;
+        return {
+          timestamp: entry.timestamp || 0,
+          callsign: entry.callsign || "",
+          rank: entry.rank || "Officer",
+          result: entry.result || "lost",
+          epitaph: entry.epitaph || "",
+          stats: entry.stats || null,
+          log: entry.log || [],
+        };
+      })() : null,
+      // Captain-detail payload — lookup the capital by instanceId,
+      // build a renderable card with all the bits the overlay shows.
+      captainDetail: (run && this.showCaptainDetail) ? (() => {
+        const resolvePerks = (keys) => (keys || [])
+          .map((k) => COMMANDER_PERKS[k])
+          .filter(Boolean)
+          .map((p) => ({ name: p.name, blurb: p.blurb }));
+        // Wing-commander detail (clicked a wing row in the COMMANDERS tab).
+        if (this._wingDetailRef) {
+          const { craft, wingId } = this._wingDetailRef;
+          const wings = craft === "bomber" ? run.bomberWings : run.fighterWings;
+          const wing = (wings || []).find((w) => w.id === wingId);
+          const c = wing && wing.commander;
+          if (!c) return null;
+          const lvl = c.level || 1;
+          return {
+            kind: "wing",
+            shipName: c.name || "Wing Commander",
+            shipKlass: craft,
+            wingName: wing.name || "",
+            captain: "",
+            trait: c.traitLabel || "",
+            traitBlurb: c.blurb || "",
+            effectLabel: c.effectLabel || "",
+            level: lvl,
+            title: captainTitleFor(lvl),
+            xp: c.xp || 0,
+            nextXp: captainNextThreshold(lvl),
+            perks: resolvePerks(c.perks),
+            pendingPerks: c.pendingPerks || 0,
+            hpFrac: null, variant: null, behavior: null, hpBonusPct: 0,
+          };
+        }
+        const cap = (run.capitals || []).find(c => c.instanceId === this._captainDetailInstanceId);
+        if (!cap) return null;
+        const level = cap.level || 1;
+        const effect = CAPTAIN_TRAIT_EFFECTS[cap.captainTrait || ""];
+        return {
+          kind: "capital",
+          perks: resolvePerks(cap.perks),
+          pendingPerks: cap.pendingPerks || 0,
+          shipName: cap.name || "",
+          shipKlass: cap.klass,
+          captain: cap.captain || "",
+          trait: cap.captainTraitLabel || "",
+          traitBlurb: cap.captainTraitBlurb || "",
+          // Combat effect from the personality (Tier 33). Shown as
+          // a "BATTLE EFFECT" line in the dossier so the player
+          // knows what their captain actually does in a fight.
+          effectLabel: (effect && effect.effectLabel) || "",
+          level,
+          title: captainTitleFor(level),
+          xp: cap.xp || 0,
+          nextXp: captainNextThreshold(level),
+          hpFrac: cap.hpFrac,
+          hpBonusPct: Math.round((captainHpMul(level) - 1) * 100),
+          // Per-capital behavior override (Tier 37) — null/missing
+          // means "follow fleet doctrine" (default).
+          behavior: cap.behavior || "default",
+          // Variant chosen at promotion (Tier 40), if any.
+          variant: cap.variant || null,
+        };
+      })() : null,
+      // New-career confirm payload — exposes the active officer so the
+      // overlay can name who's about to be retired.
+      newCareerConfirm: (this.showNewCareerConfirm && run) ? {
+        callsign: run.callsign || "UNKNOWN",
+        act: run.act || 1,
+        faction: run.faction || "terran",
+      } : null,
       runSetup: runSetupState,
       memorial: (meta && meta.memorial) || [],
+      shipyard: this._buildShipyardMenuState(),
+      battlePlan: this._buildBattlePlanMenuState(),
+      fleetPlan: this._buildFleetPlanMenuState(),
       factions: RACE_KEYS,
       factionMeta: meta ? Object.fromEntries(RACE_KEYS.map(k => [k, { wins: meta.runsWon }])) : {},
       frontierStatus,
@@ -1227,10 +2190,15 @@ export class StartMenu {
             this.showRunSetup = true;
           }
         } else {
-          this._emitStart();
+          this._openFleetPlan(this._buildLaunchParams());
         }
       },
       onConfigure: () => {
+        // Same selectedMode stamp as onPlayHubCustom — onConfigure
+        // opens the Custom overlay from the legacy mode carousel's
+        // CONFIGURE button, and _emitStart needs selectedMode ===
+        // "custom" to actually attach the configured roster on DEPLOY.
+        this.selectedMode = 'custom';
         this._layoutCustomOverlay(this._lastViewW || 1200, this._lastViewH || 800);
         this.showCustom = true;
       },
@@ -1266,18 +2234,12 @@ export class StartMenu {
           this._menuSystem.hideAll();
         }
       },
-      onMusicToggle: () => {
-        const cur = this._settingsGet();
-        this._settingsApply({ musicMuted: !cur.musicMuted });
-        // In-battle: draw loop isn't running, so manually refresh
-        // the overlay's ON/OFF text. In-menu: harmless extra sync.
-        if (this._inBattleSettings) this._refreshSettingsOverlay();
-      },
-      onSfxToggle: () => {
-        const cur = this._settingsGet();
-        this._settingsApply({ sfxMuted: !cur.sfxMuted });
-        if (this._inBattleSettings) this._refreshSettingsOverlay();
-      },
+      // Music / SFX volume sliders (0..1). Applied live as the slider
+      // drags. No _refreshSettingsOverlay() call here even in-battle: the
+      // slider element is its own source of truth while dragging, and a
+      // re-sync would fight the drag.
+      onMusicVolume: (v) => { this._settingsApply({ musicVolume: v }); },
+      onSfxVolume: (v) => { this._settingsApply({ sfxVolume: v }); },
       onCustomClose: () => { this.showCustom = false; this._customDrag = null; },
       onCustomStart: () => {
         this._customDrag = null;
@@ -1285,8 +2247,9 @@ export class StartMenu {
           this.showRefill = true;
           this.showCustom = false;
         } else {
-          this._emitStart();
-          this.showCustom = false;
+          // Keep showCustom set — the Fleet Plan overlays on top and BACK
+          // returns to the custom editor. onFleetPlanLaunch clears both.
+          this._openFleetPlan(this._buildLaunchParams());
         }
       },
       onCustomRaceSelect: (side, raceKey, teamIdx = 0) => {
@@ -1333,11 +2296,11 @@ export class StartMenu {
         if (teamIdx <= 0 || teamIdx >= teams.length) return;
         teams.splice(teamIdx, 1);
       },
-      onBattleFly: () => {
-        this._launchBattle("fly");
+      onBattleFly: (doctrine) => {
+        this._launchBattle("fly", doctrine);
       },
-      onBattleCommand: () => {
-        this._launchBattle("command");
+      onBattleCommand: (doctrine) => {
+        this._launchBattle("command", doctrine);
       },
       onBattleBack: () => { this.showBattleChoice = false; },
       onResupplyRepair: (instanceId) => {
@@ -1360,16 +2323,32 @@ export class StartMenu {
         const node = this._pendingEventNode;
         if (!node) { this.showEvent = false; return; }
         if (this.onRunChoice) {
+          // Apply the choice — main.js stamps run._lastEventResult with
+          // the outcome text + resource deltas. We DON'T complete the
+          // node yet: flip to the result view so the player sees what
+          // their choice did before advancing.
           this.onRunChoice("apply-event", { eventId: node.eventId, choiceIndex: parseInt(choiceKey) });
-          // Mirror the canvas handler: a choice applied = node visited.
-          // Without this the run-map stays put and the player can re-tap
-          // the same event endlessly.
+        }
+        this._eventResolved = true;
+      },
+      // Dismiss the result view → complete the node + advance. This is
+      // where the "node visited" actually happens (was previously folded
+      // into onEventChoice, before the result screen existed).
+      onEventContinue: () => {
+        const node = this._pendingEventNode;
+        if (node && this.onRunChoice) {
           this.onRunChoice("complete-node-noncombat", { nodeId: node.id });
         }
         this._pendingEventNode = null;
+        this._eventResolved = false;
         this.showEvent = false;
       },
-      onEventClose: () => { this.showEvent = false; },
+      onEventClose: () => {
+        // Only allowed BEFORE a choice is made (back out, re-approach).
+        // After resolving, the player must CONTINUE (node is committed).
+        if (this._eventResolved) { this._callbacks.onEventContinue(); return; }
+        this.showEvent = false;
+      },
       onRunSetupSelect: (factionKey, opts) => {
         const callsign = (opts && opts.callsign) ? opts.callsign : "";
         const perkKey = (opts && opts.perkKey !== undefined) ? opts.perkKey : null;
@@ -1388,6 +2367,9 @@ export class StartMenu {
         if (this.onRunChoice) this.onRunChoice("dismiss-promotion", {});
         this.showPromotion = false;
       },
+      onPromotionVariantSelect: (instanceId, variantKey) => {
+        if (this.onRunChoice) this.onRunChoice("select-variant", { instanceId, variantKey });
+      },
       onPromotionTraitSelect: (traitKey) => {
         // Player tapped a trait chip on the promotion overlay. The
         // run-state controller stamps it onto pendingPromotion;
@@ -1395,13 +2377,248 @@ export class StartMenu {
         // onRunChoice so main.js can persist via saveStore.
         if (this.onRunChoice) this.onRunChoice("select-trait", { traitKey });
       },
-      // Top-level nav: home → play → about
-      onHomePlay:     () => { this._baseScreen = 'main'; },
+      onPreambleDismiss: () => {
+        // Clears run.pendingPreamble. The next sync drops showPreamble
+        // back to false and the starmap takes over.
+        if (this.onRunChoice) this.onRunChoice("dismiss-preamble", {});
+        this.showPreamble = false;
+      },
+      onDispatchDismiss: () => {
+        if (this.onRunChoice) this.onRunChoice("dismiss-dispatch", {});
+        this.showDispatch = false;
+      },
+      onJumpEncounterDismiss: () => {
+        if (this.onRunChoice) this.onRunChoice("dismiss-jump-encounter", {});
+        this.showJumpEncounter = false;
+      },
+      onRunStatsClose: () => {
+        this.showRunStats = false;
+      },
+      onCaptainDetailClose: () => {
+        this.showCaptainDetail = false;
+        this._captainDetailInstanceId = null;
+        this._wingDetailRef = null;
+      },
+      onRenameCapital: (fields) => {
+        if (this.onRunChoice && this._captainDetailInstanceId != null) {
+          this.onRunChoice("rename-capital", {
+            instanceId: this._captainDetailInstanceId,
+            fields,
+          });
+        }
+      },
+      onSetCapitalBehavior: (behavior) => {
+        if (this.onRunChoice && this._captainDetailInstanceId != null) {
+          this.onRunChoice("set-capital-behavior", {
+            instanceId: this._captainDetailInstanceId,
+            behavior,
+          });
+        }
+      },
+      onMemorialEntryClick: (idx) => {
+        this._careerDetailIdx = idx;
+        this.showCareerDetail = true;
+      },
+      onCareerDetailClose: () => {
+        this.showCareerDetail = false;
+        this._careerDetailIdx = null;
+      },
+      // Top-level nav: home → play hub → about
+      // (Tier 44 — Play routes to the new mode hub, not the legacy
+      // carousel. The hub then routes to per-mode sub-screens.)
+      onHomePlay:     () => { this._baseScreen = 'playHub'; },
+      // Home mode tiles route straight to their OWN flow (they used to
+      // both fall through to onHomePlay → the play hub, so Skirmish and
+      // Custom opened the same sub-menu). Skirmish → its setup form;
+      // Custom → the custom-match configure overlay (stamping
+      // selectedMode so _emitStart attaches the configured roster).
+      onHomeSkirmish: () => { this._baseScreen = 'skirmish'; },
+      onHomeCustom:   () => { this.selectedMode = 'custom'; this.showCustom = true; },
+      // NEW CAREER from the home/play-hub hero card. If a run is active,
+      // open the confirm overlay (player is about to abandon their
+      // current officer); otherwise jump straight to run setup.
+      onHomeNewCareer: () => {
+        const run = this.runState && this.runState.run;
+        if (run) {
+          this.showNewCareerConfirm = true;
+        } else {
+          this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showRunSetup = true;
+        }
+      },
+      onPlayHubNewCareer: () => {
+        const run = this.runState && this.runState.run;
+        if (run) {
+          this.showNewCareerConfirm = true;
+        } else {
+          this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showRunSetup = true;
+        }
+      },
+      onNewCareerConfirm: () => {
+        // Abandon the live run (synchronous: refresh() in main.js clears
+        // runState before this returns), then open run setup so the
+        // player can roll the next officer.
+        if (this.onRunChoice) this.onRunChoice("abandon-run", {});
+        this.showNewCareerConfirm = false;
+        this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+        this.showRunSetup = true;
+      },
+      onNewCareerCancel: () => { this.showNewCareerConfirm = false; },
       onHomeAbout:    () => { this._baseScreen = 'about'; },
       onHomeMemorial: () => { this._baseScreen = 'memorial'; },
+      onHomeShipyard: () => { this.showShipyard = true; },
+      onShipyardBack: () => { this.showShipyard = false; },
+      onShipyardBuyHull: (hullId) => {
+        if (this.onRunChoice) this.onRunChoice("shipyard-buy-hull", { hullId });
+      },
+      onShipyardSetHull: (hullId) => {
+        if (this.onRunChoice) this.onRunChoice("shipyard-set-hull", { hullId });
+      },
+      onShipyardBuyComponent: (slotId, componentId) => {
+        if (this.onRunChoice) this.onRunChoice("shipyard-buy-component", { slotId, componentId });
+      },
+      onShipyardEquip: (slotId, componentId) => {
+        if (this.onRunChoice) this.onRunChoice("shipyard-equip", { slotId, componentId });
+      },
+      onShipyardRename: (name) => {
+        if (this.onRunChoice) this.onRunChoice("shipyard-rename", { name });
+      },
+      // Battle Plan: back returns to the run map (choice can be remade);
+      // launch fires the actual enter-node.
+      onBattlePlanBack: () => {
+        this.showBattlePlan = false;
+        this._pendingBattlePlan = null;
+      },
+      onBattlePlanLaunch: () => {
+        this._actuallyEngage();
+      },
+      onBattlePlanCapBehavior: (instanceId, behavior) => {
+        if (this.onRunChoice) this.onRunChoice("set-capital-behavior", { instanceId, behavior });
+      },
+      onBattlePlanWingCommand: (wing, command) => {
+        if (this.onRunChoice) this.onRunChoice("set-wing-command", { wing, command });
+      },
+      // Multi-wing: per-wing command, add/remove/recount.
+      onBattlePlanWingDetail: (craft, wingId, command) => {
+        if (this.onRunChoice) this.onRunChoice("set-wing-detail", { craft, wingId, command });
+      },
+      onBattlePlanAddWing: (craft) => {
+        if (this.onRunChoice) this.onRunChoice("add-wing", { craft });
+      },
+      onBattlePlanRemoveWing: (craft, wingId) => {
+        if (this.onRunChoice) this.onRunChoice("remove-wing", { craft, wingId });
+      },
+      onBattlePlanAdjustWing: (craft, wingId, delta) => {
+        if (this.onRunChoice) this.onRunChoice("adjust-wing", { craft, wingId, delta });
+      },
+      // --- Fleet Plan (all non-Frontier modes) -------------------------
+      // These mutate local plan state (no run), so they're handled here
+      // rather than routed through onRunChoice like the Frontier ones.
+      onFleetPlanBack: () => {
+        // Return to wherever the player came from. The underlying overlay
+        // (custom editor) or base screen (skirmish/main) is still set, so
+        // just dropping showFleetPlan reveals it. Keep _fleetPlanState so
+        // the choices survive a round-trip.
+        this.showFleetPlan = false;
+        this._pendingFleetLaunch = null;
+      },
+      onFleetPlanLaunch: () => {
+        if (!this._pendingFleetLaunch) { this.showFleetPlan = false; return; }
+        this.justStarted = {
+          ...this._pendingFleetLaunch,
+          fleetPlan: this._assembleFleetPlan(),
+        };
+        this.showFleetPlan = false;
+        this.showCustom = false;     // close the custom editor if it was open
+        this._pendingFleetLaunch = null;
+      },
+      onFleetPlanSetDirective: (klass, field, value) => {
+        this._fpSetClassDirective(klass, field, value);
+      },
+      onFleetPlanSetWingField: (craft, wingId, field, value) => {
+        this._fpSetWingField(craft, wingId, field, value);
+      },
+      onFleetPlanAddWing: (craft) => { this._fpAddWing(craft); },
+      onFleetPlanRemoveWing: (craft, wingId) => { this._fpRemoveWing(craft, wingId); },
+      onFleetPlanAdjustWing: (craft, wingId, delta) => {
+        this._fpAdjustWingWeight(craft, wingId, delta);
+      },
+      onShipyardPaint: (primary, trim) => {
+        if (this.onRunChoice) this.onRunChoice("shipyard-paint", { primary, trim });
+      },
+      onHomeServiceHall: () => { this.showServiceHall = true; },
+      onServiceHallClose: () => { this.showServiceHall = false; },
+      onServiceHallBuy: (key) => {
+        if (this.onRunChoice) this.onRunChoice("buy-service-upgrade", { key });
+      },
       onMainBack:     () => { this._baseScreen = 'home'; },
       onAboutBack:    () => { this._baseScreen = 'home'; },
       onMemorialBack: () => { this._baseScreen = 'home'; },
+      // Play-Hub navigation (Tier 44).
+      // Look up the map dimensions for a skirmish size label
+      // (Small / Medium / Large). Returns the requested axis from
+      // arena.js#MAP_SIZES so the skirmish form can emit the same
+      // payload shape the legacy carousel built.
+      onPlayHubBack:     () => { this._baseScreen = 'home'; },
+      onPlayHubFrontier: () => {
+        // Frontier: open run map for an active career, or run setup
+        // for a fresh start. _layoutRun{Map,Setup} are what build /
+        // wire the DOM starmap; without them, flipping just the show*
+        // flag leaves the starmap DOM uninstantiated and the user lands
+        // on an empty screen. Mirror the legacy carousel handler at
+        // line ~888 — flip the flag AND lay out.
+        const run = this.runState && this.runState.run;
+        if (run) {
+          this._layoutRunMap(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showRunMap = true;
+        } else {
+          this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
+          this.showRunSetup = true;
+        }
+      },
+      onPlayHubSkirmish: () => { this._baseScreen = 'skirmish'; },
+      onPlayHubCustom:   () => {
+        // Stamp selectedMode = "custom" alongside opening the overlay.
+        // _emitStart reads selectedMode to decide whether to attach
+        // the customRoster from customBlueTeams/customRedTeams; without
+        // this stamp it stayed at "open" (the default), the customRoster
+        // arrived at startGame as null, and the spawn pipeline fell back
+        // to each race's default roster — every Custom Match launched
+        // with default fleets regardless of UI selections.
+        this.selectedMode = 'custom';
+        this.showCustom = true;
+      },
+      onSkirmishBack:    () => { this._baseScreen = 'playHub'; },
+      onSkirmishStart:   (opts) => {
+        // Route through Custom mode so the picked allied + opponent
+        // races survive to spawn. "open" mode internally ignores
+        // hostileRace and re-randomises it, which dropped the user's
+        // opponent pick on every skirmish launch. We forward the
+        // races via a customRoster shape WITHOUT per-team counts so
+        // each side falls back to its race's default roster (no
+        // surprise loadouts — same fleet shape the legacy skirmish
+        // produced, just with the right opponent).
+        const opp = opts.opponent && opts.opponent !== "random"
+          ? opts.opponent
+          : null; // null = let customMode.setup randomise it
+        // Route through the Fleet Plan overlay (always shown pre-battle)
+        // instead of launching directly. _baseScreen stays 'skirmish' so
+        // BACK from the plan returns to the skirmish form.
+        this._openFleetPlan({
+          mapW: this._lookupMapSize(opts.size, "w"),
+          mapH: this._lookupMapSize(opts.size, "h"),
+          race: opts.race || "terran",
+          mode: "custom",
+          fleetMul: opts.fleetMul || 1,
+          customRoster: {
+            alliedRace: opts.race || "terran",
+            hostileRace: opp, // null → custom mode picks random
+            // No blue/red/blueTeams/redTeams → spawnRoster falls back
+            // to each race's default `roster` from races.js.
+          },
+        });
+      },
     });
   }
 
@@ -2051,6 +3268,25 @@ export class StartMenu {
           if (this.onRunChoice) this.onRunChoice("abandon-run", {});
           this.showRunMap = false;
         },
+        onStats: () => {
+          this.showRunStats = true;
+        },
+        onCapitalClick: (instanceId) => {
+          this._wingDetailRef = null;
+          this._captainDetailInstanceId = instanceId;
+          this.showCaptainDetail = true;
+        },
+        onWingCommanderClick: (craft, wingId) => {
+          this._captainDetailInstanceId = null;
+          this._wingDetailRef = { craft, wingId };
+          this.showCaptainDetail = true;
+        },
+        onPickPerk: (ref, perkKey) => {
+          if (this.onRunChoice) this.onRunChoice("pick-commander-perk", { ref, perkKey });
+          // Re-render the commanders tab so the spent pick + new perk show.
+          const r = (this.runState && this.runState.run);
+          if (this._starmapControl && r) updateStarmap(this._starmapControl, r);
+        },
         onClose: () => {
           this.showRunMap = false;
         },
@@ -2291,7 +3527,20 @@ export class StartMenu {
       this._layoutResupply(this._lastViewW || 1200, this._lastViewH || 800);
       this.showResupply = true;
     } else if (node.type === "event") {
+      // Followup callback: if any scheduled followup is primed,
+      // swap the node's event card to fire the callback instead of
+      // the originally-rolled event. The followup is removed from
+      // the queue on consume so each one fires exactly once.
+      const run = this.runState && this.runState.run;
+      if (run && consumePrimedFollowup) {
+        const fu = consumePrimedFollowup(run);
+        if (fu && fu.eventId) {
+          node.eventId = fu.eventId;
+          node.followupKey = fu.key;
+        }
+      }
       this._pendingEventNode = node;
+      this._eventResolved = false;  // fresh event — show choices, not result
       this._layoutEvent(this._lastViewW || 1200, this._lastViewH || 800);
       this.showEvent = true;
     }
@@ -2349,10 +3598,28 @@ export class StartMenu {
   // "playing" and the draw loop stops calling startMenu.draw(). If we
   // don't clean up here the starmap-root (z-index 10) sits above #game
   // (z-index 5) for the entire battle.
-  _launchBattle(battleMode) {
+  // Battle launch — TWO steps:
+  //   1. _launchBattle: dismisses battle-choice + opens BATTLE PLAN
+  //      with the chosen (battleMode, doctrine) stashed.
+  //   2. _actuallyEngage: fires the real enter-node from the LAUNCH
+  //      button on the Battle Plan overlay.
+  _launchBattle(battleMode, doctrine) {
     const node = this._pendingBattleNode;
     if (!node) return;
     this.showBattleChoice = false;
+    // Stash the chosen mode + doctrine and pop the Battle Plan so the
+    // player gets the pre-flight orders screen before the actual
+    // engage. Run-map stays open underneath; starmap teardown happens
+    // in _actuallyEngage.
+    this._pendingBattlePlan = { battleMode, doctrine: doctrine || "skirmish" };
+    this.showBattlePlan = true;
+  }
+
+  _actuallyEngage() {
+    const node = this._pendingBattleNode;
+    const plan = this._pendingBattlePlan;
+    if (!node || !plan) return;
+    this.showBattlePlan = false;
     this.showRunMap = false;
     if (this._starmapControl) {
       destroyStarmap(this._starmapControl);
@@ -2360,15 +3627,28 @@ export class StartMenu {
     }
     if (this._menuSystem) this._menuSystem.hideAll();
     if (this.onRunChoice) {
-      this.onRunChoice("enter-node", { nodeId: node.id, battleMode });
+      this.onRunChoice("enter-node", { nodeId: node.id, battleMode: plan.battleMode, doctrine: plan.doctrine });
     }
+    this._pendingBattlePlan = null;
   }
 
   _pickBoonOffers() {
-    // Random 3 boons from the table; same boon can't appear twice.
-    const pool = BOON_TABLE.slice();
+    // Vendor-aware boon offer: filter the catalog by act-usability
+    // and the resupply node's vendor.inventoryBias. Avoids offering
+    // capital boons in Act 1 where the player has no capitals.
+    const run = this.runState && this.runState.run;
+    const act = (run && run.act) || 1;
+    const ownedKeys = new Set(((run && run.boons) || []).map((b) => b.key));
+    const node = this._pendingResupplyNode;
+    const vendor = node && node.vendor;
+    let pool = BOON_TABLE.filter((b) => (b.usableFromAct || 1) <= act);
+    if (vendor && vendor.inventoryBias) {
+      pool = pool.filter((b) => vendor.inventoryBias.includes(b.key));
+    }
+    pool = pool.filter((b) => !ownedKeys.has(b.key));
+    const slots = 2 + ((vendor && vendor.extraBoonCount) || 0);
     const out = [];
-    while (out.length < 3 && pool.length > 0) {
+    while (out.length < slots && pool.length > 0) {
       const idx = Math.floor(Math.random() * pool.length);
       out.push(pool.splice(idx, 1)[0]);
     }
@@ -2528,6 +3808,13 @@ export class StartMenu {
   }
 
   _clickEvent(x, y) {
+    // Canvas event overlay is dead — the DOM overlay (.menu-event) renders
+    // and handles clicks. The legacy rects from _layoutEvent don't filter
+    // by option preconditions, so an off-panel canvas tap could match a
+    // hidden choice via stale index. Bail unconditionally; the DOM handler
+    // is the only valid path now.
+    return;
+    // eslint-disable-next-line no-unreachable
     const card = this._pendingEventNode
       ? eventCardById(this._pendingEventNode.eventId)
       : null;
@@ -2633,6 +3920,9 @@ export class InputManager {
     this.spectateBtn = new SpectateButton();
     this.admiralPanel = new AdmiralPanel();
     this.admiralActive = false; // set from main.js when game.admiralMode
+    // Edge flag for the TAKE COMMAND / RESUME PILOT pill — set true by the
+    // HUD button click, drained by consumeAdmiralToggle() each frame.
+    this._admiralToggleEdge = false;
     // Tap-to-select state. main.js flips `selectActive` when the camera
     // is in spectate or admiral (no piloted ship → the right stick is
     // hidden so its real estate becomes a select zone). _tapCandidate
@@ -2707,6 +3997,25 @@ export class InputManager {
     });
     window.addEventListener("keyup", (e) => { this.keys.delete(e.code); });
     window.addEventListener("blur", () => { this.keys.clear(); });
+  }
+
+  // Defensive reset called from main.js on every startGame. Belt-and-
+  // suspenders against any pointer-up that was swallowed by a DOM
+  // overlay during the match transition — without this, leftover
+  // stick `value` rolls into the next match's controller frame and
+  // the new ship aims wherever the stick was last pointed.
+  resetForNewMatch() {
+    this.left.end();
+    this.right.end();
+    this.fireBtn.end();
+    this.missileBtn.end();
+    this.boostBtn.end();
+    this.spectateBtn.end();
+    this.mouseDown = false;
+    this.mouseRightDown = false;
+    this._rightClickEdge = false;
+    this._tapCandidate = null;
+    this._pendingTap = null;
   }
 
   // Called from main.js#resize() on first paint and on every window
@@ -2881,16 +4190,22 @@ export class InputManager {
       // two-finger gesture starts fresh instead of jumping.
       if (this._touches.size < 2) this._pinchPrevDist = null;
     }
-    if (this.menuActive) {
-      this.startMenu.pointerUp();
-      return;
-    }
+    // Release any virtual stick / action button that owns this pointer
+    // BEFORE we route to menu.pointerUp. The early-return path used to
+    // skip these releases when an overlay popped mid-gesture — that
+    // left the right stick stuck with its last value, so the next
+    // match would aim "down" because the post-battle DOM overlay
+    // swallowed the pointer-up that should have ended the stick.
     if (this.left.pointerId === e.pointerId) this.left.end();
     else if (this.right.pointerId === e.pointerId) this.right.end();
     if (this.missileBtn.pointerId === e.pointerId) this.missileBtn.end();
     if (this.fireBtn.pointerId === e.pointerId) this.fireBtn.end();
     if (this.spectateBtn.pointerId === e.pointerId) this.spectateBtn.end();
     if (this.boostBtn.pointerId === e.pointerId) this.boostBtn.end();
+    if (this.menuActive) {
+      this.startMenu.pointerUp();
+      return;
+    }
     if (e.pointerType !== "touch") {
       if (e.button === 2) this.mouseRightDown = false;
       else this.mouseDown = false;
@@ -2977,6 +4292,15 @@ export class InputManager {
   consumeSpectateToggle()  {
     const keyEdge = this._consumeKey("KeyV", "_vLatched");
     const btnEdge = this.spectateBtn.consumeJustPressed();
+    return keyEdge || btnEdge;
+  }
+  // TAKE COMMAND / RESUME PILOT — edge-triggered admiral-view toggle.
+  // Fed by the HUD command pill (sets _admiralToggleEdge) or the C key.
+  // main.js#878 reads this to hand the ship to AI and enter admiral view.
+  consumeAdmiralToggle()   {
+    const keyEdge = this._consumeKey("KeyC", "_cLatched");
+    const btnEdge = !!this._admiralToggleEdge;
+    this._admiralToggleEdge = false;
     return keyEdge || btnEdge;
   }
   consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }

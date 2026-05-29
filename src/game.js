@@ -1,9 +1,11 @@
 import { ARENA, randomSpawnPos, createStarfield, setArenaSize } from "./arena.js";
-import { createShip, updateShip } from "./ship.js";
+import { createShip, updateShip, isShipDestroyed } from "./ship.js";
 import { updateAI } from "./ai.js";
 import { updateProjectile } from "./projectile.js";
 import { RACES, RACE_KEYS, randomRaceKey, getStationDef } from "./races.js";
 import { MODES } from "./modes/index.js";
+import { defaultDirectives } from "./modes/admiral.js";
+import { applyFleetPlan } from "./fleetcommand.js";
 import {
   worldToLocal, findHitModuleLocal, findSplashModulesLocal, moduleWorldPos,
 } from "./modules.js";
@@ -13,7 +15,7 @@ import {
   spawnArmorFlakes, spawnHullBreakoff,
   spawnShieldImpact,
 } from "./particles.js";
-import { damageCellsInRadius, killCellsForModule } from "./sprites.js";
+import { damageCellsInRadius, killCellsForModule, projectileBlockHit, projectileBlockHitCell } from "./sprites.js";
 import { SIDES } from "./classes.js";
 import {
   createWreck, createDebrisBurst,
@@ -21,10 +23,9 @@ import {
   pushWreck, pushDebris,
 } from "./wreckage.js";
 import { events } from "./events.js";
-import { PERKS, TRAITS } from "./roguelite.js";
+import { PERKS, TRAITS, applyCaptainTraitEffects, applyDoctrineEffects, applyBehaviorEffects, pickCaptainCommLine, applyCapitalVariantEffects, applyCommanderPerks } from "./roguelite.js";
 import { deepMerge } from "./races.js";
 
-const RESPAWN_SECONDS = 2.0;
 const FIGHTER_PACK_SIZE = 5;
 const BOMBER_PACK_SIZE = 2;
 const PACK_CLUSTER_RADIUS = 130;
@@ -39,7 +40,7 @@ const PACK_CLUSTER_RADIUS = 130;
 // so the rare heavy capitals get their full screen first, bombers
 // still pick up their pair (small but anti-interceptor screen), and
 // frigates fly naked when fighters run out.
-const ESCORT_SIZE = {
+export const ESCORT_SIZE = {
   battleship: 10,
   cruiser: 10,
   carrier: 15,
@@ -153,6 +154,24 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.matchOver = false;
   game.winner = null;
   game._matchEndedEmitted = false;
+  // Player elimination state. A destroyed player ship NO LONGER
+  // respawns — the pilot is out of the cockpit for the rest of the
+  // battle and drops to spectate. `playerEliminated` gates the
+  // spectate toggle (can't return to the cockpit). `playerKIA` (set
+  // only when a Frontier survival roll FAILS) is what matchEnded reads
+  // to end the run — distinct from "ship dead" so a survived-but-
+  // ejected pilot, or a voluntary spectator, isn't mistaken for KIA.
+  // `playerHandedToAiId` remembers the hull handed to AI on voluntary
+  // spectate so exitSpectate can re-bind it.
+  game.playerEliminated = false;
+  game.playerKIA = false;
+  game.playerHandedToAiId = null;
+  game.playerKIAEvent = null;
+  // Per-death roll guard (so the survival check fires once per death).
+  game.playerDeathResolved = false;
+  // Seconds remaining to show the "ship destroyed → observing" banner
+  // after the player is eliminated. Counts down in update().
+  game.eliminationNoticeTimer = 0;
   // Stall watchdog: tracks how long since the last damage event. If the
   // arena goes idle (no hits dealt on either side for STALL_LIMIT
   // seconds), the match force-ends as a draw — heading-locked craft
@@ -172,6 +191,37 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   game.spectating = false;
   game.spectateTargetId = null;
   game.spectateCamera = { x: 0, y: 0, locked: true };
+  // Reset admiral state EVERY start. Mode setup hooks (admiral.js,
+  // roguelite.js) flip admiralMode back on if the player picked
+  // COMMAND FLEET — but the default must be off, otherwise admiral
+  // HUD chrome bleeds into the next pilot-mode match.
+  game.admiralMode = false;
+  // `_admiralByToggle` marks an admiral view entered MID-BATTLE via the HUD
+  // toggle (vs. a mode that starts in admiral) — so RESUME PILOT knows to
+  // hand the ship back. Reset every match so it never bleeds.
+  game._admiralByToggle = false;
+  // Directives now default-initialise for EVERY mode (was null). All
+  // classes start free/on, so applyAdmiralPosture early-returns and the
+  // missile gate is a no-op → zero behaviour change until the player issues
+  // orders. admiral.js / roguelite.js still re-assign their own defaults.
+  game.directives = defaultDirectives();
+  // Per-side per-class tallies for the after-action report. Each
+  // entry counts ships of that class that died on that side during
+  // this match. Read by main.js#captureBattleOutcome + the match-over
+  // panel renderer.
+  const emptyTally = () => ({ fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0, station: 0 });
+  game.tallies = { blue: emptyTally(), red: emptyTally() };
+  // Per-match combat telemetry for the end-of-battle report (all modes).
+  initBattleStats(game);
+  // After-action report stashed by main.js#matchEnded so the match-
+  // over panel renders kills + losses + reward chips. Reset every
+  // startGame so a stale report doesn't bleed into the new match.
+  game.lastBattleReport = null;
+  // In-battle captain comms (Tier 39). Fading chat strip on the HUD.
+  // Cleared every match start so a stale line doesn't bleed.
+  game.captainComms = [];
+  // Set when victory comm fires, so it only fires once per match.
+  game._victoryCommFired = false;
   game.alliedRace = RACES[alliedRace] ? alliedRace : "terran";
   game.hostileRace = randomRaceKey();
   // Mode whitelist: legacy values map to "open"; anything in MODES is
@@ -187,6 +237,10 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   // hook stashes here.
   game.rogueliteContext = null;
   game.playerSpecOverride = (modeConfig && modeConfig.playerSpecOverride) || null;
+  // Persistent player-ship design (Shipyard meta-progression). Routed
+  // through createShip alongside specOverride; resolved last so
+  // component patches stack on top of perks / traits / boons.
+  game.playerDesign = (modeConfig && modeConfig.playerDesign) || null;
   // Resolve perk-driven player overrides (roguelite). The perk sentinel
   // is stamped by buildModeConfig in roguelite.js; resolve it here against
   // the actual fighter spec so promotePlayer gets a normal specOverride.
@@ -212,6 +266,17 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
     // createShip honours the patch via deepMerge.
     game.playerSpecOverride.hp = Math.round(35 * 1.20);
   }
+
+  // Active boons — buildModeConfig sends the run's boon list through
+  // so spawnRoster can patch each BLUE ship's spec at createShip time
+  // (capital HP from reinforced-prows, cannon spread from precog-
+  // targeting, etc.). Stored on `game` so spawn-time helpers in
+  // ship.js (carrier replenishment launches) can read it via `world`.
+  game.activeBoons = (modeConfig && modeConfig.activeBoons) || [];
+  game.activeFleetTraits = (modeConfig && modeConfig.activeFleetTraits) || [];
+  // Pre-battle doctrine (Tier 34) — modifies every blue capital's AI
+  // for this match. Default "skirmish" is a small turn-rate buff.
+  game.battleDoctrine = (modeConfig && modeConfig.battleDoctrine) || "skirmish";
 
   // Officer traits — buildModeConfig stamps `_traitKeys: [...]` on the
   // override. Each trait's `playerOverride(effectiveSpec)` reads the
@@ -255,6 +320,13 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   } else {
     spawnRoster(game);
   }
+
+  // Apply the pre-battle Fleet Plan (per-class directives + ad-hoc wings)
+  // to the spawned blue fleet — all non-Frontier modes. Roguelite carries
+  // no `fleetPlan` (it stamps wings from run state inside its own setup),
+  // so this is a no-op there and leaves that path untouched.
+  const fleetPlan = game.modeConfig && game.modeConfig.fleetPlan;
+  if (fleetPlan) applyFleetPlan(game, fleetPlan);
 }
 
 function spawnRoster(game, rosterOverride = null) {
@@ -310,7 +382,12 @@ function spawnRoster(game, rosterOverride = null) {
           for (let i = 0; i < scaled; i++) {
             let wounded = null;
             if (side === "blue" && manifest) {
-              const idx = manifest.findIndex((m) => m.klass === klass);
+              // Match by klass AND race so a wounded native frigate and
+              // a captured (different-race) frigate each pop the right
+              // hpFrac + instanceId. Manifest race null = allied race.
+              const idx = manifest.findIndex(
+                (m) => m.klass === klass && (m.race || game.alliedRace) === race,
+              );
               if (idx !== -1) {
                 wounded = manifest[idx];
                 manifest.splice(idx, 1);
@@ -325,6 +402,8 @@ function spawnRoster(game, rosterOverride = null) {
             const ship = createShip({
               klass, race, side, pos, heading,
               controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+              boons: side === "blue" ? game.activeBoons : null,
+              fleetTraits: side === "blue" ? game.activeFleetTraits : null,
             });
             game.ships.push(ship);
           }
@@ -385,6 +464,8 @@ function spawnStation(game, side, race, zone, facing) {
       heading: facing,
       controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
       specOverride: node.mods,
+      boons: side === "blue" ? game.activeBoons : null,
+      fleetTraits: side === "blue" ? game.activeFleetTraits : null,
     });
     ship.stationNodeName = node.name;
     game.ships.push(ship);
@@ -413,6 +494,8 @@ function spawnFighterPacks(game, side, race, zone, count, facing) {
         pos,
         heading,
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+        boons: side === "blue" ? game.activeBoons : null,
+        fleetTraits: side === "blue" ? game.activeFleetTraits : null,
       });
       ship.packId = packId;
       ship.packRole = packRole;
@@ -447,6 +530,8 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
         pos,
         heading,
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+        boons: side === "blue" ? game.activeBoons : null,
+        fleetTraits: side === "blue" ? game.activeFleetTraits : null,
       });
       game.ships.push(bomber);
     }
@@ -466,11 +551,103 @@ function spawnCapital(game, klass, side, race, zone, facing, wounded = null) {
     // Roguelite carryover — start the capital at the previous battle's
     // hull%. Shields/armor still spawn at max each match.
     initialHpFrac: wounded ? wounded.hpFrac : 1,
+    boons: side === "blue" ? game.activeBoons : null,
+    fleetTraits: side === "blue" ? game.activeFleetTraits : null,
   });
   // Stamp the run-state instanceId so captureBattleOutcome can match
   // this live ship back to its slot in run.capitals when the match ends.
   if (wounded) capital.runtimeInstanceId = wounded.instanceId;
+  // Surrender gating for enemy capitals — bosses and aces never strike
+  // colors. Boss/elite nodes are the climactic encounters; surrender
+  // would undercut the drama. Stamps `ship.neverSurrender = true`
+  // which the surrender check in ship.js#updateShip respects alongside
+  // the captain trait check.
+  if (side === "red" && game.pendingNode) {
+    const nodeType = game.pendingNode.type;
+    if (nodeType === "boss" || nodeType === "elite") {
+      capital.neverSurrender = true;
+    }
+  }
+  // Captain XP/level (Tier 32) — surviving capitals carry a level
+  // into the next battle. Apply HP multiplier from captain level so
+  // a "Veteran" frigate spawns with +5% hull. We scale hpMax + hp
+  // post-construction (initialHpFrac already applied to spec.hp).
+  if (wounded && wounded.level && wounded.level > 1) {
+    const hpMul = 1 + 0.05 * Math.max(0, Math.min(4, wounded.level - 1));
+    capital.hpMax = capital.hpMax * hpMul;
+    capital.hp = capital.hp * hpMul;
+  }
+  // Capital variant (Tier 40) — Heavy/Hunter/Siege/etc. spec patches.
+  // Applied BEFORE captain trait so trait stacks on top of variant.
+  if (wounded && wounded.variant) {
+    capital.spec = { ...capital.spec };
+    applyCapitalVariantEffects(capital, wounded.variant);
+  }
+  // Captain personality (Tier 33) — mutates spec stats so an aggressive
+  // captain's ship closes range, veteran's ship shoots tighter, etc.
+  // Clone the spec first so we don't poison the per-class cached spec
+  // (createShip already cloned via the boons/traits pipeline if those
+  // applied, but if neither did the spec is still a reference).
+  if (wounded && wounded.captainTrait) {
+    capital.spec = { ...capital.spec };
+    applyCaptainTraitEffects(capital, wounded.captainTrait);
+  }
+  // Commander perks (level-up picks) — stack on top of trait/variant.
+  if (wounded && Array.isArray(wounded.perks) && wounded.perks.length) {
+    applyCommanderPerks(capital, wounded.perks);
+  }
+  // Fleet doctrine (Tier 34) — applies on BLUE capitals only. Stacks
+  // on top of captain trait effects so PRESS + Aggressive captain
+  // compounds the close-range bias. SKIPPED if the capital has its
+  // own per-ship behavior override (Tier 37) — that takes precedence.
+  if (side === "blue") {
+    if (wounded && wounded.behavior) {
+      capital.spec = { ...capital.spec };
+      applyBehaviorEffects(capital, wounded.behavior);
+    } else if (game.battleDoctrine) {
+      capital.spec = { ...capital.spec };
+      applyDoctrineEffects(capital, game.battleDoctrine);
+    }
+  }
+  // Stamp captain identity onto the live ship for comms attribution.
+  if (wounded) {
+    capital.commCaptain = wounded.captain || null;
+    capital.commShipName = wounded.name || null;
+    capital.commTrait = wounded.captainTrait || null;
+    // Stamp the full captain block (with neverSurrender bool) so the
+    // surrender check in ship.js#updateShip can gate on it.
+    capital.captain = {
+      name: wounded.captain || null,
+      trait: wounded.captainTrait || null,
+      neverSurrender: wounded.captainTrait === "never-surrender",
+    };
+  }
   game.ships.push(capital);
+}
+
+// Push a captain comm into the live battle queue. Bounded to the last
+// 20 entries so a long brawl doesn't grow the array forever; the HUD
+// only ever renders the most recent 4 anyway. `vars` is an optional
+// substitution map ({other: shipName}) for templates with ${other}.
+export function pushCaptainComm(game, ship, trigger, vars) {
+  if (!game || !ship || !ship.commCaptain) return;
+  const line = pickCaptainCommLine(trigger, ship.commTrait, {
+    captain: ship.commCaptain,
+    ship: ship.commShipName || ship.klass,
+    ...(vars || {}),
+  });
+  if (!line) return;
+  if (!Array.isArray(game.captainComms)) game.captainComms = [];
+  game.captainComms.push({
+    captain: ship.commCaptain,
+    ship: ship.commShipName || ship.klass,
+    text: line,
+    trigger,
+    ts: performance.now(),
+  });
+  if (game.captainComms.length > 20) {
+    game.captainComms.splice(0, game.captainComms.length - 20);
+  }
 }
 
 // Post-spawn escort assignment. Runs once at the end of spawnRoster,
@@ -580,22 +757,38 @@ function assignEscortPacks(game) {
 }
 
 function promotePlayer(game) {
-  // Campaign mode always builds a FRESH player ship so purchased
-  // upgrades (specOverride) apply cleanly. Reusing an existing
+  // Idempotent guard. `spawnRoster` already calls promotePlayer at its
+  // end, and several legacy mode setups (arena / custom+skirmish / daily /
+  // waves) call it AGAIN afterwards. With a Shipyard design present
+  // `forceFresh` is true, so each call spawned a brand-new player ship —
+  // producing a duplicate "ghost" fighter flying in lockstep on the same
+  // controller. If a live player ship already exists, reuse it.
+  const existingPlayer = game.ships.find((s) => s.isPlayer && !s.dead);
+  if (existingPlayer) return existingPlayer;
+  // Campaign / Shipyard-design / perk overrides all force a fresh
+  // player ship so the design applies cleanly. Reusing an existing
   // ally fighter would keep the unupgraded race baseline.
-  const forceFresh = !!game.playerSpecOverride;
+  const forceFresh = !!game.playerSpecOverride || !!game.playerDesign;
+  // Hull klass comes from the persistent design when present; otherwise
+  // falls back to a plain fighter. This lets the player deploy as a
+  // frigate / cruiser / battleship / carrier when they've purchased
+  // those hulls in the Shipyard.
+  const playerKlass = (game.playerDesign && game.playerDesign.hull) || "fighter";
   const candidate = forceFresh ? null : game.ships.find(
-    (s) => s.side === "blue" && s.klass === "fighter" && !s.isPlayer && !s.dead,
+    (s) => s.side === "blue" && s.klass === playerKlass && !s.isPlayer && !s.dead,
   );
   if (!candidate) {
     const ship = createShip({
-      klass: "fighter",
+      klass: playerKlass,
       race: game.alliedRace,
       side: "blue",
       pos: randomSpawnPos(ARENA.spawn.blue),
       heading: 0,
       controller: game.playerController,
       specOverride: game.playerSpecOverride,
+      boons: game.activeBoons,
+      fleetTraits: game.activeFleetTraits,
+      design: game.playerDesign,
     });
     ship.isPlayer = true;
     game.ships.push(ship);
@@ -624,15 +817,28 @@ function promotePlayer(game) {
 export function enterSpectate(game) {
   if (game.spectating) return;
   game.spectating = true;
-  // Remove the live player ship; leave the rest of the world running.
-  for (const s of game.ships) if (s.isPlayer) s.dead = true;
-  game.ships = game.ships.filter((s) => !s.isPlayer);
-  // Pick a spectate target — prefer the player's side, fall back to anyone.
-  const tgt = pickSpectateInitial(game);
-  game.spectateTargetId = tgt ? tgt.id : null;
-  // Start locked on whatever we picked; free-pan engages on stick nudge.
-  if (tgt) game.spectateCamera = { x: tgt.pos.x, y: tgt.pos.y, locked: true };
-  else game.spectateCamera = { x: game.arena.width / 2, y: game.arena.height / 2, locked: false };
+  const player = game.ships.find((s) => s.isPlayer);
+  if (player && !player.dead) {
+    // VOLUNTARY spectate — hand the ship to AI control instead of
+    // destroying it. The player's craft keeps fighting on its own; the
+    // player watches (and can take it back via exitSpectate while it's
+    // alive). isPlayer is cleared so updateAI drives it; the player's
+    // ship id is remembered so exit can re-bind to the same hull.
+    player.isPlayer = false;
+    player.wasPlayerShip = true;
+    player.controller = { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false };
+    game.playerHandedToAiId = player.id;
+    game.spectateTargetId = player.id;
+    game.spectateCamera = { x: player.pos.x, y: player.pos.y, locked: true };
+  } else {
+    // No live player ship (death-triggered spectate, or admiral): drop
+    // any dead husk and watch the fleet.
+    game.ships = game.ships.filter((s) => !s.isPlayer);
+    const tgt = pickSpectateInitial(game);
+    game.spectateTargetId = tgt ? tgt.id : null;
+    if (tgt) game.spectateCamera = { x: tgt.pos.x, y: tgt.pos.y, locked: true };
+    else game.spectateCamera = { x: game.arena.width / 2, y: game.arena.height / 2, locked: false };
+  }
 }
 
 function pickSpectateInitial(game) {
@@ -642,9 +848,30 @@ function pickSpectateInitial(game) {
 
 export function exitSpectate(game) {
   if (!game.spectating) return;
-  game.spectating = false;
-  game.spectateTargetId = null;
-  promotePlayer(game);
+  // A pilot whose ship was DESTROYED can't return to the cockpit —
+  // they're out for the rest of the battle (no respawn). The spectate
+  // toggle stays in observe mode.
+  if (game.playerEliminated) return;
+  // Re-take the ship we handed to AI on voluntary spectate, IF it's
+  // still alive. If it died while we watched, the player is eliminated
+  // and can't return. We never spawn a fresh ship here (no respawn).
+  const handId = game.playerHandedToAiId;
+  const ship = handId != null
+    ? game.ships.find((s) => s.id === handId && !s.dead)
+    : null;
+  if (ship) {
+    ship.isPlayer = true;
+    ship.wasPlayerShip = false;
+    ship.controller = game.playerController;
+    game.spectating = false;
+    game.spectateTargetId = null;
+    game.playerHandedToAiId = null;
+    return;
+  }
+  // The handed-off ship is gone — the player has no hull to return to.
+  // Stay observing; mark eliminated so the toggle won't keep trying.
+  game.playerHandedToAiId = null;
+  game.playerEliminated = true;
 }
 
 export function cycleSpectate(game, dir) {
@@ -682,6 +909,31 @@ export function update(game, dt) {
     modeHooks.tick(game, dt);
   }
 
+  // Captain comms detection (Tier 39). Scan blue capitals for the
+  // 3 per-ship triggers — shields-down, hull-50, hull-25 — and fire
+  // a comm line the first time each crosses. One-shot flags on the
+  // ship prevent re-fire while the value bounces (shield regen, etc).
+  for (const s of game.ships) {
+    if (s.dead || s.side !== "blue" || !s.commCaptain) continue;
+    if (s.klass === "fighter" || s.klass === "bomber") continue;
+    if (!s._commShieldFired && s.shieldMax > 0 && s.shield <= 0) {
+      s._commShieldFired = true;
+      pushCaptainComm(game, s, "shields-down");
+    }
+    const hpFrac = s.hpMax > 0 ? s.hp / s.hpMax : 1;
+    if (!s._commHull50Fired && hpFrac <= 0.5) {
+      s._commHull50Fired = true;
+      pushCaptainComm(game, s, "hull-50");
+    }
+    if (!s._commHull25Fired && hpFrac <= 0.25) {
+      s._commHull25Fired = true;
+      pushCaptainComm(game, s, "hull-25");
+    }
+  }
+
+  // Battle telemetry: clock, roster snapshot/reinforcements, surrenders.
+  tickBattleStats(game, dt);
+
   game.packs = computePacks(game.ships);
 
   for (const ship of game.ships) {
@@ -699,6 +951,7 @@ export function update(game, dt) {
   // Projectiles: movement + ship collisions + PD-vs-missile collisions.
   for (const p of game.projectiles) {
     if (p.dead) continue;
+    bstatRecordShot(game, p);   // count each round once, on first sighting
     updateProjectile(p, dt, game);
     if (p.dead) continue;
 
@@ -712,7 +965,13 @@ export function update(game, dt) {
         const r = m.radius + p.radius + 1;
         if (dx * dx + dy * dy <= r * r) {
           m.hp -= p.damage;
-          if (m.hp <= 0) m.dead = true;
+          if (m.hp <= 0) {
+            m.dead = true;
+            // Missile shot down — soft pop SFX, distinct from the
+            // full ship-explosion `shipDestroyed` event so PD work
+            // reads as defensive in the mix.
+            events.emit("missileIntercepted", { x: m.pos.x, y: m.pos.y });
+          }
           p.dead = true;
           interceptedMissile = true;
           break;
@@ -727,14 +986,51 @@ export function update(game, dt) {
       const dx = ship.pos.x - p.pos.x;
       const dy = ship.pos.y - p.pos.y;
       const r = ship.spec.radius + p.radius;
-      if (dx * dx + dy * dy <= r * r) {
-        const targets = computeModuleTargets(ship, p);
-        applyDamage(ship, p, targets, game.particles, game);
-        // Missiles always die on hit; cannons die on hit.
-        p.dead = true;
-        if (ship.hp <= 0) ship.dead = true;
-        break;
+      if (dx * dx + dy * dy > r * r) continue;   // broad-phase circle reject
+      // Narrow-phase: while a shield is up it's a bubble, so a non-missile
+      // round strikes the circle. With the shield down (or for a shield-
+      // bypassing missile) the round must actually overlap a LIVE block —
+      // so it passes through eroded gaps and impacts on the remaining
+      // structure, not the original full-hull outline.
+      const shieldUp = ship.shieldMax > 0 && ship.shield > 0;
+      let hitCell = null;
+      if (ship.cells && (p.kind === "missile" || !shieldUp)) {
+        hitCell = projectileBlockHitCell(ship, p.pos.x, p.pos.y, p.radius);
+        if (!hitCell) continue;
       }
+      // Visual-continuity snap: move the projectile's reported impact
+      // point so the damage VFX (sparks, scar, hit event, missile blast
+      // origin) lands ON the actual block / bubble instead of at the
+      // projectile's last-step position. Without this the projectile
+      // can be inches outside the block when block-hit fires (broad-
+      // phase circle is bigger than the surviving hull), and the flash
+      // appears in empty space — exactly the "weapons stop at the
+      // undamaged hull outline" visual bug.
+      if (hitCell) {
+        // Snap to the live block's world centre.
+        const c = Math.cos(ship.heading), s = Math.sin(ship.heading);
+        p.pos.x = ship.pos.x + hitCell.lx * c - hitCell.ly * s;
+        p.pos.y = ship.pos.y + hitCell.lx * s + hitCell.ly * c;
+      } else if (shieldUp) {
+        // Shield up + no block-test path → snap to the bubble surface
+        // so the shield-impact flash sits on the visible bubble, not
+        // the polygon's circumscribing circle (which is smaller than
+        // the bubble by `shieldOffset` and reads as a flash inside
+        // the bubble).
+        const shieldOffset = Math.max(12, ship.spec.radius * 0.40);
+        const bubbleR = ship.spec.radius + shieldOffset;
+        const sdx = p.pos.x - ship.pos.x;
+        const sdy = p.pos.y - ship.pos.y;
+        const sd = Math.hypot(sdx, sdy) || 1;
+        p.pos.x = ship.pos.x + (sdx / sd) * bubbleR;
+        p.pos.y = ship.pos.y + (sdy / sd) * bubbleR;
+      }
+      const targets = computeModuleTargets(ship, p);
+      applyDamage(ship, p, targets, game.particles, game);
+      // Missiles always die on hit; cannons die on hit.
+      p.dead = true;
+      if (isShipDestroyed(ship)) ship.dead = true;
+      break;
     }
   }
 
@@ -753,19 +1049,48 @@ export function update(game, dt) {
     game.particles = game.particles.filter((p) => !p.dead);
   }
 
-  // Player death + respawn (only when not spectating).
-  if (!game.spectating) {
+  // Player death — NO respawn. A destroyed player ship is gone for the
+  // rest of the battle; the pilot drops to spectate and watches their
+  // fleet fight on. Resolved exactly once (the first tick the player is
+  // flagged dead).
+  //
+  // Frontier: roll a survival check to decide KIA vs ejected. KIA
+  // (`game.playerKIA = true`) ends the run at matchEnded; ejected means
+  // the pilot lives (run continues if the fleet wins) but still can't
+  // climb back into a cockpit this battle. Survival % escalates per
+  // death so a careless pilot eventually runs out of luck.
+  if (!game.spectating && !game.playerDeathResolved) {
     const player = game.ships.find((s) => s.isPlayer);
     if (player && player.dead) {
-      if (game.respawnTimer <= 0) game.respawnTimer = RESPAWN_SECONDS;
-      game.respawnTimer -= dt;
-      if (game.respawnTimer <= 0) {
-        game.ships = game.ships.filter((s) => !(s.isPlayer && s.dead));
-        promotePlayer(game);
-        game.respawnTimer = 0;
+      game.playerDeathResolved = true;
+      if (game.mode === "roguelite") {
+        const run = (game.modeConfig && game.modeConfig.run) || null;
+        const priorDeaths = (run && run.playerDeaths) || 0;
+        const survivalChance = Math.max(0.05, 0.60 - 0.18 * priorDeaths);
+        const survived = Math.random() < survivalChance;
+        if (run) run.playerDeaths = priorDeaths + 1;
+        game.playerKIA = !survived;
+        game.playerKIAEvent = { survived, survivalChance, deathIndex: priorDeaths + 1 };
+      } else {
+        // Non-Frontier modes have no career to end — death just means
+        // you watch the rest of the skirmish.
+        game.playerKIA = false;
+        game.playerKIAEvent = { survived: true, eliminated: true };
       }
+      // Out of the cockpit for good this battle. We do NOT drop to
+      // spectate here: enterSpectate's death branch filters the player
+      // husk out of game.ships, which would strip it BEFORE the wreck /
+      // tally / telemetry passes below run — so the player's own ship
+      // would produce no explosion, no wreck, and would be missing from
+      // the loss tally + battle report. Defer the spectate drop until
+      // after those passes (see the deferred call further down).
+      game.playerEliminated = true;
+      game.eliminationNoticeTimer = 4.0;
     }
   }
+  // Elimination banner countdown — independent of spectate state so the
+  // "SHIP DESTROYED — OBSERVING" / "KIA" beat shows for a few seconds.
+  if (game.eliminationNoticeTimer > 0) game.eliminationNoticeTimer -= dt;
 
   // Convert newly-dead ships into wrecks + a chunky debris shower
   // before the dead-ship filter strips them. The wreckSpawned flag
@@ -776,6 +1101,22 @@ export function update(game, dt) {
   for (const s of game.ships) {
     if (!s.dead || s.wreckSpawned || s.klass === "station") continue;
     s.wreckSpawned = true;
+    // Tally the loss BEFORE the wreck/debris spawn so it's counted
+    // exactly once per ship death. tallies are bucketed by side+class.
+    if (game.tallies && game.tallies[s.side] && s.klass) {
+      game.tallies[s.side][s.klass] = (game.tallies[s.side][s.klass] || 0) + 1;
+    }
+    // Captain comm (Tier 39) — if a BLUE capital just went down,
+    // have a sibling capital radio in. Pick the first surviving
+    // blue capital with a commCaptain set.
+    if (s.side === "blue" && s.commCaptain && s.commShipName) {
+      const sibling = game.ships.find(
+        (o) => !o.dead && o !== s && o.side === "blue" && o.commCaptain && o.klass !== "fighter" && o.klass !== "bomber",
+      );
+      if (sibling) {
+        pushCaptainComm(game, sibling, "friendly-down", { other: s.commShipName });
+      }
+    }
     pushWreck(game.wrecks, createWreck(s));
     // Chunk shower scales with ship radius — a fighter pops 6 shards,
     // a battleship spits ~35 across its width. Capped at 50 to stay
@@ -806,9 +1147,29 @@ export function update(game, dt) {
       x: s.pos.x, y: s.pos.y,
       intensity,
       klass: s.klass,
+      side: s.side,
       isPlayer: s.isPlayer,
     });
   }
+
+  // Battle telemetry: credit kills + bucket losses, once per ship death.
+  // Independent of the wreck loop above (which skips stations) so every
+  // class is attributed exactly once via the _statDead latch.
+  for (const s of game.ships) {
+    if (s.dead && !s._statDead) {
+      s._statDead = true;
+      bstatRecordKill(game, s);
+    }
+  }
+
+  // Deferred spectate hand-off for a just-killed player: the death block
+  // above set `playerEliminated` but left the husk in `game.ships` so the
+  // wreck / tally / telemetry passes could process it. Now that they have,
+  // drop to spectate (which filters the husk). Fires once — enterSpectate
+  // sets `game.spectating`, so this guard won't re-trigger. (Voluntary
+  // spectate / exitSpectate-elimination never hit this: they leave
+  // `spectating` true, or never set `playerEliminated` while not spectating.)
+  if (game.playerEliminated && !game.spectating) enterSpectate(game);
 
   // Tick persistent battle litter.
   const bounds = game.arena.bounds;
@@ -847,8 +1208,13 @@ export function update(game, dt) {
       if (!redStation)  { game.matchOver = true; game.winner = "blue"; }
       else if (!blueStation) { game.matchOver = true; game.winner = "red"; }
     } else {
-      const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead);
-      const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead);
+      // Surrendered ships count as out-of-combat — a side with only
+      // surrendered ships left has lost the engagement. Without this,
+      // an all-surrender wave on red would leave the match running
+      // forever because the surrender-untargetable rule means blue
+      // can't finish them off.
+      const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead && !s.surrendered);
+      const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead && !s.surrendered);
       if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
       else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
     }
@@ -864,8 +1230,8 @@ export function update(game, dt) {
   if (!game.matchOver) {
     game.stallTimer = (game.stallTimer || 0) + dt;
     if (game.stallTimer >= STALL_LIMIT) {
-      const blueLive = game.ships.filter((s) => s.side === "blue" && !s.dead).length;
-      const redLive  = game.ships.filter((s) => s.side === "red"  && !s.dead).length;
+      const blueLive = game.ships.filter((s) => s.side === "blue" && !s.dead && !s.surrendered).length;
+      const redLive  = game.ships.filter((s) => s.side === "red"  && !s.dead && !s.surrendered).length;
       game.matchOver = true;
       game.winner = blueLive > redLive ? "blue" : "red";
       game.endedByStall = true;
@@ -876,11 +1242,23 @@ export function update(game, dt) {
   // main.js both subscribe; capture-then-restart is keyed off this.
   if (game.matchOver && !game._matchEndedEmitted) {
     game._matchEndedEmitted = true;
+    // Victory comm — pick a surviving blue capital to call it.
+    if (game.winner === "blue" && !game._victoryCommFired) {
+      game._victoryCommFired = true;
+      const victor = game.ships.find(
+        (s) => !s.dead && s.side === "blue" && s.commCaptain
+            && s.klass !== "fighter" && s.klass !== "bomber",
+      );
+      if (victor) pushCaptainComm(game, victor, "victory");
+    }
+    // Fold telemetry into game.battleReport BEFORE the emit so subscribers
+    // (and the match-over HUD panel) can read the finished report.
+    finalizeBattleStats(game);
     events.emit("matchEnded", {
       mode: game.mode,
       winner: game.winner,
       score: game.kills || 0,
-      durationSeconds: 0,
+      durationSeconds: (game.battleStats && Math.round(game.battleStats.elapsed)) || 0,
     });
   }
 }
@@ -972,9 +1350,17 @@ function emitContinuousModuleVFX(game, dt) {
     const hpFrac = s.hpMax > 0 ? s.hp / s.hpMax : 1;
     if (hpFrac < 0.70) {
       const severity = Math.max(0, Math.min(1, (0.70 - hpFrac) / 0.60));
-      const VENT_BASE_RATE = 9;        // smokes per second at full severity
-      const rate = VENT_BASE_RATE * severity;
-      if (Math.random() < rate * dt) {
+      // Emission rate ramps hard at low HP so a critically-wounded ship
+      // is unmistakably dying — multiple vent points smoking + burning
+      // at once. Bumped 9 → 16 base; the severity² curve makes the last
+      // sliver of HP look the most desperate.
+      const VENT_BASE_RATE = 16;
+      const rate = VENT_BASE_RATE * (severity * severity);
+      // Spawn 1-2 vent points per eligible tick at high severity so the
+      // hull looks ablaze, not gently smoking.
+      const bursts = severity > 0.75 ? 2 : 1;
+      for (let b = 0; b < bursts; b++) {
+        if (Math.random() >= rate * dt) continue;
         // Pick a random point on the hull silhouette — angle around
         // ship centre, radius slightly less than spec.radius so the
         // smoke originates at the hull surface, not from inside.
@@ -986,6 +1372,13 @@ function emitContinuousModuleVFX(game, dt) {
         spawnHullVentVFX(game.particles, wx, wy, ang, severity);
       }
     }
+  }
+  // Soft particle cap — the beefed-up damage VFX can spike in a big
+  // brawl. Drop the OLDEST particles past the cap so newer impact
+  // flashes/sparks always render. Cheap: only trims when over budget.
+  const MAX_PARTICLES = 1400;
+  if (game.particles.length > MAX_PARTICLES) {
+    game.particles.splice(0, game.particles.length - MAX_PARTICLES);
   }
 }
 
@@ -1038,8 +1431,231 @@ const PD_VS_SHIP_MUL = 0.22;
 // the normal 0.22× ship multiplier — so ~0.154× of base PD damage vs
 // a frigate/cruiser/battleship/carrier/station.
 const CARRIER_PD_VS_LARGE_MUL = 0.7;
+// Fighters are the dedicated bomber-killers. A fighter's cannon hits a
+// bomber's shields + hull 3× harder than baseline, so a fighter screen
+// shreds an incoming bomber wing instead of trading evenly with it.
+const FIGHTER_CANNON_VS_BOMBER_MUL = 3;
+
+// Classify an incoming projectile into an impact "source" so the audio
+// layer can pick a matching timbre (a missile crump vs a fighter-cannon
+// ping vs a PD tink). Mirrors the same axes applyDamage already keys on.
+function impactSource(p) {
+  if (p.kind === "missile") return "missile";
+  if (p.kind === "laser") return "laser";
+  if (p.fromKlass === "pd") return "pd";
+  // Capital main guns — BB broadside slugs, cruiser/carrier forward cannon
+  // (e.g. the Thren carrier's cruiser-grade gun) — land with weight.
+  if (p.fromKlass === "cruiser" || p.fromKlass === "battleship" || p.fromKlass === "carrier") return "heavy";
+  return "cannon"; // fighter / bomber / frigate light kinetic
+}
+
+// ===========================================================================
+// Battle telemetry — feeds the end-of-battle report (all modes).
+// Reset each startGame (initBattleStats). Instrumented from: the projectile
+// loop (shots/missiles fired), applyDamage (damage dealt + cannon hits +
+// last-damager stamp), a per-frame ship pass (roster snapshot, reinforcement
+// registration, surrender detection), and a death pass (kills + losses).
+// finalizeBattleStats folds it into game.battleReport the frame the match ends.
+// ===========================================================================
+const BSTAT_CLASSES = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
+const BSTAT_CAPITAL_LABEL = {
+  frigate: "Frigate", cruiser: "Cruiser", battleship: "Battleship",
+  carrier: "Carrier", station: "Station",
+};
+
+// Side-level scalar counters. Per-class committed/lost/surrendered/survived
+// are NOT tracked here — they're derived from per-ship `fate` records in
+// finalizeBattleStats (terminal fate → each hull counts in exactly one
+// bucket), which is the single source of truth.
+function bstatSide() {
+  return { damageDealt: 0, shotsFired: 0, shotsHit: 0, missilesFired: 0 };
+}
+
+function initBattleStats(game) {
+  game.battleStats = {
+    elapsed: 0,
+    blue: bstatSide(),
+    red: bstatSide(),
+    ships: {},   // id -> per-ship record
+  };
+  game.battleReport = null;
+}
+
+// Ensure (and return) a per-ship record. First sighting of a hull counts it
+// as committed to the fight — this picks up reinforcements (carrier
+// replenishment, roguelite waves) that spawn after the opening roster.
+function bstatShip(game, ship) {
+  const bs = game.battleStats;
+  if (!bs) return null;
+  let rec = bs.ships[ship.id];
+  if (!rec) {
+    rec = {
+      id: ship.id, name: ship.commShipName || null, klass: ship.klass,
+      side: ship.side, isPlayer: !!ship.isPlayer,
+      kills: 0, damageDealt: 0, shotsFired: 0, shotsHit: 0, fate: "alive",
+    };
+    bs.ships[ship.id] = rec;
+  } else if (!rec.name && ship.commShipName) {
+    rec.name = ship.commShipName;   // captains/names can land after spawn
+  }
+  return rec;
+}
+
+// Per-frame pass: accumulate clock, register every live hull, detect the
+// frame a ship raises the white flag.
+function tickBattleStats(game, dt) {
+  const bs = game.battleStats;
+  if (!bs) return;
+  if (!game.matchOver) bs.elapsed += dt;
+  for (const s of game.ships) {
+    const rec = bstatShip(game, s);
+    if (rec && s.surrendered && !s._statSurrendered) {
+      s._statSurrendered = true;
+      rec.fate = "surrendered";   // may later flip to "lost" if over-killed
+    }
+  }
+}
+
+// Count a projectile exactly once, the frame it enters the world. PD rounds
+// are excluded from the accuracy stat (they're anti-missile, not aimed fire).
+function bstatRecordShot(game, p) {
+  const bs = game.battleStats;
+  if (!bs || p._statSeen) return;
+  p._statSeen = true;
+  const side = bs[p.side];
+  if (!side) return;
+  if (p.kind === "missile") { side.missilesFired++; return; }
+  if (p.kind === "cannon" && p.fromKlass !== "pd") {
+    side.shotsFired++;
+    const rec = bs.ships[p.ownerId];
+    if (rec) rec.shotsFired++;
+  }
+}
+
+// A hit that lands: credit damage to the firer's side + record, and (for
+// non-PD cannon rounds) count it as an accuracy hit. `amount` is the
+// post-multiplier incoming damage (shield + hull), so the figure reflects
+// total damage inflicted regardless of which layer absorbed it.
+function bstatRecordDamage(game, p, amount) {
+  const bs = game.battleStats;
+  if (!bs || p.side == null) return;
+  const side = bs[p.side];
+  if (side) side.damageDealt += amount;
+  const rec = (p.ownerId != null) ? bs.ships[p.ownerId] : null;
+  if (rec) rec.damageDealt += amount;
+  if (p.kind === "cannon" && p.fromKlass !== "pd" && !p._statHit) {
+    p._statHit = true;
+    if (side) side.shotsHit++;
+    if (rec) rec.shotsHit++;
+  }
+}
+
+// Death of `victim`: bucket the loss for its side and credit the kill to
+// whoever last damaged it (if attributable + still on record).
+function bstatRecordKill(game, victim) {
+  const bs = game.battleStats;
+  if (!bs) return;
+  const rec = bstatShip(game, victim);   // ensure victim is on record
+  if (rec) rec.fate = "lost";   // terminal — overrides a prior "surrendered"
+  const killerId = victim.lastDamagerId;
+  if (killerId != null) {
+    const krec = bs.ships[killerId];
+    if (krec) krec.kills++;
+  }
+}
+
+// Fold raw counters into the structured report the HUD renders. Side "kills"
+// are derived from enemy losses (single source of truth, no double-count);
+// per-ship records drive the MVP + per-capital breakdown.
+function finalizeBattleStats(game) {
+  const bs = game.battleStats;
+  if (!bs) return;
+  const report = {
+    durationSeconds: Math.round(bs.elapsed),
+    winner: game.winner,
+    endedByStall: !!game.endedByStall,
+    mode: game.mode,
+    sides: {},
+    capitals: [],
+    smallCraft: { blue: { count: 0, kills: 0, damage: 0 }, red: { count: 0, kills: 0, damage: 0 } },
+    mvp: null,
+  };
+  // Bucket every committed hull by side/class/terminal-fate from the
+  // per-ship records. fate is terminal (a ship that surrenders then gets
+  // finished off by in-flight ordnance ends "lost"), so each hull lands in
+  // exactly one bucket — committed === survived + lost + surrendered always.
+  const buk = {
+    blue: { committed: {}, lost: {}, surrendered: {}, survivors: {} },
+    red:  { committed: {}, lost: {}, surrendered: {}, survivors: {} },
+  };
+  const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
+  for (const id in bs.ships) {
+    const r = bs.ships[id];
+    const b = buk[r.side];
+    if (!b) continue;
+    bump(b.committed, r.klass);
+    if (r.fate === "lost") bump(b.lost, r.klass);
+    else if (r.fate === "surrendered") bump(b.surrendered, r.klass);
+    else bump(b.survivors, r.klass);
+  }
+  for (const sideKey of ["blue", "red"]) {
+    const s = bs[sideKey];
+    const b = buk[sideKey];
+    const enemy = buk[sideKey === "blue" ? "red" : "blue"];
+    const out = {
+      committed: {}, lost: {}, surrendered: {}, survivors: {}, kills: {},
+      damageDealt: Math.round(s.damageDealt),
+      shotsFired: s.shotsFired, shotsHit: s.shotsHit, missilesFired: s.missilesFired,
+      accuracy: s.shotsFired > 0 ? s.shotsHit / s.shotsFired : 0,
+      totals: { committed: 0, lost: 0, surrendered: 0, survivors: 0, kills: 0 },
+    };
+    for (const k of BSTAT_CLASSES) {
+      const c = b.committed[k] || 0, l = b.lost[k] || 0, su = b.surrendered[k] || 0, surv = b.survivors[k] || 0;
+      // Kills of class k = enemy hulls of that class destroyed.
+      const kills = enemy.lost[k] || 0;
+      out.committed[k] = c; out.lost[k] = l; out.surrendered[k] = su;
+      out.survivors[k] = surv; out.kills[k] = kills;
+      out.totals.committed += c; out.totals.lost += l; out.totals.surrendered += su;
+      out.totals.survivors += surv; out.totals.kills += kills;
+    }
+    report.sides[sideKey] = out;
+  }
+  let mvp = null;
+  for (const id in bs.ships) {
+    const r = bs.ships[id];
+    const label = r.name || BSTAT_CAPITAL_LABEL[r.klass] || r.klass;
+    if (r.klass === "fighter" || r.klass === "bomber") {
+      const sc = report.smallCraft[r.side];
+      if (sc) { sc.count++; sc.kills += r.kills; sc.damage += r.damageDealt; }
+    } else {
+      report.capitals.push({
+        name: label, klass: r.klass, side: r.side, isPlayer: r.isPlayer,
+        kills: r.kills, damageDealt: Math.round(r.damageDealt), fate: r.fate,
+      });
+    }
+    if ((r.kills > 0 || r.damageDealt > 0) &&
+        (!mvp || r.kills > mvp.kills || (r.kills === mvp.kills && r.damageDealt > mvp.damageDealt))) {
+      mvp = { name: label, klass: r.klass, side: r.side, isPlayer: r.isPlayer,
+              kills: r.kills, damageDealt: Math.round(r.damageDealt) };
+    }
+  }
+  // Blue capitals first, then by kills descending.
+  report.capitals.sort((a, b) => (a.side === b.side ? b.kills - a.kills : (a.side === "blue" ? -1 : 1)));
+  report.smallCraft.blue.damage = Math.round(report.smallCraft.blue.damage);
+  report.smallCraft.red.damage = Math.round(report.smallCraft.red.damage);
+  report.mvp = mvp;
+  game.battleReport = report;
+}
 
 function applyDamage(ship, p, moduleTargets = null, particles = null, game = null) {
+  // Surrendered ships still take damage from ordnance already in flight:
+  // you can't un-launch the 10 missiles that locked on before the white
+  // flag went up. They're untargetable for NEW shots (every target/aim
+  // picker skips surrendered, and missiles won't re-acquire onto them —
+  // see acquireMissileTarget), so the only hits that land are weapons
+  // committed before the surrender (locked missiles, in-flight cannon
+  // rounds). A ship that's over-killed this way dies instead of being
+  // captured — which is the intended consequence of overcommitting.
   let remaining = p.damage;
   if (p.fromKlass === "pd") {
     remaining *= PD_VS_SHIP_MUL;
@@ -1048,11 +1664,30 @@ function applyDamage(ship, p, moduleTargets = null, particles = null, game = nul
       remaining *= CARRIER_PD_VS_LARGE_MUL;
     }
   }
+  // Fighters counter bombers: a fighter's cannon is 3× as effective at
+  // stripping a bomber's shields AND hull. Cannon rounds only.
+  if (ship.klass === "bomber" && p.fromKlass === "fighter" && p.kind === "cannon") {
+    remaining *= FIGHTER_CANNON_VS_BOMBER_MUL;
+  }
+  // Anti-craft bonus: air-to-air missiles deal extra damage vs fighters
+  // and bombers (the carrier-killer role needs a counter).
+  if (p.kind === "missile" && p.antiCraftBonus &&
+      (ship.klass === "fighter" || ship.klass === "bomber")) {
+    remaining *= p.antiCraftBonus;
+  }
   // Reset the stall watchdog: any damage event counts as the arena
   // still being meaningfully active. The watchdog is checked in
   // update() and forces a draw when no damage has been dealt for
   // STALL_LIMIT seconds (see below).
   if (game) game.stallTimer = 0;
+
+  // Battle telemetry: attribute this hit. Stamp the last damager (drives
+  // kill credit on death) and record damage dealt + cannon-hit accuracy.
+  // `remaining` here is the post-multiplier incoming damage (shield+hull).
+  if (game && p.side != null) {
+    if (p.ownerId != null) { ship.lastDamagerId = p.ownerId; ship.lastDamagerSide = p.side; }
+    bstatRecordDamage(game, p, remaining);
+  }
 
   // Step 1: Shield (unless missile, which bypasses).
   if (p.kind !== "missile" && ship.shieldMax > 0 && ship.shield > 0) {
@@ -1068,10 +1703,14 @@ function applyDamage(ship, p, moduleTargets = null, particles = null, game = nul
     recordShieldHit(ship, p);
     // SFX event — shielded-hit variant. Position is the impact, not
     // the ship centre, so attenuation feels right when a far-away
-    // capital takes one.
-    events.emit("hit", {
+    // capital takes one. SUPPRESSED for laser-kind so the per-tick
+    // beam damage doesn't trigger 60 shield-impact thunks per second;
+    // the sustained `sfxBeam` voice covers the beam's audio role.
+    if (!isLaser) events.emit("hit", {
       x: p.pos.x, y: p.pos.y,
       shielded: true,
+      layer: "shield",
+      source: impactSource(p),
       isPlayer: ship.isPlayer,
     });
     const shieldCost = remaining * shieldMul;
@@ -1087,62 +1726,60 @@ function applyDamage(ship, p, moduleTargets = null, particles = null, game = nul
     const dmgAbsorbed = ship.shield / shieldMul;
     ship.shield = 0;
     if (particles) spawnShieldImpact(particles, p.pos.x, p.pos.y, dmgAbsorbed, true);
+    // Shield-collapse SFX event — bright crystalline shatter so the
+    // player hears "screen down" distinctly from a regular bubble
+    // absorb. Distinct from the per-hit `hit` event above.
+    events.emit("shieldBreak", {
+      x: ship.pos.x, y: ship.pos.y,
+      isPlayer: ship.isPlayer,
+    });
     remaining = remaining - dmgAbsorbed;
     if (remaining <= 0) return;
   }
 
-  // Step 2: Armor (capitals). Wear at a reduced rate so plates last.
-  if (ship.armorMax > 0 && ship.armor > 0 && ship.spec.armor) {
-    const wearRate = ship.spec.armor.wearRate || 0.5;
-    ship.armorFlash = Math.min(1, ship.armorFlash + 0.5);
-    const armorWear = remaining * wearRate;
-    if (armorWear <= ship.armor) {
-      ship.armor -= armorWear;
-      recordArmorImpact(ship, p, remaining, particles);
-      return; // armor ate the whole hit
-    }
-    // Armor strips; convert remaining capacity back into incoming damage.
-    const dmgAbsorbed = ship.armor / wearRate;
-    ship.armor = 0;
-    // Big shed moment — pass the full absorbed amount so extra flakes spawn.
-    recordArmorImpact(ship, p, dmgAbsorbed * 1.2, particles);
-    remaining = remaining - dmgAbsorbed;
-    if (remaining <= 0) return;
-  }
+  // Step 2 (REMOVED): ship-level armor. Armor is per-block + per-
+  // module now (cell.armor / module.armor reduces incoming damage at
+  // each impact). Heavy capitals are still tougher because their
+  // blocks + modules carry higher armor values, but the damage no
+  // longer cascades through a separate ship-level pool.
 
   // Step 3: Damage now hits the hull (either via modules or directly).
   // Record a persistent hull scar + spawn breakoff fragments at the
   // impact point regardless of whether modules absorb part of the hit.
   recordHullImpact(ship, p, remaining, particles, game);
-  // SFX event — hull-hit variant (low metallic thunk).
-  events.emit("hit", {
+  // SFX event — hull-hit variant (low metallic thunk). SUPPRESSED for
+  // laser-kind for the same reason as the shielded branch above: the
+  // sustained `sfxBeam` voice plays for the beam's duration and the
+  // per-tick hull-hit thunks would otherwise stack 60× per second.
+  if (p.kind !== "laser") events.emit("hit", {
     x: p.pos.x, y: p.pos.y,
     shielded: false,
+    layer: "hull",
+    source: impactSource(p),
     isPlayer: ship.isPlayer,
   });
 
-  // Step 3a: Chew the destructible cell grid at the hit point. Radius
-  // scales with damage so a glancing fighter round chips a single cell
-  // and a cruiser shell or missile rips out a cluster. With per-class
-  // cell HP > 1 the budget approach drills inner-cells-first: a small
-  // hit chips one pixel, a heavy hit shears a tight chunk. The 1.2x
-  // cap prevents a single 200-dmg beam tick from punching a hole
-  // straight through a battleship.
+  // Step 3a: Chew the destructible cell grid at the hit point. Each cell in
+  // the blast area takes independent damage with quadratic falloff from center
+  // to edge, reduced by per-class armor. Cannons bite cells over 4-8 shots;
+  // missiles can one-shot a cluster near the blast center.
   if (ship.cells && p && p.pos) {
     const local = worldToLocal(ship, p.pos.x, p.pos.y);
-    const chewR = chewRadius(ship, remaining);
-    damageCellsInRadius(ship, local.x, local.y, chewR, remaining * 1.2);
+    const chewR = p.blastRadius != null ? p.blastRadius : chewRadius(ship, remaining);
+    const cellResult = damageCellsInRadius(ship, local.x, local.y, chewR, remaining);
+    if (cellResult && cellResult.coreKilled) ship.hp = 0;
   }
 
   if (moduleTargets && moduleTargets.length > 0) {
     for (const { module, weight } of moduleTargets) {
       if (module.disabled) continue;
-      const dmg = remaining * weight;
-      // Damage-stage tracking: each module steps through stages 0-4 as
-      // its HP drops (matches drawShip's progressive chip rendering).
-      // When we cross into a worse stage, fire a one-shot spark + smoke
-      // puff so the transition reads as a discrete event rather than a
-      // slow color drift.
+      // Per-module armor (0..1) reduces the damage that reaches this
+      // module's HP. Mirrors the per-cell armor — a heavily-armoured
+      // battleship missile bay survives a glancing hit that would
+      // disable a fighter's gun outright. armor-piercing ordnance
+      // (torpedoes) skips the reduction.
+      const modArmor = p.armorPiercing ? 0 : (module.armor || 0);
+      const dmg = remaining * weight * (1 - modArmor);
       const prevStage = moduleStage(module.hp, module.hpMax);
       module.hp -= dmg;
       const newStage = moduleStage(module.hp, module.hpMax);
@@ -1160,40 +1797,58 @@ function applyDamage(ship, p, moduleTargets = null, particles = null, game = nul
       if (module.hp <= 0) {
         module.disabled = true;
         module.hp = 0;
-        // Killing a subsystem ruptures part of the central hull too —
-        // strip enough modules and the ship dies of cumulative breaches.
-        ship.hp -= module.hullPenalty;
+        // Killing a subsystem ruptures part of the central hull — drains
+        // the structural-integrity bar. Clamped so hpFrac never goes negative.
+        ship.hp = Math.max(0, ship.hp - module.hullPenalty);
         // Tear out the cluster of cells bound to this module so the
         // ship's silhouette loses a recognisable chunk at the same time.
         if (ship.cells) killCellsForModule(ship, module.name);
-        if (particles) {
-          const wpos = moduleWorldPos(ship, module.name);
-          if (wpos) {
-            const moduleRadiusWorld = module.radius * ship.spec.radius;
-            // Capital module deaths read 40% bigger — bigger shockwave,
-            // more sparks/debris — than fighter engine pops.
-            const intensity = ship.spec.armorMax > 0 ? 1.4 : 1.0;
-            spawnDestructionBurst(particles, wpos.x, wpos.y, moduleRadiusWorld, intensity);
-          }
+        const wpos = moduleWorldPos(ship, module.name);
+        if (particles && wpos) {
+          const moduleRadiusWorld = module.radius * ship.spec.radius;
+          // Capital module deaths read 40% bigger — bigger shockwave,
+          // more sparks/debris — than fighter engine pops. Was using
+          // `ship.spec.armorMax > 0` as the capital proxy; ship-level
+          // armor is gone, so check the klass directly.
+          const isCapital = ship.klass === "frigate" || ship.klass === "cruiser"
+            || ship.klass === "battleship" || ship.klass === "carrier"
+            || ship.klass === "station";
+          const intensity = isCapital ? 1.4 : 1.0;
+          spawnDestructionBurst(particles, wpos.x, wpos.y, moduleRadiusWorld, intensity);
         }
+        // Module-destroyed SFX event — sharp crack + tonal punch so
+        // PD turrets, broadside batteries, missile bays, etc. blowing
+        // out reads distinctly from a full ship explosion.
+        const isCapital = ship.klass === "frigate" || ship.klass === "cruiser"
+          || ship.klass === "battleship" || ship.klass === "carrier"
+          || ship.klass === "station";
+        events.emit("moduleDestroyed", {
+          x: (wpos && wpos.x) || ship.pos.x,
+          y: (wpos && wpos.y) || ship.pos.y,
+          // Capitals' modules are bigger → louder pop. Small craft
+          // (fighter `gun` module) → softer.
+          intensity: isCapital ? 0.7 : 0.4,
+          isPlayer: ship.isPlayer,
+        });
       }
     }
     return;
   }
-  ship.hp -= remaining;
+  // No module targets (glancing hit / laser / small craft): drain hull HP
+  // directly. Clamped at 0 so hpFrac carry-over never goes negative.
+  // Lethal only via core destruction — the HP bar now shows structural
+  // erosion, not an instant-death meter.
+  ship.hp = Math.max(0, ship.hp - remaining);
 }
 
-// Cell-damage radius for a given hit. Scales with damage so a glancing
-// hit chips one or two pixels and a big shell shears a chunk. The cap
-// keeps a single hit from clearing more than ~30% of a ship's grid
-// extent — sustained fire still has to do the work of stripping the
-// hull. The base is at least one full cell so a hit on the hull always
-// lands at least one visible block, not a near-miss.
+// Cell-damage blast radius in local ship space. Scales with weapon damage:
+// cannons are tight (chip 1-3 cells), missiles are wide (chunk a cluster).
+// Cap at 75% of ship radius so no single hit clears more than half the hull.
 function chewRadius(ship, dmg) {
   const R = ship.spec && ship.spec.radius ? ship.spec.radius : 14;
   const cellSize = Math.max(ship.cellW || 6, ship.cellH || 6);
-  const base = cellSize * 0.85;
-  const scale = Math.min(R * 0.5, base + Math.sqrt(Math.max(0, dmg)) * 2.4);
+  const base = cellSize * 0.6;
+  const scale = Math.min(R * 0.75, base + Math.sqrt(Math.max(0, dmg)) * 3.0);
   return scale;
 }
 
@@ -1319,9 +1974,17 @@ function applyAndAgeBeams(game, dt) {
     const owner = beam.ownerId != null
       ? game.ships.find((s) => s.id === beam.ownerId)
       : null;
-    const ownerLaserOk = !owner || !owner.moduleByName
-      || !owner.moduleByName.laser
-      || !owner.moduleByName.laser.disabled;
+    // A beam dies when its owner loses ALL its laser emitters. Single-laser
+    // ships have a `laser` module; multi-beam ships (heavyLaser array of ≥2)
+    // have `laser-fore`/`laser-aft` and NO `laser` module — so the old
+    // `moduleByName.laser` check was always false for them and their beams
+    // never died after both bays were shot off. Scan the module list for any
+    // LIVE laser emitter instead.
+    let ownerLaserOk = true;
+    if (owner && owner.modules) {
+      const laserMods = owner.modules.filter((m) => m.name && m.name.startsWith("laser"));
+      if (laserMods.length > 0) ownerLaserOk = laserMods.some((m) => !m.disabled);
+    }
     if (!owner || owner.dead || !ownerLaserOk) {
       beam.ttl = 0;
       beam.hit = null;
@@ -1340,15 +2003,34 @@ function applyAndAgeBeams(game, dt) {
       const d2 = dx * dx + dy * dy;
       if (d2 <= beam.range * beam.range) {
         const tickDmg = beam.dps * dt;
+        // Hit point on the near hull face — beam enters from the firing
+        // side, so offset back toward the beam origin by the target radius.
+        const d = Math.sqrt(d2) || 1;
+        const tR = (t.spec && t.spec.radius) || 14;
+        const ux = dx / d, uy = dy / d;
+        let hitX = t.pos.x - ux * tR;   // default: near hull face / shield bubble
+        let hitY = t.pos.y - uy * tR;
+        // Shield down: walk the beam in from the near face to the FIRST live
+        // block so the burn lands on remaining structure, not the eroded
+        // outline. (Shield up → the laser is absorbed at the bubble, which is
+        // the circle, so the near-face point is correct.)
+        const tShieldUp = t.shieldMax > 0 && t.shield > 0;
+        if (t.cells && !tShieldUp) {
+          const step = Math.max(2, Math.max(t.cellW || 6, t.cellH || 6) * 0.5);
+          for (let sd = d - tR; sd <= d + tR; sd += step) {
+            const sx = beam.origin.x + ux * sd, sy = beam.origin.y + uy * sd;
+            if (projectileBlockHit(t, sx, sy, 2)) { hitX = sx; hitY = sy; break; }
+          }
+        }
         applyDamage(
           t,
-          { damage: tickDmg, kind: "laser", fromKlass: "battleship", pos: { x: t.pos.x, y: t.pos.y } },
+          { damage: tickDmg, kind: "laser", fromKlass: "battleship", pos: { x: hitX, y: hitY }, ownerId: beam.ownerId, side: beam.side },
           null,
           game.particles,
           game,
         );
-        if (t.hp <= 0) t.dead = true;
-        beam.hit = { x: t.pos.x, y: t.pos.y };
+        if (isShipDestroyed(t)) t.dead = true;
+        beam.hit = { x: hitX, y: hitY };
       } else {
         beam.hit = null;
       }
@@ -1442,7 +2124,7 @@ function pickPackTarget(ships, side, center, role) {
   let bestPreferred = null, bestPreferredD2 = Infinity;
   let bestAny = null, bestAnyD2 = Infinity;
   for (const o of ships) {
-    if (o.dead || o.side === side) continue;
+    if (o.dead || o.surrendered || o.side === side) continue;
     const dx = o.pos.x - center.x;
     const dy = o.pos.y - center.y;
     const d2 = dx * dx + dy * dy;
