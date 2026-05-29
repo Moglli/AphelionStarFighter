@@ -287,11 +287,40 @@ events.on("carrierLaunch", ({ x, y }) => {
 // hud.js' rebuilt grid calls game.setPosture / game.setMissiles, so
 // hang them on the game object too — without this the DOM buttons
 // render but their click handlers no-op.
+// Live admiral orders live on game.directives[klass], BUT fighters/bombers
+// carry a per-ship `wingCommand` (stamped at spawn by the fleet plan) that
+// ai.js#resolveOrders prioritises OVER the class directive. Capitals have no
+// wingCommand so the directive drives them directly — but strike craft were
+// reading their stale pre-battle wing order and ignoring every live command
+// ("fighters ignore in-game battle commands"). Fix: when a live per-class
+// order changes the STANCE or TARGET-PRIORITY axis, push that axis onto every
+// commandable blue ship of that class so the live order supersedes the wing
+// plan. (MISSILES is read straight off game.directives[klass] in ship.js, so
+// it already reached strike craft and needs no propagation.)
+const STANCE_FROM_KIND = { free: "engage", press: "charge", hold: "fallback", "defend-capital": "engage", "target-class": "engage" };
+const propagateOrderToWings = (klass, axis, value) => {
+  if (!game.ships) return;
+  for (const s of game.ships) {
+    if (s.dead || s.side !== "blue" || s.klass !== klass) continue;
+    const wc = s.wingCommand;
+    if (!wc) continue; // capitals: the directive path already drives them
+    // Normalise a legacy {kind,…} wing order to the new {stance,…} shape on
+    // first live edit — resolveOrders only reads our axis once `.stance` is
+    // set (otherwise it maps the legacy `.kind` and ignores everything else).
+    if (!wc.stance) {
+      wc.stance = STANCE_FROM_KIND[wc.kind] || "engage";
+      if (wc.priority == null) wc.priority = wc.kind === "target-class" ? "hunt" : "default";
+      if (wc.priorityClass == null) wc.priorityClass = wc.kind === "target-class" ? (wc.target ?? null) : null;
+    }
+    wc[axis] = value;
+  }
+};
 // `setPosture` now writes the STANCE axis (engage/charge/standoff/hold/
 // fallback) — the live admiral panel passes stance values. Kept the name so
 // the legacy canvas AdmiralPanel hook signature is unchanged.
 const setPosture = (klass, stance) => {
   if (game.directives && game.directives[klass]) game.directives[klass].stance = stance;
+  propagateOrderToWings(klass, "stance", stance);
 };
 const setMissiles = (klass, missiles) => {
   if (game.directives && game.directives[klass]) game.directives[klass].missiles = missiles;
@@ -300,6 +329,7 @@ const setMissiles = (klass, missiles) => {
 // admiral's tapped focus target (game.focusTargetId).
 const setPriority = (klass, priority) => {
   if (game.directives && game.directives[klass]) game.directives[klass].priority = priority;
+  propagateOrderToWings(klass, "priority", priority);
 };
 game.setPosture = setPosture;
 game.setMissiles = setMissiles;
@@ -360,6 +390,7 @@ function proceedAfterJump(action, payload) {
     const mapH = 3500 + (activeRun.act - 1) * 1500;
     startGame(game, mapW, mapH, activeRun.faction, "roguelite", cfg, 1);
     input.resetForNewMatch();
+    zoom = DEFAULT_ZOOM; // reset view scale per match (see menu-launch note)
     input.admiralActive = !!game.admiralMode;
     audio.start();
   } else if (action === "noncombat") {
@@ -855,6 +886,10 @@ function frame(now) {
       startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode, legacyCfg,
                 choice.fleetMul, choice.customRoster || null);
       input.resetForNewMatch();
+      // `zoom` is a main.js module-level var (not on game), so startGame can't
+      // reset it — do it here so a zoomed-out admiral/spectate view never
+      // carries into the next match (e.g. two Admiral matches in a row).
+      zoom = DEFAULT_ZOOM;
       input.admiralActive = !!game.admiralMode;
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();
@@ -877,6 +912,11 @@ function frame(now) {
     if (input.consumeSpectateToggle()) {
       if (game.spectating) exitSpectate(game);
       else enterSpectate(game);
+      // Drop any in-flight pan/pinch so a half-finished gesture doesn't
+      // jolt the camera the next time we enter spectate (the consume block
+      // is gated on game.spectating, so otherwise a stale delta sits and
+      // applies on re-entry).
+      input.clearCameraGestures();
     }
 
     // TAKE COMMAND / RESUME PILOT — drop into the top-down admiral view
@@ -903,13 +943,17 @@ function frame(now) {
         game._admiralByToggle = true;
         input.admiralActive = true;
       }
+      input.clearCameraGestures(); // same anti-jolt reset as the spectate toggle
     }
     // Camera zoom: pinch (touch) + wheel (mouse) feed a single delta
     // pool. Spectator and admiral get to use it; piloting keeps the
     // default zoom so the player isn't fighting muscle-memory aim at
     // varying scales. Reset to default when leaving those modes so a
     // zoomed-out admiral doesn't carry a wide view into the next match.
-    if (game.spectating || game.admiralMode) {
+    // Single-keyed on game.spectating (every admiral path sets spectating=true,
+    // so dropping the redundant `|| game.admiralMode` keeps zoom, pan, tap, and
+    // the draw() camera pick — all gated on spectating — from diverging).
+    if (game.spectating) {
       const dz = input.consumePinchDelta();
       if (dz !== 0) {
         zoom *= (1 + dz);
@@ -974,7 +1018,11 @@ function frame(now) {
         const wy = _lastCamera.y + (tap.y - viewH / 2) / zoom;
         let best = null, bestD2 = Infinity;
         for (const s of game.ships) {
-          if (s.dead) continue;
+          // Skip surrendered hulks: they're untargetable drifting wrecks, so
+          // locking the camera on one (or, in admiral, focus-firing it) is a
+          // dead end — the AI ignores them. Matches the surrender-skip
+          // convention used by every target-picker.
+          if (s.dead || s.surrendered) continue;
           const dx = s.pos.x - wx;
           const dy = s.pos.y - wy;
           const r = (s.spec && s.spec.radius) || s.radius || 20;
@@ -1009,7 +1057,14 @@ function frame(now) {
     // return-to-menu input.
     prevMatchOver = game.matchOver;
 
-    if (game.matchOver && input.consumeEnterPress()) {
+    // Advance past the (now interactive) end-of-battle report. Two explicit
+    // signals: the HUD CONTINUE / RETURN button (touch + mouse) and the
+    // Enter key (desktop). Both are drained every frame so a stale flag
+    // can't linger. The old window-level tap-anywhere dismiss is gone — it
+    // fired on taps ON the report too, so the player couldn't read it.
+    const advanceEnter = input.consumeEnterPress();
+    const advanceBtn = input.consumeMatchAdvance();
+    if (game.matchOver && (advanceEnter || advanceBtn)) {
       const wasRoguelite = game.mode === "roguelite";
       restart(game);
       audio.stop();
@@ -1080,11 +1135,18 @@ function draw() {
       camera = { x: game.spectateCamera.x, y: game.spectateCamera.y };
     } else {
       const spec = getSpectateTarget(game);
-      camera = spec
-        ? { x: spec.pos.x, y: spec.pos.y }
-        : (game.spectateCamera
+      if (spec) {
+        // Mirror the live locked target into spectateCamera every frame so
+        // that when the target dies (update() silently auto-recycles the
+        // spectate id) or we start panning, the camera resumes from the
+        // last-seen position instead of snapping to a stale lock point.
+        if (game.spectateCamera) { game.spectateCamera.x = spec.pos.x; game.spectateCamera.y = spec.pos.y; }
+        camera = { x: spec.pos.x, y: spec.pos.y };
+      } else {
+        camera = game.spectateCamera
           ? { x: game.spectateCamera.x, y: game.spectateCamera.y }
-          : { x: ARENA.width / 2, y: ARENA.height / 2 });
+          : { x: ARENA.width / 2, y: ARENA.height / 2 };
+      }
     }
   } else {
     const player = game.ships.find((s) => s.isPlayer && !s.dead);
@@ -1120,7 +1182,7 @@ function draw() {
   // so the player can see which target the fleet is prioritising at
   // a glance. Drawn AFTER ships so it sits on top of the hull.
   if (game.admiralMode && game.focusTargetId != null) {
-    const ft = game.ships.find((s) => s.id === game.focusTargetId && !s.dead);
+    const ft = game.ships.find((s) => s.id === game.focusTargetId && !s.dead && !s.surrendered);
     if (ft) {
       const r = (ft.spec && ft.spec.radius) || 24;
       const ringR = r + 22;
@@ -1196,17 +1258,11 @@ function draw() {
   input.drawSticks(ctx);
 }
 
-window.addEventListener("pointerdown", () => {
-  if (game.matchOver && game.state === "playing") {
-    const wasRoguelite = game.mode === "roguelite";
-    restart(game);
-    refresh();
-    if (wasRoguelite && activeRun) {
-      input.startMenu.selectedMode = "roguelite";
-      input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
-      input.startMenu.showRunMap = true;
-    }
-  }
-});
+// NOTE: the end-of-battle report is interactive — advancing past it is
+// handled by the HUD CONTINUE / RETURN button (input.matchAdvanceRequested)
+// and the Enter key, both drained in the frame loop above. The old
+// window-level "tap anywhere to dismiss" listener was removed: it fired on
+// taps landing ON the report panel, so the player couldn't scroll, switch
+// tabs, or expand rows without instantly closing the match.
 
 requestAnimationFrame(frame);

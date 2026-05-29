@@ -69,8 +69,14 @@ function countBySide(ships) {
 }
 
 // Render the in-depth end-of-battle report (all modes) from game.battleReport.
-// Head-to-head totals, per-class fleet breakdown, MVP, per-capital lines, and
-// a strike-craft aggregate. Returns an HTML string ('' if no report).
+// INTERACTIVE: four tappable tabs (Overview / Fleets / Capitals / Strike) and
+// tap-to-expand rows for per-capital + per-side strike-craft detail. The tab
+// switches and row expands are handled by a single delegated click handler on
+// the match-over panel (BattleHUD#_onMatchOverClick) keyed on the data-mo-*
+// attributes stamped here — so the markup stays a pure string and the panel
+// is built exactly once per match (no per-frame innerHTML churn that would
+// reset the player's tab choice / expanded rows / scroll). Returns '' if no
+// report.
 function renderBattleReportHTML(report) {
   if (!report) return "";
   const B = report.sides.blue, R = report.sides.red;
@@ -82,7 +88,10 @@ function renderBattleReportHTML(report) {
     fighter: "Fighters", bomber: "Bombers", frigate: "Frigates",
     cruiser: "Cruisers", battleship: "Battleships", carrier: "Carriers", station: "Stations",
   };
-  // Head-to-head: blue value | label | red value.
+  const sideDot = (side) => `<span class="bstat-dot bstat-dot-${side}"></span>`;
+  const sideName = (side) => (side === "blue" ? "Friendly" : "Enemy");
+
+  // ---- OVERVIEW pane: head-to-head totals + MVP ----
   const cmp = (label, bv, rv) =>
     `<div class="bstat-cmp-row"><span class="bstat-b">${bv}</span><span class="bstat-lbl">${label}</span><span class="bstat-r">${rv}</span></div>`;
   const headToHead = `
@@ -97,7 +106,15 @@ function renderBattleReportHTML(report) {
       ${cmp("Accuracy", pct(B.accuracy), pct(R.accuracy))}
       ${cmp("Missiles fired", B.missilesFired, R.missilesFired)}
     </div>`;
-  // Per-class fleet breakdown for one side (only classes that fielded ships).
+  const mvp = report.mvp ? `
+    <div class="bstat-mvp">
+      <span class="bstat-mvp-label">⭐ MVP</span>
+      <span class="bstat-mvp-name">${sideDot(report.mvp.side)}${report.mvp.name}</span>
+      <span class="bstat-mvp-stat">${report.mvp.kills} kills · ${num(report.mvp.damageDealt)} dmg</span>
+    </div>` : "";
+  const overviewPane = `${headToHead}${mvp}`;
+
+  // ---- FLEETS pane: per-side per-class breakdown ----
   const fleetRows = (side) => {
     const rows = [];
     for (const k of ["battleship", "carrier", "cruiser", "frigate", "bomber", "fighter", "station"]) {
@@ -108,47 +125,93 @@ function renderBattleReportHTML(report) {
     }
     return rows.join("") || `<div class="bstat-fleet-row"><span class="bstat-fleet-v">—</span></div>`;
   };
-  const sideDot = (side) => `<span class="bstat-dot bstat-dot-${side}"></span>`;
-  const mvp = report.mvp ? `
-    <div class="bstat-mvp">
-      <span class="bstat-mvp-label">⭐ MVP</span>
-      <span class="bstat-mvp-name">${sideDot(report.mvp.side)}${report.mvp.name}</span>
-      <span class="bstat-mvp-stat">${report.mvp.kills} kills · ${num(report.mvp.damageDealt)} dmg</span>
-    </div>` : "";
-  // Per-capital lines (sorted blue-first, kills desc in finalize).
+  const fleetsPane = `
+    <div class="bstat-cols">
+      <div class="bstat-col">
+        <div class="bstat-section-title bstat-blue">FRIENDLY FLEET</div>
+        ${fleetRows(B)}
+      </div>
+      <div class="bstat-col">
+        <div class="bstat-section-title bstat-red">ENEMY FLEET</div>
+        ${fleetRows(R)}
+      </div>
+    </div>`;
+
+  // ---- CAPITALS pane: tap a row to expand its detail ----
   const fateLabel = { alive: "survived", lost: "lost", surrendered: "surrendered" };
-  const capRows = report.capitals.length ? report.capitals.map((c) =>
-    `<div class="bstat-cap-row bstat-fate-${c.fate}">
-      <span class="bstat-cap-name">${sideDot(c.side)}${c.isPlayer ? "★ " : ""}${c.name}</span>
-      <span class="bstat-cap-klass">${c.klass}</span>
-      <span class="bstat-cap-kd">${c.kills}K · ${num(c.damageDealt)}dmg</span>
-      <span class="bstat-cap-fate">${fateLabel[c.fate] || c.fate}</span>
-    </div>`).join("") : `<div class="bstat-cap-row"><span class="bstat-cap-name">No capital ships engaged.</span></div>`;
+  const detailRow = (label, value) =>
+    `<span class="bstat-dt-k">${label}</span><span class="bstat-dt-v">${value}</span>`;
+  const capItems = report.capitals.length ? report.capitals.map((c) => {
+    const acc = c.shotsFired > 0 ? `${Math.round((c.shotsHit / c.shotsFired) * 100)}% (${num(c.shotsHit)}/${num(c.shotsFired)})` : "—";
+    return `<div class="bstat-cap-item bstat-fate-${c.fate}" data-mo-expand>
+      <div class="bstat-cap-row" role="button" tabindex="0" aria-expanded="false">
+        <span class="bstat-caret" aria-hidden="true">▸</span>
+        <span class="bstat-cap-name">${sideDot(c.side)}${c.isPlayer ? "★ " : ""}${c.name}</span>
+        <span class="bstat-cap-kd">${c.kills}K</span>
+        <span class="bstat-cap-fate">${fateLabel[c.fate] || c.fate}</span>
+      </div>
+      <div class="bstat-detail">
+        <div class="bstat-detail-grid">
+          ${detailRow("Allegiance", sideName(c.side))}
+          ${detailRow("Class", `<span class="bstat-cap-klass">${c.klass}</span>`)}
+          ${detailRow("Kills", c.kills)}
+          ${detailRow("Damage dealt", num(c.damageDealt))}
+          ${detailRow("Accuracy", acc)}
+          ${detailRow("Fate", fateLabel[c.fate] || c.fate)}
+        </div>
+        ${c.isPlayer ? `<div class="bstat-detail-flag">★ Your flagship</div>` : ""}
+      </div>
+    </div>`;
+  }).join("") : `<div class="bstat-cap-empty">No capital ships engaged.</div>`;
+  const capitalsPane = `<div class="bstat-cap-list">${capItems}</div>`;
+
+  // ---- STRIKE pane: per-side aggregate, expand for the class split ----
   const sc = report.smallCraft;
-  const scLine = (label, side, o) =>
-    `<div class="bstat-sc-row">${sideDot(side)}<span class="bstat-sc-lbl">${label}</span><span class="bstat-sc-v">${o.count} craft · ${o.kills} kills · ${num(o.damage)} dmg</span></div>`;
+  const scItem = (label, side, agg, fleet) => {
+    const klassRows = ["fighter", "bomber"].map((k) => {
+      const c = fleet.committed[k] || 0;
+      if (c <= 0) return "";
+      const lost = fleet.lost[k] || 0, surr = fleet.surrendered[k] || 0, left = fleet.survivors[k] || 0;
+      return detailRow(klassLabel[k], `${left}/${c} left${lost ? ` · ${lost} lost` : ""}${surr ? ` · ${surr} surr` : ""}`);
+    }).join("");
+    return `<div class="bstat-sc-item" data-mo-expand>
+      <div class="bstat-sc-row" role="button" tabindex="0" aria-expanded="false">
+        <span class="bstat-caret" aria-hidden="true">▸</span>
+        ${sideDot(side)}<span class="bstat-sc-lbl">${label}</span>
+        <span class="bstat-sc-v">${agg.count} craft · ${agg.kills} kills · ${num(agg.damage)} dmg</span>
+      </div>
+      <div class="bstat-detail">
+        <div class="bstat-detail-grid">
+          ${klassRows || detailRow("Craft", "—")}
+          ${detailRow("Kills", agg.kills)}
+          ${detailRow("Damage dealt", num(agg.damage))}
+        </div>
+      </div>
+    </div>`;
+  };
+  const strikePane = `<div class="bstat-sc-list">
+      ${scItem("Friendly", "blue", sc.blue, B)}
+      ${scItem("Enemy", "red", sc.red, R)}
+    </div>`;
+
+  const tab = (id, label, active) =>
+    `<button class="bstat-tab${active ? " active" : ""}" data-mo-tab="${id}" type="button" role="tab" aria-selected="${active ? "true" : "false"}">${label}</button>`;
+  const pane = (id, html, active) =>
+    `<div class="bstat-pane${active ? " active" : ""}" data-mo-pane="${id}" role="tabpanel">${html}</div>`;
+
   return `
     <div class="bstat-report">
       <div class="bstat-title">BATTLE REPORT <span class="bstat-duration">⏱ ${mmss}</span></div>
-      ${headToHead}
-      <div class="bstat-cols">
-        <div class="bstat-col">
-          <div class="bstat-section-title bstat-blue">FRIENDLY FLEET</div>
-          ${fleetRows(B)}
-        </div>
-        <div class="bstat-col">
-          <div class="bstat-section-title bstat-red">ENEMY FLEET</div>
-          ${fleetRows(R)}
-        </div>
+      <div class="bstat-tabs" role="tablist">
+        ${tab("overview", "Overview", true)}
+        ${tab("fleets", "Fleets", false)}
+        ${tab("capitals", "Capitals", false)}
+        ${tab("strike", "Strike", false)}
       </div>
-      ${mvp}
-      <div class="bstat-section-title">CAPITAL SHIPS</div>
-      <div class="bstat-cap-list">${capRows}</div>
-      <div class="bstat-section-title">STRIKE CRAFT</div>
-      <div class="bstat-sc-list">
-        ${scLine("Friendly", "blue", sc.blue)}
-        ${scLine("Enemy", "red", sc.red)}
-      </div>
+      ${pane("overview", overviewPane, true)}
+      ${pane("fleets", fleetsPane, false)}
+      ${pane("capitals", capitalsPane, false)}
+      ${pane("strike", strikePane, false)}
     </div>`;
 }
 
@@ -306,6 +369,7 @@ export class BattleHUD {
       <div class="matchover-subtitle" id="matchover-subtitle"></div>
       <div class="matchover-aar" id="matchover-aar"></div>
       <div class="matchover-prompt" id="matchover-prompt"></div>
+      <button class="matchover-continue" id="matchover-continue" type="button" data-mo-action="continue">CONTINUE</button>
     `;
     this._root.appendChild(matchover);
 
@@ -439,6 +503,11 @@ export class BattleHUD {
     this._matchoverSubtitle = this._root.querySelector("#matchover-subtitle");
     this._matchoverAAR = this._root.querySelector("#matchover-aar");
     this._matchoverPrompt = this._root.querySelector("#matchover-prompt");
+    this._matchoverContinueBtn = this._root.querySelector("#matchover-continue");
+    // Built-once guard: the interactive report (tabs + expandable rows +
+    // scroll) is rendered the first frame matchOver flips true and left
+    // alone after, so the player's tab/expand/scroll state survives.
+    this._matchOverBuilt = false;
     this._spectatePill = this._root.querySelector("#spectate-pill");
     this._spectateShip = this._root.querySelector("#spectate-ship");
     this._targetPanelEl = this._root.querySelector("#target-panel");
@@ -506,6 +575,34 @@ export class BattleHUD {
     if (this._battleSettingsBtnEl) {
       this._battleSettingsBtnEl.addEventListener("click", () => {
         if (this._input) this._input.settingsRequested = true;
+      });
+    }
+
+    // ---- Wire the interactive match-over report ----
+    // ONE delegated handler on the panel covers the CONTINUE button, the
+    // tab bar, and every expandable row. Delegation (rather than per-element
+    // listeners) is required because the report body is innerHTML-rebuilt
+    // when a match ends, which would orphan element-level listeners; the
+    // panel element itself is stable, so its listener persists.
+    if (this._matchoverPanel) {
+      this._matchoverPanel.addEventListener("click", (e) => this._activateReportControl(e.target));
+      // Keyboard parity. The GLOBAL window keydown handler (input.js) traps
+      // + preventDefaults Enter/Space (they're firing keys) AND Enter drives
+      // the match-advance via consumeEnterPress(). So a focused tab/row/
+      // button on the keyboard would be dead (stolen native activation) and
+      // worse, Enter would dismiss the whole report. We activate the control
+      // HERE and stopPropagation so the global listener never sees the key —
+      // no spurious advance, no stolen click. Enter pressed while focus is
+      // OUTSIDE a control still bubbles to the window handler → advances,
+      // which is the intended keyboard shortcut.
+      this._matchoverPanel.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+        const t = e.target;
+        if (!t || !t.closest) return;
+        if (!t.closest("[data-mo-action], [data-mo-tab], [data-mo-expand] > [role='button']")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._activateReportControl(t);
       });
     }
 
@@ -680,8 +777,13 @@ export class BattleHUD {
     // is alive at full shields" when in fact the player is dead and
     // observing). Only piloting needs the bottom strip.
     setVis(this._root.querySelector("#vitals-bar"), piloting);
-    // Right virtual stick (aim) is meaningless without a piloted ship.
+    // Both virtual sticks are piloting-only now. The right stick (aim) was
+    // always hidden in spectate; the LEFT stick used to stay live as a
+    // velocity-pan, which fought the unified grab-pan (and made left-half
+    // ships untappable) — input.js now gates it off when selecting, so hide
+    // it too. Desktop keeps continuous WASD pan via the keyboard thrust source.
     setVis(this._root.querySelector("#vstick-right"), piloting);
+    setVis(this._root.querySelector("#vstick-left"), piloting);
     // Admiral mode is "you ARE the admiral" — the "OBSERVING <ship>"
     // pill is confusing (you're not observing a specific ship, you're
     // commanding the whole fleet), and it overlaps the centred target
@@ -1034,10 +1136,75 @@ export class BattleHUD {
     this._respawnPanel.setAttribute("aria-hidden", "true");
   }
 
+  // Toggle one expandable report row (capital ship / strike-craft line):
+  // flip the `.expanded` class, swap the caret glyph, and reflect aria.
+  _toggleReportRow(item) {
+    if (!item) return;
+    const open = item.classList.toggle("expanded");
+    const caret = item.querySelector(".bstat-caret");
+    if (caret) caret.textContent = open ? "▾" : "▸";
+    const row = item.querySelector("[role='button']");
+    if (row) row.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  // Activate an interactive control inside the match-over panel, given the
+  // event target (click or keyboard). Shared by the click + keydown wiring.
+  // The CONTINUE / RETURN button advances (main.js drains the flag); the tab
+  // bar switches panes; an expand row toggles — but ONLY when the row HEADER
+  // is hit, not the detail body, so tapping inside an open detail to read /
+  // select text doesn't collapse it.
+  _activateReportControl(el) {
+    if (!el || !el.closest) return;
+    if (el.closest("[data-mo-action='continue']")) {
+      if (this._input) this._input.matchAdvanceRequested = true;
+      return;
+    }
+    const tab = el.closest("[data-mo-tab]");
+    if (tab) {
+      const id = tab.getAttribute("data-mo-tab");
+      const report = tab.closest(".bstat-report");
+      if (!report) return;
+      report.querySelectorAll("[data-mo-tab]").forEach((t) => {
+        const on = t.getAttribute("data-mo-tab") === id;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      report.querySelectorAll("[data-mo-pane]").forEach((p) => {
+        p.classList.toggle("active", p.getAttribute("data-mo-pane") === id);
+      });
+      return;
+    }
+    const header = el.closest("[data-mo-expand] > [role='button']");
+    if (header) this._toggleReportRow(header.parentElement);
+  }
+
   _syncMatchOver(game) {
     if (game.matchOver) {
       this._matchoverPanel.classList.add("active");
       this._matchoverPanel.setAttribute("aria-hidden", "false");
+      // INTERACTIVE report: build the panel contents ONCE per match (tabs,
+      // expandable rows, scroll). Re-running the innerHTML below every frame
+      // would wipe the player's tab choice / expanded rows / scroll pos.
+      if (this._matchOverBuilt) return;
+      this._matchOverBuilt = true;
+      this._matchoverPanel.scrollTop = 0;
+      // CONTINUE button label by mode (replaces the old tap-anywhere). The
+      // career-summary screen returns the player home; a mid-run Frontier
+      // win returns to the starmap; everything else just continues.
+      if (this._matchoverContinueBtn) {
+        this._matchoverContinueBtn.textContent = game.mode === "roguelite"
+          ? (game.runSummary ? "RETURN TO HOME" : "RETURN TO STARMAP")
+          : "CONTINUE";
+      }
+      // The prompt is now a quiet hint (the button is the action).
+      this._matchoverPrompt.textContent = "Review the report below, then continue.";
+      // Reset any inline title styling left over from a PRIOR career-summary
+      // (green/red tint + stamp animation). Persisted on the stable DOM
+      // element, it would otherwise bleed into a later non-roguelite title.
+      // The career path re-applies its own tint below.
+      this._matchoverTitle.style.color = "";
+      this._matchoverTitle.style.textShadow = "";
+      this._matchoverTitle.classList.remove("runend-stamp");
 
       const isRoguelite = game.mode === "roguelite";
       const won = game.winner === "blue";
@@ -1164,7 +1331,6 @@ export class BattleHUD {
           this._matchoverAAR.innerHTML = "";
           this._matchoverAAR.style.display = "none";
         }
-        this._matchoverPrompt.textContent = "Tap to return to home";
         return;
       }
 
@@ -1259,12 +1425,11 @@ export class BattleHUD {
           this._matchoverAAR.style.display = battleHtml ? "block" : "none";
         }
       }
-
-      const prompt = isRoguelite ? "Tap to return to starmap" : "Tap to continue";
-      this._matchoverPrompt.textContent = prompt;
     } else {
       this._matchoverPanel.classList.remove("active");
       this._matchoverPanel.setAttribute("aria-hidden", "true");
+      // Allow the next match to rebuild a fresh report.
+      this._matchOverBuilt = false;
     }
   }
 

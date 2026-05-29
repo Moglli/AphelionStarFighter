@@ -172,6 +172,201 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-05-29 (spectator/admiral camera — pan/zoom bug sweep)
+- **Fixed buggy map panning in spectate/command, plus a sweep of the whole
+  spectator/admiral camera.** Ten verified fixes across input.js / main.js /
+  game.js / hud.js:
+  - **Pinch also panned** (S1): a finger during a 2-finger pinch was promoted
+    to a `_panDrag` and fed `_pendingPanDelta`, so zoom dragged the camera.
+    Fix: pan accumulation + promotion are gated on `_touches.size < 2`, and a
+    2nd finger landing in onDown now nulls `_panDrag`/`_tapCandidate`/
+    `_pendingPanDelta`. **GOTCHA: mouse leaves `_touches` empty (size 0), so
+    the `< 2` guard doesn't disable desktop grab-pan.**
+  - **Forked pan model** (S2): the left vstick was never gated/hidden in
+    spectate, so left-half = velocity stick-pan, right-half = 1:1 grab-pan,
+    and left-half ships were untappable. Fix: gate the left stick on
+    `!selectActive` (input.js) + hide `#vstick-left` when not piloting
+    (hud.js) → one grab-pan model everywhere. **GOTCHA: desktop keeps
+    continuous pan via the keyboard (WASD) thrust source, which is separate
+    from the touch stick — don't remove the thrust→pan path in main.js.**
+  - **`_tapCandidate` single-slot clobber** (S3): a 2nd finger overwrote the
+    1st candidate. Fix: only the FIRST finger seeds it (`!this._tapCandidate
+    && _touches.size < 2`).
+  - **3→2 finger lift left a stale `_pinchPrevDist`** → zoom jump. Fix: re-seed
+    the baseline when dropping to exactly two touches (onUp).
+  - **Locked camera snapped to a stale/auto-recycled ship on target death.**
+    Fix: draw() mirrors the live locked target into `spectateCamera` each
+    frame, so death-recycle / null-target falls back to the last-seen spot.
+  - **`zoom` (a main.js module-level var, NOT on game) never reset between two
+    consecutive spectate/admiral matches.** Fix: `zoom = DEFAULT_ZOOM` after
+    each `startGame` call site (both launch paths already call
+    `resetForNewMatch`).
+  - **Wheel zoom accumulated while piloting/in-menu** (nothing drains it there)
+    → dumped as a jump on the first spectate frame. Fix: the wheel handler
+    only accumulates when `selectActive`.
+  - **Pan/pinch/zoom accumulators leaked across matches + spectate↔pilot
+    toggles.** Fix: new `input.clearCameraGestures()` (clears `_panDrag/
+    _pendingPanDelta/_pendingZoomDelta/_touches/_pinchPrevDist`), called from
+    `resetForNewMatch` and on both the spectate + admiral toggles.
+  - **tap-select / cycleSpectate / pickSpectateInitial / focus-reticle locked
+    onto surrendered hulks** (untargetable drifting wrecks the AI ignores).
+    Fix: `!s.surrendered` skips, matching the codebase-wide convention.
+  - **Zoom gate was `spectating||admiralMode` while pan/tap + draw camera were
+    `spectating` only.** Unified everything on `game.spectating` (every admiral
+    path sets it true) so the subsystem can't diverge.
+  - LEFT (deliberate): pinch zooms toward screen-centre, not the gesture
+    midpoint (a polish nicety, not the reported bug) — see sweep finding #19
+    if revisiting.
+  Verified at runtime (Playwright, real skirmish→spectate, driving the input
+  handlers directly): 10/10 — pinch yields zoom-delta + zero pan-delta;
+  left-half drag grab-pans without starting the stick; clean tap still selects;
+  3→2 reseed exact; resetForNewMatch clears all gesture state; tap-select skips
+  a surrendered hulk. NOTE: piloting is byte-for-byte unchanged (selectActive
+  is false while piloting, so the new `!selectActive` stick gate is a no-op there).
+
+### 2026-05-29 (fighters/bombers ignored live admiral commands)
+- **Mid-battle admiral orders now reach strike craft.** The live admiral
+  panel writes per-class to `game.directives[klass]`, but `ai.js#resolveOrders`
+  gives a ship's `wingCommand` PRECEDENCE over the class directive — and
+  `applyFleetPlan` stamps a `wingCommand` on every fighter/bomber at spawn
+  (capitals get none; they're driven purely by the directive). So a live
+  STANCE / FOCUS change never reached strike craft: they kept obeying their
+  stale pre-battle wing order. Capitals worked, fighters/bombers "ignored
+  commands".
+  - **FIX:** `setPosture`/`setPriority` (main.js) now also call
+    `propagateOrderToWings(klass, axis, value)` — pushing the changed axis
+    onto every commandable blue ship of that class that HAS a `wingCommand`,
+    so the live order supersedes the wing plan. Capitals (no wingCommand) are
+    skipped — the directive already drives them. MISSILES needs no propagation
+    (ship.js reads `world.directives[klass].missiles` directly, bypassing
+    wingCommand, so it already reached strike craft).
+  - GOTCHA: a legacy Frontier `wingCommand` is `{kind,…}` (no `.stance`), and
+    `resolveOrders` only reads the new axes once `.stance` is present — so
+    `propagateOrderToWings` normalises a legacy command to new-shape (mapping
+    `kind`→stance) before setting the axis, or the write would be silently
+    ignored.
+  - GOTCHA: only a SUBSET of fighters carry a wingCommand (the player's ship,
+    carrier-launched reinforcements, and distribution remainders have none) —
+    those obey via the directive path. So a correct fix had to cover BOTH:
+    propagate to wingCommand-bearers AND leave the directive set for the rest.
+  Verified at runtime (Playwright, real skirmish): a live FALL BACK flips
+  101/101 wingCommand fighters to stance `fallback` + sets the directive;
+  CHARGE aims 101/101 at the enemy mass while FALL BACK turns 83% away
+  (combat-independent heading proof); FOCUS propagates; frigates keep no
+  wingCommand and obey via the directive.
+
+### 2026-05-29 (Battle Plan / Fleet Plan couldn't scroll)
+- **The pre-battle planner screens (`.menu-battleplan` + `.menu-fleetplan`)
+  now scroll.** They're flex-column children of the fixed, vertically-centred
+  `.menu-root`, but had NO height bound — so they grew to their full content
+  height, overflowed the centred viewport (clipping top + bottom with no
+  scroll), and `.battleplan-body { flex:1; overflow-y:auto }` never had a
+  bounded parent to scroll within. On a tall fleet the WINGS section + LAUNCH
+  button were unreachable.
+  - **GOTCHA (the actual fix):** bind both screens to `height: 100%` +
+    `max-height: 100%` (of the fixed `inset:0` menu-root — use `100%`, NOT
+    `100vh`, to avoid the iOS dynamic-toolbar gap) AND add `min-height: 0` to
+    `.battleplan-body`. The `min-height:0` is the classic flexbox-scroll trap:
+    a `flex:1` child won't shrink below its content's min-content size without
+    it, so `overflow-y:auto` never engages and the body pushes the screen
+    past the viewport instead of scrolling internally. Both are required.
+  - Also fixed `.fleetplan-header`: the Fleet Plan markup uses class
+    `fleetplan-header` but the flex row styling only targeted
+    `.battleplan-header`, so its children stacked vertically (~123px tall
+    header). Shared the `.battleplan-header` rule (+ its `h2`) with
+    `.fleetplan-header` → compact 65px row like the Frontier Battle Plan.
+  - NOTE: a Playwright probe that measures layout synchronously right after
+    `showScreen()` reads the footer ~6px low — that's the `menu-fade-in`
+    entrance animation's `translateY(6px)` first frame, not a layout bug;
+    disable animation or wait 200ms to measure the resting layout.
+  Verified: real Fleet Plan + Battle Plan at 390px wide — screen fits the
+  viewport, body scrolls to reveal the WINGS section, LAUNCH footer stays
+  pinned + fully visible.
+
+### 2026-05-29 (interactive end-of-battle report)
+- **The match-over report is now interactive instead of tap-to-dismiss.**
+  Four tappable tabs (Overview / Fleets / Capitals / Strike), tap-to-expand
+  capital + strike-craft rows (detail card: allegiance/class/kills/damage/
+  accuracy/fate + flagship note), scrollable panel, and an explicit
+  CONTINUE / RETURN button. Applies to ALL modes (the tabbed
+  `renderBattleReportHTML` output is shared by the skirmish/custom panel,
+  the Frontier per-battle AAR, and the career-summary screen).
+  - **LOAD-BEARING: the report builds ONCE per match.** `_syncMatchOver`
+    runs every frame; a new `this._matchOverBuilt` guard makes it render the
+    panel only on the first `matchOver` frame and leave it alone after —
+    otherwise the per-frame innerHTML rebuild would wipe the player's tab
+    choice / expanded rows / scroll position. Reset to false in the
+    `!matchOver` branch so the next match rebuilds. Safe because
+    `finalizeBattleStats` (game.battleReport) + the matchEnded/runEnded
+    handlers (lastBattleReport/runSummary) all run synchronously during
+    `update()`, before the HUD's `draw`, so the data is present on frame 1.
+  - **GOTCHA: the old tap-anywhere dismiss is GONE.** Removed the
+    window-level `pointerdown` listener in main.js (it fired on taps landing
+    ON the panel, so you couldn't scroll/tab/expand). Advancing is now the
+    HUD CONTINUE button (sets `input.matchAdvanceRequested`, drained by
+    `consumeMatchAdvance()` in the frame loop) OR the Enter key — both
+    drained every frame so no stale flag lingers.
+  - **GOTCHA: one delegated click handler** on `#matchover-panel`
+    (`_onMatchOverClick`) handles the button (`data-mo-action`), tabs
+    (`data-mo-tab`/`data-mo-pane`), and row expand (`data-mo-expand`) via
+    `e.target.closest(...)`. Delegation is required because the report body
+    is innerHTML-rebuilt per match — per-element listeners would orphan.
+    The panel element itself is stable, so its listener + the static
+    CONTINUE button persist.
+  - **GOTCHA (keyboard): the panel keydown handler MUST `stopPropagation()`**
+    when it activates a control. The global window keydown listener
+    (input.js) traps + `preventDefault`s Enter/Space (firing keys) AND Enter
+    drives the advance via `consumeEnterPress()`. Without stopPropagation, a
+    focused tab/row would be dead (stolen native activation) and Enter would
+    dismiss the report. So Enter/Space on a panel control is handled in the
+    panel keydown (activate + preventDefault + stopPropagation); Enter with
+    focus OUTSIDE a control still bubbles to the window handler and advances
+    (intended shortcut). Click + keydown share `_activateReportControl(el)`;
+    the expand toggle is gated to the row HEADER (`[data-mo-expand] >
+    [role=button]`) so tapping inside an open detail to read it doesn't
+    collapse the row.
+  - **GOTCHA: `.matchover-panel` needs `pointer-events: auto`** (battle-root
+    is `pointer-events:none`) or every tab/row/button tap falls through to
+    the canvas. Collapsed capital row is `caret | name | kills | fate`
+    (class/damage/accuracy moved to the expand detail) so names don't
+    ellipsis on a phone. `game.js` finalize now stamps `shotsFired`/
+    `shotsHit` on each `report.capitals` entry for the accuracy line.
+  Verified at runtime (Playwright, 0 page errors): 29 checks across custom +
+  Frontier-per-battle + career-summary — tab switching, expand/collapse,
+  tap-on-body does NOT dismiss, CONTINUE tears down the match, correct
+  per-mode button labels.
+
+### 2026-05-29 (fighter weapons nerfed vs capitals)
+- **Fighter cannon + fighter missile do reduced damage to capital-class
+  hulls.** Two new per-TARGET-klass tables in `game.js`
+  (`FIGHTER_CANNON_VS_CAPITAL_MUL`, `FIGHTER_MISSILE_VS_CAPITAL_MUL`,
+  keyed frigate/cruiser/battleship/carrier/station; cannon
+  0.5/0.35/0.25/0.3/0.3, missile 0.5/0.38/0.25/0.3/0.28 — deeper the
+  bigger the hull) applied in `applyDamage` right after the
+  `antiCraftBonus` block. Fighters now harass capitals but can't grind
+  one down; bombers stay the anti-capital weapon. Implements the "weak
+  vs capital armor" the fighter-missile spec always claimed.
+  - GOTCHA: tables key on the TARGET's klass and have NO fighter/bomber
+    keys, so they're mutually exclusive with the `antiCraftBonus` ×1.3
+    and the ×3 `FIGHTER_CANNON_VS_BOMBER_MUL` (those only fire vs
+    fighter/bomber targets) — a given target klass triggers exactly one
+    branch, no double-dip. Unmapped klass → `!= null` guard → full
+    damage (no NaN).
+  - GOTCHA: gate is `p.fromKlass === "fighter"` (NOT `ownerKlass`). PD
+    rounds are `fromKlass:"pd"`, frigate guns `"frigate"`, bomber/capital
+    ordnance + the BB laser beam their own klass — all correctly
+    excluded. Multiplier is proportional, so per-race fighter cannon
+    (3.6–5) / missile (26–36) overrides all scale down uniformly.
+  - GOTCHA: applied BEFORE `bstatRecordDamage` + the shield/cell/module/
+    hull cascade (same region as `PD_VS_SHIP_MUL`), so telemetry AND
+    every damage layer see the reduced value. Fighter-missile blast/cell-
+    chew happens INSIDE the one `applyDamage` call — no separate AoE pass
+    to bypass the mul.
+  Verified: clean build + 4-lens adversarial review (completeness /
+  gating false-pos&neg / interaction / numeric) — `applyDamage` is the
+  sole projectile-damage chokepoint, all fighter cannon/missile rounds
+  stamp `fromKlass:"fighter"`, no leak past the nerf.
+
 ### 2026-05-29 (tighter battle-plan commands — 3-axis orders)
 - **Fleet directives became three orthogonal axes** (see
   `BATTLE_COMMANDS_SPEC.md`): STANCE (engage/charge/standoff/hold/fallback),

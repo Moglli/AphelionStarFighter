@@ -842,8 +842,10 @@ export function enterSpectate(game) {
 }
 
 function pickSpectateInitial(game) {
-  return game.ships.find((s) => !s.dead && s.side === "blue")
-      || game.ships.find((s) => !s.dead);
+  // Skip surrendered hulks — they're untargetable drifting wrecks, not worth
+  // locking the spectate camera onto (matches the surrender-skip convention).
+  return game.ships.find((s) => !s.dead && !s.surrendered && s.side === "blue")
+      || game.ships.find((s) => !s.dead && !s.surrendered);
 }
 
 export function exitSpectate(game) {
@@ -876,7 +878,7 @@ export function exitSpectate(game) {
 
 export function cycleSpectate(game, dir) {
   if (!game.spectating) return;
-  const alive = game.ships.filter((s) => !s.dead);
+  const alive = game.ships.filter((s) => !s.dead && !s.surrendered);
   if (alive.length === 0) { game.spectateTargetId = null; return; }
   // Sort so cycling is stable.
   alive.sort((a, b) => a.id - b.id);
@@ -1435,6 +1437,34 @@ const CARRIER_PD_VS_LARGE_MUL = 0.7;
 // bomber's shields + hull 3× harder than baseline, so a fighter screen
 // shreds an incoming bomber wing instead of trading evenly with it.
 const FIGHTER_CANNON_VS_BOMBER_MUL = 3;
+// Fighter cannons plink capitals but shouldn't chip them down — a fighter
+// is an interceptor, not an anti-capital platform (that's the bomber's job).
+// A fighter's autocannon lands on capital-class hulls at a fraction of its
+// damage, scaling down with hull size. Keyed by TARGET klass; absent keys
+// (fighter/bomber) take full damage — fighters still trade normally in a
+// dogfight and the 3× anti-bomber bonus above is untouched. Frigate guns
+// (fromKlass:"frigate") and PD (fromKlass:"pd") are excluded by the gate.
+const FIGHTER_CANNON_VS_CAPITAL_MUL = {
+  frigate: 0.5,
+  cruiser: 0.35,
+  battleship: 0.25,
+  carrier: 0.3,
+  station: 0.3,
+};
+// Fighter missiles are air-to-air interceptors (see the antiCraftBonus
+// buff vs strike craft). Their small warhead is weak against capital armor
+// — and weaker still the bigger the hull — so a fighter wing can't missile a
+// battleship to death; bombers carry the heavy anti-capital ordnance. Keyed
+// by TARGET klass; strike-craft targets are absent (they take the 1.3×
+// antiCraftBonus instead). This implements the "weak vs capital armor" the
+// fighter-missile spec has always claimed in classes.js.
+const FIGHTER_MISSILE_VS_CAPITAL_MUL = {
+  frigate: 0.5,
+  cruiser: 0.38,
+  battleship: 0.25,
+  carrier: 0.3,
+  station: 0.28,
+};
 
 // Classify an incoming projectile into an impact "source" so the audio
 // layer can pick a matching timbre (a missile crump vs a fighter-cannon
@@ -1631,6 +1661,9 @@ function finalizeBattleStats(game) {
       report.capitals.push({
         name: label, klass: r.klass, side: r.side, isPlayer: r.isPlayer,
         kills: r.kills, damageDealt: Math.round(r.damageDealt), fate: r.fate,
+        // Per-ship shot tally drives the accuracy line in the report's
+        // expandable capital detail (interactive battle report).
+        shotsFired: r.shotsFired || 0, shotsHit: r.shotsHit || 0,
       });
     }
     if ((r.kills > 0 || r.damageDealt > 0) &&
@@ -1674,6 +1707,22 @@ function applyDamage(ship, p, moduleTargets = null, particles = null, game = nul
   if (p.kind === "missile" && p.antiCraftBonus &&
       (ship.klass === "fighter" || ship.klass === "bomber")) {
     remaining *= p.antiCraftBonus;
+  }
+  // Fighter weapons vs capitals: a fighter is an interceptor, not an
+  // anti-capital platform. Its autocannon and its little air-to-air missile
+  // both bite far less against capital-class hulls (deeper the bigger the
+  // hull) so a fighter screen harasses capitals but can't grind one down —
+  // bombers own the anti-capital role. Mutually exclusive with the
+  // antiCraftBonus branch above (that only fires vs fighter/bomber targets;
+  // these tables only key on capital classes), so no double-dipping. Applied
+  // before telemetry + the shield/cell/module/hull cascade so every layer
+  // sees the reduced value.
+  if (p.fromKlass === "fighter") {
+    if (p.kind === "cannon" && FIGHTER_CANNON_VS_CAPITAL_MUL[ship.klass] != null) {
+      remaining *= FIGHTER_CANNON_VS_CAPITAL_MUL[ship.klass];
+    } else if (p.kind === "missile" && FIGHTER_MISSILE_VS_CAPITAL_MUL[ship.klass] != null) {
+      remaining *= FIGHTER_MISSILE_VS_CAPITAL_MUL[ship.klass];
+    }
   }
   // Reset the stall watchdog: any damage event counts as the arena
   // still being meaningfully active. The watchdog is checked in

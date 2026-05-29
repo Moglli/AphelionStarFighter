@@ -3923,6 +3923,12 @@ export class InputManager {
     // Edge flag for the TAKE COMMAND / RESUME PILOT pill — set true by the
     // HUD button click, drained by consumeAdmiralToggle() each frame.
     this._admiralToggleEdge = false;
+    // Edge flag for the match-over CONTINUE / RETURN button — set true by
+    // the HUD click, drained by consumeMatchAdvance() each frame. The
+    // end-of-battle report is interactive now (taps scroll / switch tabs /
+    // expand rows), so advancing past it is an explicit button press
+    // instead of the old tap-anywhere-to-dismiss.
+    this.matchAdvanceRequested = false;
     // Tap-to-select state. main.js flips `selectActive` when the camera
     // is in spectate or admiral (no piloted ship → the right stick is
     // hidden so its real estate becomes a select zone). _tapCandidate
@@ -3982,6 +3988,11 @@ export class InputManager {
     // 100px wheel notch becomes a +0.2 zoom delta.
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
+      // Only spectate / admiral consume zoom (main.js gates the apply on
+      // game.spectating). Accumulating while piloting or in the menu — where
+      // nothing drains it — builds a backlog that dumps as one big jump on
+      // the first spectate frame. selectActive is true exactly when zoom is live.
+      if (!this.selectActive) return;
       this._pendingZoomDelta += -e.deltaY / 500;
     }, { passive: false });
     canvas.style.touchAction = "none";
@@ -4016,6 +4027,21 @@ export class InputManager {
     this._rightClickEdge = false;
     this._tapCandidate = null;
     this._pendingTap = null;
+    this.clearCameraGestures();
+  }
+
+  // Clear the spectate/admiral camera-gesture accumulators. Called on match
+  // start (resetForNewMatch) and on spectate/admiral toggles so a pan or
+  // pinch interrupted mid-gesture — or a wheel/pinch backlog — can't jolt the
+  // camera on the next spectate entry. resetForNewMatch already clears
+  // _tapCandidate / _pendingTap; this covers the pan + pinch + zoom side that
+  // was previously left to leak across matches and spectate↔pilot toggles.
+  clearCameraGestures() {
+    this._panDrag = null;
+    this._pendingPanDelta = null;
+    this._pendingZoomDelta = 0;
+    this._touches.clear();
+    this._pinchPrevDist = null;
   }
 
   // Called from main.js#resize() on first paint and on every window
@@ -4051,6 +4077,12 @@ export class InputManager {
       this._touches.set(e.pointerId, { x, y });
       if (this._touches.size === 2) {
         this._pinchPrevDist = this._touchDistance();
+        // A 2nd finger means PINCH-ZOOM, not pan. Cancel any in-progress
+        // 1-finger pan/tap so the camera doesn't pan AND zoom at once, and
+        // so this 2nd finger can't clobber the single tap-candidate slot.
+        this._panDrag = null;
+        this._tapCandidate = null;
+        this._pendingPanDelta = null;
       }
     }
 
@@ -4102,13 +4134,21 @@ export class InputManager {
     if (e.pointerType === "touch") {
       this.canvas.setPointerCapture(e.pointerId);
       const w = this.canvas.clientWidth;
-      if (this.left.claims(x, w) && this.left.pointerId === null) {
+      // BOTH sticks are gated on !selectActive now. In spectate/admiral the
+      // left stick used to claim the whole left half for a velocity pan,
+      // while the right half did 1:1 grab-pan — two different pan feels, and
+      // left-half ships couldn't be tapped. Gating the left stick too routes
+      // every spectate touch through the unified tap/grab-pan path below.
+      // (Desktop keeps continuous WASD pan via the keyboard thrust source.)
+      if (!this.selectActive && this.left.claims(x, w) && this.left.pointerId === null) {
         this.left.start(e.pointerId, x, y);
       } else if (!this.selectActive && this.right.claims(x, w) && this.right.pointerId === null) {
         // Right stick only activates while piloting. In spectate /
         // admiral the right half is a tap-to-select zone instead.
         this.right.start(e.pointerId, x, y);
-      } else if (this.selectActive) {
+      } else if (this.selectActive && this._touches.size < 2 && !this._tapCandidate) {
+        // Single tap-candidate slot: only the FIRST finger seeds it, and
+        // never during a pinch (size >= 2), so a 2nd finger can't clobber it.
         this._tapCandidate = { id: e.pointerId, x, y, t: performance.now() };
       }
     } else {
@@ -4164,7 +4204,11 @@ export class InputManager {
     // wanders past the tap threshold, switch the gesture from "tap to
     // select" to "drag to pan". Per-move screen-pixel deltas accumulate
     // into `_pendingPanDelta` for main.js to consume next frame.
-    if (this._panDrag && this._panDrag.id === e.pointerId) {
+    // Pan accumulation + promotion are gated on single-touch: while two
+    // fingers are down the gesture is a PINCH-ZOOM, so it must not also pan
+    // (focal-point drift). Mouse leaves _touches empty (size 0), so desktop
+    // grab-pan is unaffected.
+    if (this._panDrag && this._panDrag.id === e.pointerId && this._touches.size < 2) {
       this._pendingPanDelta = this._pendingPanDelta || { x: 0, y: 0 };
       this._pendingPanDelta.x += x - this._panDrag.lastX;
       this._pendingPanDelta.y += y - this._panDrag.lastY;
@@ -4174,9 +4218,9 @@ export class InputManager {
       const dx = x - this._tapCandidate.x;
       const dy = y - this._tapCandidate.y;
       if (dx * dx + dy * dy > 64) {
-        // Threshold breached. In spectate / admiral, promote to pan
-        // drag instead of just dropping the tap.
-        if (this.selectActive) {
+        // Threshold breached. In spectate / admiral (and only with a single
+        // touch), promote to pan drag instead of just dropping the tap.
+        if (this.selectActive && this._touches.size < 2) {
           this._panDrag = { id: e.pointerId, lastX: x, lastY: y };
         }
         this._tapCandidate = null;
@@ -4188,7 +4232,17 @@ export class InputManager {
       this._touches.delete(e.pointerId);
       // Less than two fingers — drop the pinch baseline so the next
       // two-finger gesture starts fresh instead of jumping.
-      if (this._touches.size < 2) this._pinchPrevDist = null;
+      if (this._touches.size < 2) {
+        this._pinchPrevDist = null;
+      } else if (this._touches.size === 2) {
+        // Dropping FROM 3+ fingers down TO exactly two: the baseline
+        // was captured against a different finger pair (or frozen while
+        // 3+ were down, since the zoom branch is gated on size===2 and
+        // never re-seeds above it). Re-seed against the surviving pair
+        // so the next onMove computes newDist/prevDist on a matched
+        // baseline instead of snapping the zoom.
+        this._pinchPrevDist = this._touchDistance();
+      }
     }
     // Release any virtual stick / action button that owns this pointer
     // BEFORE we route to menu.pointerUp. The early-return path used to
@@ -4268,6 +4322,16 @@ export class InputManager {
   consumeSettingsRequest() {
     const btnEdge = !!this.settingsRequested;
     this.settingsRequested = false;
+    return btnEdge;
+  }
+
+  // Match-over CONTINUE / RETURN button (HUD) sets matchAdvanceRequested;
+  // main.js drains it to tear down the match and return to the menu /
+  // starmap. Replaces the old window-level tap-anywhere dismiss so the
+  // interactive report can be scrolled, tabbed, and expanded freely.
+  consumeMatchAdvance() {
+    const btnEdge = !!this.matchAdvanceRequested;
+    this.matchAdvanceRequested = false;
     return btnEdge;
   }
 

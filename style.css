@@ -8200,8 +8200,14 @@ html, body {
   border-radius: 10px;
   padding: 32px 60px;
   text-align: center;
-  /* Cap + scroll: the AAR (losses / destroyed / captured / promotion)
-     can run tall on a phone. */
+  /* INTERACTIVE report: the panel must capture taps so the player can
+     scroll, switch tabs, and expand rows. (battle-root is pointer-events:
+     none; this re-enables the panel subtree.) The old window-level
+     tap-anywhere dismiss was removed from main.js — advancing is the
+     CONTINUE button (or Enter). */
+  pointer-events: auto;
+  /* Cap + scroll: the report + AAR (losses / destroyed / captured /
+     promotion) can run tall on a phone. */
   max-width: 92vw;
   max-height: 90vh;
   overflow-y: auto;
@@ -8292,6 +8298,113 @@ html, body {
 .bstat-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
 .bstat-dot-blue { background: #6cf; }
 .bstat-dot-red { background: #f77; }
+
+/* ---- Interactive report: tabs, panes, expandable rows, continue ---- */
+.bstat-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 6px 0 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.bstat-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 34px;            /* comfortable touch target */
+  padding: 7px 4px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8aa;
+  font: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.bstat-tab:hover { color: #cde; }
+.bstat-tab.active { color: #fff; border-bottom-color: #6cf; }
+.bstat-tab:focus-visible { outline: 2px solid rgba(120, 190, 255, 0.7); outline-offset: -2px; }
+.bstat-pane { display: none; }
+.bstat-pane.active { display: block; animation: bstatPaneFade 0.18s ease; }
+@keyframes bstatPaneFade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Expandable rows (capital ships + strike-craft lines) */
+.bstat-cap-item, .bstat-sc-item { border-radius: 4px; }
+.bstat-cap-item > .bstat-cap-row,
+.bstat-sc-item > .bstat-sc-row {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 5px 4px;
+  min-height: 38px;            /* finger-friendly tap target on a phone */
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+/* Collapsed capital row: caret | name | kills | fate. Class, damage, and
+   accuracy live in the expanded detail, so the name gets room to breathe
+   (no mid-name ellipsis on a phone). */
+.bstat-cap-item > .bstat-cap-row {
+  grid-template-columns: 14px 1.9fr 0.55fr 1fr;
+  gap: 8px;
+}
+.bstat-cap-item:hover > .bstat-cap-row,
+.bstat-sc-item:hover > .bstat-sc-row { background: rgba(255, 255, 255, 0.05); }
+.bstat-cap-item:focus-within > .bstat-cap-row,
+.bstat-sc-item:focus-within > .bstat-sc-row { background: rgba(120, 190, 255, 0.08); }
+.bstat-caret {
+  color: #6cf;
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+}
+.bstat-detail {
+  display: none;
+  margin: 1px 0 5px 6px;
+  padding: 7px 10px 8px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 2px solid rgba(108, 204, 255, 0.4);
+  border-radius: 0 4px 4px 0;
+}
+.bstat-cap-item.expanded > .bstat-detail,
+.bstat-sc-item.expanded > .bstat-detail { display: block; }
+.bstat-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 14px;
+  font-size: 11px;
+}
+.bstat-dt-k { color: #8aa; }
+.bstat-dt-v { color: #cde; text-align: right; font-variant-numeric: tabular-nums; }
+.bstat-detail-flag { margin-top: 5px; font-size: 10px; color: #ffd680; }
+.bstat-cap-empty { color: #8aa; font-size: 11px; padding: 6px 0; }
+
+/* CONTINUE / RETURN button — replaces the old "Tap to continue" prompt */
+.matchover-continue {
+  display: inline-block;
+  margin-top: 14px;
+  padding: 12px 36px;
+  min-height: 44px;
+  background: linear-gradient(180deg, rgba(70, 140, 210, 0.38), rgba(38, 88, 148, 0.38));
+  border: 1.5px solid rgba(120, 190, 255, 0.6);
+  border-radius: 6px;
+  color: #eaf4ff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+.matchover-continue:hover {
+  background: linear-gradient(180deg, rgba(92, 162, 232, 0.5), rgba(50, 110, 180, 0.5));
+  border-color: rgba(150, 210, 255, 0.85);
+}
+.matchover-continue:active { transform: translateY(1px); }
+.matchover-continue:focus-visible { outline: 2px solid rgba(180, 220, 255, 0.85); outline-offset: 2px; }
 
 /* After-action report — three columns: LOST / DESTROYED / REINFORCEMENTS.
    Reads under the subtitle on Frontier matches. */
@@ -10970,8 +11083,18 @@ html, body {
   background: linear-gradient(180deg, #04080f 0%, #0a1224 100%);
   width: 100%;
   max-width: 100%;
+  /* Bind the screen to the (fixed, inset:0) menu-root's viewport height so
+     the column lays out as header + scrolling body + footer. Without a
+     definite height the screen grows to its full content height, overflows
+     the vertically-centred menu-root (clipping the top/bottom with no
+     scroll), and .battleplan-body's flex:1 never gets a bounded parent to
+     scroll within. Using 100% (not 100vh) avoids the iOS toolbar gap. */
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
 }
-.battleplan-header {
+.battleplan-header,
+.fleetplan-header {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -10992,7 +11115,8 @@ html, body {
   font-size: 20px;
   cursor: pointer;
 }
-.battleplan-header h2 {
+.battleplan-header h2,
+.fleetplan-header h2 {
   margin: 0;
   flex: 1;
   font-size: 15px;
@@ -11009,6 +11133,10 @@ html, body {
 }
 .battleplan-body {
   flex: 1;
+  /* min-height:0 lets this flex child shrink below its content height so
+     overflow-y can actually engage — without it the body refuses to shrink,
+     pushes the screen past the viewport, and nothing scrolls (flexbox trap). */
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 16px;
@@ -11374,6 +11502,11 @@ html, body {
   background: linear-gradient(180deg, #04080f 0%, #0a1224 100%);
   width: 100%;
   max-width: 100%;
+  /* Same viewport-height binding as .menu-battleplan so the body scrolls
+     (the two screens share the .battleplan-body/header/footer chrome). */
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
 }
 .menu-fleetplan .battleplan-node-tag {
   color: #8cf;
