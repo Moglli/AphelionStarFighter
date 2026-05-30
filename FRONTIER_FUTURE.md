@@ -302,11 +302,28 @@ The original "asteroid hunt" direction the user liked requires environmental haz
 
 **Why we fight them (in-fiction):** Sovereignty. They claim systems the Republic wants. Unlike the Swarm, this is a war between two civilizations — but the Republic frames it as the necessary defeat of an arrogant xenos pretender.
 
-**Combat feel — provisional direction (pending combat-mechanics study):**
-- **Saurians map naturally onto the game's existing combat escalation pattern.** The game already opens with small strike-craft skirmishes and grows into capital engagements; the Saurian War leans into that — every fight is a step up the ladder, named flagships at the top.
-- Capital duels as set-pieces: named banner-cruisers / battlecruisers with escort, friendly capital engages enemy capital while player handles fighter screen.
-- Named captains on comms, banner heraldry on hulls, taunts and challenges in voice lines.
-- *To verify and detail against existing combat mechanics.*
+**Combat feel — fits existing engine cleanly:**
+
+The Saurian War is the **quality** counterpart to the Swarm's quantity, and the game's existing escalation cadence (act × column scaling) already delivers exactly the rhythm we want: early Saurian fights are wing-vs-wing strike-craft duels; later fights are escorted-capital engagements; boss nodes are named flagships with `neverSurrender`.
+
+- **Quality over quantity.** Fewer Saurian ships per battle than Terran, but each one significantly tougher and more skilled (captain traits dialed for tighter aim, lower spread, aggressive orbit).
+- **Named aces in every act.** Boss nodes spawn a flagship with a named captain (e.g. "Var'sakh-Captain Thessek, banner of the Iron Tide"). `neverSurrender` already enforces death-or-victory.
+- **Capital duels as set-pieces.** Late-act Saurian battles feature banner-cruisers/battlecruisers with escort screens. Friendly capitals duel enemy flagships while player + wing handle the fighter screen.
+- **Comms warfare is *present*.** Saurians speak — pre-battle hails, mid-fight taunts, dying captains' last words. Wing-chatter responds in kind. This is the lore-rich faction; missions are full of voice-content.
+- **Honor and surrender.** Saurians surrender at the existing thresholds (they're not mindless). Captured Saurian capitals become spoils of war — adds to the player's fleet. Reinforces the heroic-offensive vibe (we are humiliating an honor-bound culture by capturing their banners).
+
+**Provisional Saurian roster shape (subject to revision):**
+
+| Class | Count | Identity | Stats vs Terran baseline |
+|---|---|---|---|
+| Fighter | ~16 | Skilled pilots, heavy armor for a fighter | HP 50 (+43%), maxSpeed 360, damage 5.5 — Hegemony-like |
+| Bomber | ~4 | Honor-strike, fewer but deadlier | HP 80, heavier pods |
+| Frigate | ~5 | Honor-escort to capitals; named in late acts | Tough, slower than Terran frigate |
+| Cruiser | ~2 | Banner-cruisers, named captains in late acts | Heavy armor, broadside-rich |
+| Battleship | 1 | Each act-boss battle features one; named flagship at act-end | `neverSurrender`, +25% HP over Terran BB |
+| Carrier | 1 | Banner-carrier, slow but defended | — |
+
+(Numbers placeholder.)
 
 ### 7.4 Future-faction palette — open
 
