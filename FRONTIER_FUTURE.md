@@ -642,13 +642,82 @@ The Diablo-style loot loop **absorbs and obsoletes** the following legacy system
 
 Achievements survive as a parallel milestone system.
 
-### Open questions — loot system
+### Open questions — loot system (content/balance)
+
+Structural design is locked; remaining items are content authoring + numbers tuning:
 
 - [ ] Module families per slot — name pool, base stat curves (Pulse / Burst / Marksman / Scatter / Auto cannons, etc. for the Cannon slot, and equivalents for every other slot across every ship class).
 - [ ] Affix pool — what specific affixes can roll on each slot type.
-- [ ] Legendary unique pool — the special effects that define each Legendary item.
-- [ ] Quartermaster refresh cadence and pricing.
-- [ ] Loot box content / odds tables and pity-timer numbers.
+- [ ] Legendary unique pool — the build-defining special effects.
+- [ ] Quartermaster refresh cadence pin (daily real-time vs per-chapter completion).
+- [ ] Loot box odds tuning (placeholders in §9.8).
 - [ ] Cosmetic-skin catalog and pricing.
-- [ ] Stash size and salvage credit values.
+- [ ] Stash size pin and per-rarity salvage credit values.
 - [ ] How Brood bio-tech visually distinguishes from human gear (UI iconography + ship-mounted visual).
+
+---
+
+## 10. Pilot's Lounge — between-run UI
+
+The hub the player returns to between every run. Located in **Novus Spes** (the staging system shared by both Wars). Designed to be propaganda-saturated and personal at the same time — your space, decorated by the Republic.
+
+### 10.1 Surfaces
+
+| Surface | Purpose |
+| --- | --- |
+| **Hangar bay** | Shows the player's currently-equipped pilotable ship. Players swap between unlocked ship classes here and modify each one's loadout. Captured enemy capitals (e.g. *DRAKAR-TSSOR*) physically dock here as fleet trophies. |
+| **Trophy wall** | Recovered enemy banners (Saurian Houses), kill milestones, named-ace victories. Visual progress markers in-fiction. |
+| **Decoration wall** | Military decorations (medals) earned from achievements. Hangs above the trophy wall. (§11.) |
+| **Newsreel screen** | Plays propaganda-news segments (Kroger voice) on a loop. New segments unlock as the player progresses (§10.2). |
+| **Briefing terminal** | Mission selection. Cmd. Brant delivers chapter briefings; side sorties picked from a rotating board. Toggle between active Wars from here. |
+| **Quartermaster shop link** | One-tap access to the shop UI. |
+| **Cosmetic loadout** | Apply skins, banner placements, decals to the player's ships. IAP-purchased cosmetics surface here. |
+
+### 10.2 Newsreel content
+
+Triggered authored segments. ~10–15 segments per War at launch (5 chapter-completion + 5–10 milestone segments). Each ~30–60 seconds of Kroger voice/text.
+
+Per-War triggers:
+- **Chapter completion** (5/War) — one segment after each story chapter clear.
+- **War-state milestones** (5–10/War) — kill-count thresholds (e.g. 10 named aces), sortie counts, capital-kills, banner captures.
+
+Total launch content: ~20–30 segments across both Wars.
+
+### 10.3 War-state visualization
+
+- Per-War **chapter spine ribbon** at the top of the briefing terminal (5 chapters per War, lit as completed).
+- Per-War **completion percentage**, **kill ledger** (per enemy class), **banner trophy count** (Saurian War).
+- After a War's CH5 clears, the spine marks "COMPLETED" but chapters remain re-flyable for credits/XP/loot (§9.7). Side sorties continue cycling.
+
+---
+
+## 11. Achievements
+
+Replaces the legacy `ACHIEVEMENTS` table. Pure-flavor reward system — no XP, no loot, no IAP overlap.
+
+### 11.1 Categories tracked
+
+- **Combat milestones** — kill counts (1k drones, 100 aces, 50 capitals); mission distinctions (perfect missions, no-damage runs, fastest clears).
+- **Career milestones** — reach each command tier; complete each chapter of each War; capture each named flagship; first flight in each ship class.
+- **Build mastery** — combat under constraints (e.g. complete a War with only bio-tech equipped; 100 ace kills with a Legendary Marksman; win without firing missiles). Encourages experimentation with the loot system.
+
+(Hidden / lore achievements deferred — keeps authoring tight at launch; revisit post-launch if there's appetite.)
+
+### 11.2 Reward — military decorations only
+
+Each achievement = a named medal/citation displayed on the Decoration wall in the Pilot's Lounge.
+
+Examples (placeholder names):
+- *Citation for Valor* — first ace kill.
+- *Iron Star of Vorago* — complete Op Locust Wind CH2 with no friendly losses.
+- *Defender of Sskahl* — complete Op Dragon's Jaw CH2 without losing the line.
+- *Hammer of the Brood* — 1,000 drone kills.
+- *Banner-Breaker* — capture all four Saurian House banners.
+
+Decorations are display-only (no gameplay effect). They reinforce the Starship Troopers civic-pride aesthetic and give the Pilot's Lounge a richly authored visual identity.
+
+### Open questions — achievements
+
+- [ ] Full decoration list (~30–50 at launch?).
+- [ ] Decoration wall UI layout — Russian-style chest spread, frame on the wall, or both?
+- [ ] Sticky / featured decorations the player can pin.
