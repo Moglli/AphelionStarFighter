@@ -192,6 +192,8 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 | 2026-05-30 | Two launch Wars target two different antagonist factions | Maximum variety; each War distinct in enemy roster, tactics, story |
 | 2026-05-30 | Tone: heroic offensive + 40K-style extreme xenophobia | Establishes the player's institutional perspective; defines all faction relationships |
 | 2026-05-30 | Full faction redesign — current Terran/Reavers/Hegemony/Voidsworn/Thren are placeholders | Existing roster doesn't carry the new tone; cleaner slate, no half-fits |
+| 2026-05-30 | Terran identity: Manifest-Destiny Republic (Starship Troopers vibe) | Clean propaganda voice; jingoistic, confident, civic-pride aesthetic |
+| 2026-05-30 | Player POV: True believer | Briefings land sincerely; player and institution aligned; the moral weight sits with the player without irony |
 
 ---
 
