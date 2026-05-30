@@ -312,6 +312,13 @@ The Saurian War is the **quality** counterpart to the Swarm's quantity, and the 
 - **Comms warfare is *present*, but deferred for v1.** Saurians do speak — pre-battle hails are the priority (briefings, opening exchanges). Mid-fight taunts and dying-captain lines are a later content pass once the system is in.
 - **Honor and surrender.** Saurians surrender at the existing thresholds (they're not mindless). Captured Saurian capitals become spoils of war — adds to the player's fleet. Reinforces the heroic-offensive vibe (we are humiliating an honor-bound culture by capturing their banners).
 
+**Saurian cultural distinctness (visible in play):**
+
+- **Distinct ship silhouettes** — sweeping, ornamented, predatory. Not just stat-overlays on Terran hulls. The visual language reads "alien, proud, ancient" at a glance.
+- **House banner heraldry on capitals** — each Saurian frigate/cruiser/battleship/carrier displays a visible banner sigil on the hull. Players learn to recognize houses; trophies become collectible.
+- **Distinct weapon systems** — Saurians don't fire the same missiles and cannons in different paint. Their weapons behave differently. (Specifics TBD — see open questions.)
+- **Pre-battle voice/comms** — text/voice hails before engagement. Mid-fight chatter and death lines deferred to a later pass.
+
 **Provisional Saurian roster shape (subject to revision):**
 
 | Class | Count | Identity | Stats vs Terran baseline |
