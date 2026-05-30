@@ -194,6 +194,8 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 | 2026-05-30 | Full faction redesign — current Terran/Reavers/Hegemony/Voidsworn/Thren are placeholders | Existing roster doesn't carry the new tone; cleaner slate, no half-fits |
 | 2026-05-30 | Terran identity: Manifest-Destiny Republic (Starship Troopers vibe) | Clean propaganda voice; jingoistic, confident, civic-pride aesthetic |
 | 2026-05-30 | Player POV: True believer | Briefings land sincerely; player and institution aligned; the moral weight sits with the player without irony |
+| 2026-05-30 | Launch enemies: The Swarm (insectoid hive) + The Saurian Empire (reptilian warrior aristocracy) | Maximum tactical contrast: quantity-horror vs quality-duel. Two clean target archetypes for variety. |
+| 2026-05-30 | Two launch Wars are two fronts of one Republic crusade | Lets us share a global meta-state ("Republic war effort"), reuse propaganda voice, and let the player move between Wars without narrative whiplash. |
 
 ---
 
