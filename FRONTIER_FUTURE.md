@@ -196,6 +196,8 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 | 2026-05-30 | Player POV: True believer | Briefings land sincerely; player and institution aligned; the moral weight sits with the player without irony |
 | 2026-05-30 | Launch enemies: The Swarm (insectoid hive) + The Saurian Empire (reptilian warrior aristocracy) | Maximum tactical contrast: quantity-horror vs quality-duel. Two clean target archetypes for variety. |
 | 2026-05-30 | Two launch Wars are two fronts of one Republic crusade | Lets us share a global meta-state ("Republic war effort"), reuse propaganda voice, and let the player move between Wars without narrative whiplash. |
+| 2026-05-30 | Swarm combat: Path A (engine-fit reskin of Reavers/Thren template) | Ships now; engine-extension (environmental hazards) deferred to a later pass. Dread carried by audio/visual/dialogue. |
+| 2026-05-30 | Saurian cultural distinctness: distinct silhouettes, distinct weapon systems, banner heraldry on capitals | Reads as alien at a glance; not just stat-overlays. Mid-fight voice deferred; pre-battle hails first. |
 
 ---
 
