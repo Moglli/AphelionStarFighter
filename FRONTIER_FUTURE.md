@@ -271,13 +271,28 @@ We'll pick a path below.
 
 **Why we fight them (in-fiction):** Existential. They eat worlds. No diplomacy is possible because there's no one to talk to. A perfect xenophobic target — easy to hate, no moral ambiguity.
 
-**Combat feel — provisional direction (pending combat-mechanics study):**
-- "Hunter becomes hunted" atmospheric pattern. Encounters often staged in dense terrain — asteroid belts, debris fields, dead-hulk graveyards.
-- Drones nest in cover; player flushes them out room-by-room.
-- Brood-ships are anchored deep, protected by environmental hazards.
-- Slower-paced, environment-driven, exploration-tinged tension.
-- Still no comms warfare — Swarm doesn't speak. Wing chatter carries the atmosphere instead (nervous wingmates, dread in their voices).
-- *To verify against existing combat mechanics.*
+**Combat feel — two candidate paths (decision pending):**
+
+The original "asteroid hunt" direction the user liked requires environmental hazards the engine doesn't have yet. So:
+
+- **Path A — engine-fit (cheap):** Reskin/extend the Reavers or Thren template. The Swarm is **mechanically a fragile-fast swarm** — huge fighter counts, anemic individual HP, hatched continuously from heavily-armored brood-ships (carriers tuned for very fast replenishment) and capped by an enormous hive-ship boss with thick armor and dense PD. Atmospheric dread is delivered through:
+   - Audio (no enemy comms; uneasy wing chatter; growing kill-count alarms; a percussive heart-beat track that intensifies as drones converge)
+   - Visual identity (organic ships with glow, pulse, blood spray on hit; debris that *twitches*)
+   - Wing-mate dialogue (rookies losing nerve, comms going quiet from killed wingmates)
+   - Battle Plan tension (player can't trust standoff range — drones close fast; commands rotate around brood-ship priority)
+- **Path B — engine-extend (expensive but reusable):** Build environmental systems (asteroid clusters with collision, debris fields, sensor falloff / fog-of-war) so the true "asteroid hunt" can be delivered. Significant engine work; would unlock environment variety for all future Wars too.
+
+**Provisional Swarm roster shape (Path A baseline, subject to revision):**
+
+| Class | Count | Identity | Stats vs Terran baseline |
+|---|---|---|---|
+| Fighter (drone) | ~60 | Mindless, swarming, suicidal-aggressive (default `charge` stance) | HP 16 (−54%), maxSpeed 560 (+40%), low damage |
+| Bomber (warrior) | ~12 | Slightly tougher, missile-bio-pods | HP 60, slower than Terran bomber, more pods |
+| Brood-ship (carrier) | 3 | Hatch fighters every 4–6s; heavy armor, no offensive weapon | HP 1400, replenish ×3 the Terran rate |
+| Hive-ship (battleship-equivalent boss) | 1 | Massive armored hull, dense PD, no offensive cannons — its *threat* is what it spawns | HP 2200, `neverSurrender` |
+| Frigate / cruiser | — | Omitted (no "civilization-level" tech) | — |
+
+(Numbers are placeholders to react to, not final.)
 
 ### 7.3 Launch antagonist B — The Saurian Empire (proud reptilian warriors)
 
