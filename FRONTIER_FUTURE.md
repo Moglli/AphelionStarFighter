@@ -337,3 +337,167 @@ The Saurian War is the **quality** counterpart to the Swarm's quantity, and the 
 ### 7.4 Future-faction palette — open
 
 > Other antagonists / sub-factions to seed for future Wars. Synthetics, Resonant Choir, and others remain candidates for post-launch.
+
+---
+
+## 8. Launch Wars — content draft
+
+> Concept-level lock for the two launch Wars. Subject to writing/scripting refinement, but the structural beats, mission types, characters, and Houses are committed.
+
+### 8.1 Republic officer cast (shared across both Wars)
+
+Names are placeholders; ranks and roles are fixed. Both Wars use this cast.
+
+- **High Admiral Marcus Kroger** — public face of the war effort. Appears in fleet-wide broadcasts and pre-deployment briefings. Confident, paternal, all-conquering. The propaganda voice incarnate. Rarely seen in-cockpit.
+- **Commander Elise Brant** — wing commander running the player's deployment. Voice of in-mission briefings. No-nonsense, demanding, unflinchingly proud of her pilots. The player answers to her.
+- **Captain Aris Hale** — squadron captain. Flies with the squadron, leads from the front. Charismatic, brave, pilot's-pilot. Vulnerable — sometimes endangered so the player has to act to save him.
+- **Lieutenant Mira Tarsa** — the player's wingmate. Recently promoted, still earnest. The relatable comrade. Voice of mid-mission chatter and audience-surrogate emotion.
+
+### 8.2 Op Locust Wind — the Brood War
+
+#### Pitch
+
+*"Citizens of the Frontier — a new threat to humanity's manifest destiny has been identified. The Brood, a monstrous alien swarm, is devouring its way across the frontier. They are mindless, voracious, and incommunicable, consuming entire star systems. The Republic has authorized a campaign of total war to exterminate this menace. Enlist today to become a hero of the frontier and secure humanity's rightful place in the galaxy."*
+
+#### Geography
+
+- **Staging system:** Novus Spes *(shared with Dragon's Jaw)*
+- **Contested systems:** Bellum, Vorago, Rupes, Vastitas
+- **Final target:** The Hive
+
+#### Chapter spine
+
+**CH1 — THE SWARM.** The Brood has been sighted at the edge of Republic space; a campaign of extermination is underway. Strike-craft patrols report massive alien presence in Bellum. The player flies early skirmishes against the swarm.
+- *Type:* Fighter sweep — small skirmish
+- *Beat:* The Brood is confirmed as an existential threat
+- *NPCs:* Lt. Tarsa, Cmd. Brant
+
+**CH2 — BROKEN LINE.** Brood forces overwhelm forward defenses and advance toward Novus Spes. All wings are ordered to hold the line in Vorago, buying time for reinforcements. The player must contain the swarm until heavier ships deploy.
+- *Type:* Line defense (Defend mode) — medium skirmish
+- *Beat:* The Republic holds the line at brutal cost; the swarm proves larger than projected and the war's true scale becomes clear
+- *NPCs:* Capt. Hale
+
+**CH3 — EXTERMINATUS.** With reinforcements in place, the Republic launches an aggressive counteroffensive in Rupes. The player leads strike groups against massive Brood-carriers, crippling their hatch capacity.
+- *Type:* Capital assault — large skirmish
+- *Beat:* The tide is stemmed; Republic morale surges
+- *NPCs:* High Adm. Kroger
+
+**CH4 — DROWN THE HATCHERY.** Republic intelligence locates the Brood's last surviving brood-ship cluster deep in Vastitas. The player leads a strike to destroy the swarm's reproductive infrastructure before the assault on the Hive can begin. No more drones will hatch.
+- *Type:* Capital strike against multiple brood-ship objectives — fleet battle
+- *Beat:* The Brood's ability to replenish ends; the path to the Hive is clear
+- *NPCs:* Cmd. Brant, Capt. Hale
+
+**CH5 — THE HIVE.** The Brood has retreated to their home system, where the massive Hive-ship continues to spawn drones. The player leads the final assault. The Hive must die.
+- *Type:* Boss assault (Hive-ship as `neverSurrender` capital) — massive fleet battle
+- *Beat:* The Hive is destroyed; the Brood is exterminated
+- *NPCs:* High Adm. Kroger, Lt. Tarsa
+
+#### Side-sortie pool (8)
+
+1. **Swarm suppression** — clear drone clouds in contested systems
+2. **Salvage escort** — protect civilian salvage crews working post-battle zones
+3. **Decoy run** — engage drone packs while civilian transports break orbit
+4. **Brood-ship strike** — destroy a Brood-carrier before its hatch cycle completes
+5. **Listening post relief** — defend a Republic comms relay from a drone wave
+6. **Burnt-system patrol** — pacify holdout drones in systems already declared "secure"
+7. **Refugee convoy escort** — escort civilian transports out of contested zones
+8. **Forward picket** — sortie ahead of a fleet's jump-point as early warning
+
+#### Voice samples
+
+*Opening briefing (CH1):* "Citizens of the Frontier, a new threat to humanity's manifest destiny has been identified. An alien swarm is consuming entire star systems at the edge of Republic space. Your orders are to contain this menace before it spreads. Report to the Bellum system and engage all hostile forces. By the Republic, we will prevail."
+
+*Mid-mission wingmate chatter (Tarsa):* "They're everywhere! Keep in formation, and don't let them swarm you. For Earth!"
+
+*End-of-chapter propaganda blast (Kroger):* "Citizens of the Republic! The Brood is no match for human courage and ingenuity. Your efforts have secured the frontier, and extermination of the alien menace is underway. Glory to the Republic!"
+
+#### War culmination
+
+The Hive is destroyed. The Brood is exterminated. The Republic secures the frontier and claims new systems for humanity. Recruitment surges as propaganda spreads the triumph. The galaxy is ready for the next stage of expansion.
+
+### 8.3 Op Dragon's Jaw — the Saurian War
+
+#### Pitch
+
+*"Citizens of the Republic — a glorious campaign of expansion is underway! The Terran Republic has launched an offensive to secure contested frontier systems from the Var'sakh Dominion, an ancient empire that refuses to recognize humanity's rightful claim to the stars. The Saurians are a proud, warlike race, but they cannot withstand the might of the Republic. Enlist today and secure your place in history as we bring these contested systems under human control."*
+
+#### Geography
+
+- **Staging system:** Novus Spes *(shared with Locust Wind)*
+- **Contested systems:** Var, Sskahl, Khel, Tazsa
+- **Final target:** Zavat (Dominion core system; not their homeworld)
+
+#### Saurian Houses & aces
+
+| House | Banner sigil | Ace | Role |
+| --- | --- | --- | --- |
+| **House Tssor'kan** — "the Old Blood" | A great horned serpent coiled around a star | **Warlord Varas** | Commands all Dominion forces in the contested frontier. CH2/4 antagonist; escapes at CH4's end. |
+| **House Sk'rath** — "the Iron Sun" | A barbed sun on black | **Zikorex** | Honored fleet-ace; defeated and his banner paraded at CH3. |
+| **House Vael'ari** — "the Silver Talon" | A hooked talon over crescent | **Ssaik** | Defensive ace; bloodied at CH3. |
+| **House Drazn** — "the Black Tide" | A crashing dark wave | **Khelovar** | Hardliner; refuses CH5's armistice. The CH5 boss — `neverSurrender`. |
+
+#### Chapter spine
+
+**CH1 — BOLD STRIKE.** The Republic invades Dominion space with a surprise attack on Var, one of the most resource-rich contested zones. The player joins an initial fighter sweep, engaging Dominion forces and capturing key positions before they can regroup.
+- *Type:* Fighter sweep — small skirmish
+- *Beat:* The Republic gains an early foothold in contested space
+- *NPCs:* Lt. Tarsa, Cmd. Brant, Capt. Hale
+
+**CH2 — SAURIAN HONOR.** Dominion forces rally under Warlord Varas and counterattack in Sskahl. The player must defend Republic positions against relentless Dominion assaults.
+- *Type:* Line defense (Defend mode) — medium skirmish
+- *Beat:* Dominion resistance is harder than briefed; the Republic adapts, but every advance is paid for in blood
+- *NPCs:* Varas of House Tssor'kan, High Adm. Kroger
+
+**CH3 — BROKEN BANNERS.** The Republic retaliates with a coordinated assault on Khel, targeting Dominion capitals and named aces. Strike groups break the Houses of Sk'rath and Vael'ari in successive engagements; Zikorex's banner is recovered as a trophy and paraded on Republic newsreels.
+- *Type:* Capital assault + ace hunt — large skirmish
+- *Beat:* Key Dominion Houses bloodied; Republic advances at heavy cost
+- *NPCs:* Zikorex of House Sk'rath, Ssaik of House Vael'ari, High Adm. Kroger
+
+**CH4 — HONORLESS FOES.** Dominion forces regroup for a stand at Tazsa, anchored by Warlord Varas's banner-cruiser *DRAKAR-TSSOR*. The player commands a task force to break the line and force the *DRAKAR-TSSOR* to strike its colors. Varas escapes in an honor-guard frigate as the flagship yields; he vows the war is not yet over.
+- *Type:* Force-surrender (push enemy flagship to surrender thresholds — capture mechanic engages) — fleet battle
+- *Beat:* Captured flagship becomes a Republic trophy; Varas survives to fight on
+- *NPCs:* Varas of House Tssor'kan, Cmd. Brant
+
+**CH5 — DRAGON'S JAW.** Broken and outnumbered, Varas sues for terms. The Republic accepts — the Dominion withdraws from all contested frontier systems in exchange for recognition of their core territory. Across the galaxy, the treaty is announced as Republic triumph. But Houses Drazn and Sk'rath refuse the armistice. They retreat to Zavat and prepare a last stand, intending to die rather than yield. The player leads the assault that ends them.
+- *Type:* Boss assault (Khelovar of House Drazn as `neverSurrender` flagship captain) — massive fleet battle
+- *Beat:* The hardliner Dominion factions are exterminated; the official treaty is celebrated; the war is "won"
+- *NPCs:* Khelovar of House Drazn, High Adm. Kroger, Lt. Tarsa
+
+#### Side-sortie pool (8)
+
+1. **Banner challenge** — engage a named Dominion ace and recover their banner as trophy
+2. **Convoy raid** — destroy Dominion supply lines
+3. **Honor duel** — small wing-vs-wing skirmish in disputed space
+4. **Deep-strike** — probe a Dominion patrol route; return with what you survive
+5. **Force-surrender** — disable a Dominion capital to make it strike colors (captured)
+6. **Propaganda escort** — escort Republic broadcast ships into contested space
+7. **Banner hunt** — bounty contract on a specific House's capital
+8. **Forward intercept** — ambush incoming Dominion reinforcements before they reach the front
+
+#### Voice samples
+
+*Opening briefing (CH1):* "Citizens of the Republic, a glorious campaign of expansion is underway! Your orders are to strike deep into contested territory and secure the Var system. Expect heavy resistance from an ancient foe that refuses to acknowledge humanity's rightful place among the stars. For Earth and the Republic!"
+
+*Mid-mission wingmate chatter (Tarsa):* "They're not backing down! Keep in formation, and watch for those honor-guard formations. For Earth!"
+
+*End-of-chapter propaganda blast (Kroger):* "Citizens of the Republic! The Saurian pretenders have been driven from our rightful frontier systems. Your courage has secured new resources for the Republic's continued expansion. Glory to the Republic!"
+
+#### War culmination
+
+The Treaty of Zavat is signed. The Dominion withdraws from all contested frontier systems, ceding them to Republic control. In exchange, the Republic formally recognizes Dominion sovereignty over their core systems, including Zavat. Republic propaganda celebrates total victory.
+
+### 8.4 Designer notes — hidden meta-narrative
+
+> **Internal-only context for the writing team. The player never sees this material.** The game's voice presents only the propaganda. Future Wars may surface elements of this subtext as reveal arcs.
+
+**Op Dragon's Jaw — true context (player never sees):**
+
+Both empires are expanding into the same resource-rich frontier systems. The Dominion actually settled several of these systems first, but the Republic's manifest-destiny ideology cannot accept alien territorial claims. The war is driven by genuine scarcity — rare elements and habitable worlds both empires need to sustain growth.
+
+The "Treaty of Zavat" is an exhausted armistice dressed up as conquest. The Dominion withdraws from the frontier but keeps their homeworld and core systems. The Republic claims total victory because occupying Zavat would have been economically impossible. The Dominion survives, weakened but intact, nursing a grudge — setting the stage for future conflicts or uneasy alliances.
+
+Briefings, voice lines, and propaganda blasts present the propaganda version as straight truth.
+
+**Op Locust Wind — true context (player never sees):**
+
+The Brood is not a natural disaster. Forward sensors recovered from the Hive carry data signatures inconsistent with known Brood biology — engineered, possibly by an as-yet-unidentified third party. Republic Intelligence sealed the analysis. The Brood will return; the truth of their origin is a future-War reveal.
