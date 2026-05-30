@@ -309,7 +309,7 @@ The Saurian War is the **quality** counterpart to the Swarm's quantity, and the 
 - **Quality over quantity.** Fewer Saurian ships per battle than Terran, but each one significantly tougher and more skilled (captain traits dialed for tighter aim, lower spread, aggressive orbit).
 - **Named aces in every act.** Boss nodes spawn a flagship with a named captain (e.g. "Var'sakh-Captain Thessek, banner of the Iron Tide"). `neverSurrender` already enforces death-or-victory.
 - **Capital duels as set-pieces.** Late-act Saurian battles feature banner-cruisers/battlecruisers with escort screens. Friendly capitals duel enemy flagships while player + wing handle the fighter screen.
-- **Comms warfare is *present*.** Saurians speak — pre-battle hails, mid-fight taunts, dying captains' last words. Wing-chatter responds in kind. This is the lore-rich faction; missions are full of voice-content.
+- **Comms warfare is *present*, but deferred for v1.** Saurians do speak — pre-battle hails are the priority (briefings, opening exchanges). Mid-fight taunts and dying-captain lines are a later content pass once the system is in.
 - **Honor and surrender.** Saurians surrender at the existing thresholds (they're not mindless). Captured Saurian capitals become spoils of war — adds to the player's fleet. Reinforces the heroic-offensive vibe (we are humiliating an honor-bound culture by capturing their banners).
 
 **Provisional Saurian roster shape (subject to revision):**
