@@ -184,3 +184,6 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 | 2026-05-30 | War rotation: hybrid (per-patch story, concurrent live Wars within a patch) | Devs control narrative cadence; player gets choice within a window |
 | 2026-05-30 | Currency: two tiers — in-run credits + banked war credits | Preserves mid-run economy; gives meta-progression a clean currency |
 | 2026-05-30 | Death is soft — war credits and upgrades persist | Classic roguelite-meta; keeps each run meaningful but loss-tolerant |
+| 2026-05-30 | Run shape: hybrid campaign + sortie (Wing Commander style) | Authored story missions give immersion; side sorties give grindable replay |
+| 2026-05-30 | Command tiers unlock via career XP **plus** IAP "buy commission" | Primary XP track is fair; IAP gives revenue lever — XP curve must satisfy both audiences |
+| 2026-05-30 | War rollover: credits, upgrades, tier all carry. Universal, not per-War | Player career is continuous across Wars; new War is narrative, not mechanical reset |
