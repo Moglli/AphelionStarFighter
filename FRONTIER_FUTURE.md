@@ -232,6 +232,15 @@ ACT_RANKS and BOSSES are effectively replaced by the per-War chapter structure a
 | 2026-05-30 | IAP vectors beyond commission: cosmetic skins + premium loot chests | Cosmetics are revenue floor; loot boxes need guardrails (odds, regional blocks, pity timer) |
 | 2026-05-30 | Inventory: one equipped loadout per ship class + shared finite stash + auto-salvage | No hoarding tax, no manual scrap chore; combat stays uncluttered |
 | 2026-05-30 | Legacy systems sunset: PERKS / TRAITS / BOONS / COMMANDER_PERKS / SERVICE_UPGRADES / EVENT_CARDS deleted; ACHIEVEMENTS survive | Clean break; functional roles absorbed by loot system + command-tier track + authored missions |
+| 2026-05-30 | Currency simplified to single tier: war credits only. Two-tier model dropped | No fleet edits / no procedural events / no port mechanics removed the in-run-credit use cases |
+| 2026-05-30 | Between-run UI: Pilot's Lounge + Newsreel, sited in Novus Spes | Personal and propaganda-saturated; directly attacks the original immersion complaint |
+| 2026-05-30 | Newsreel triggers: per chapter + per War-state milestone (10–15 segments/War) | Manageable authoring cadence; ties propaganda content to in-game progress |
+| 2026-05-30 | War completion: chapter spine marks "COMPLETED" but chapters re-flyable for credits/XP/loot | Keeps the loot loop alive after story closure; no content vacuum |
+| 2026-05-30 | Achievement categories: combat milestones + career milestones + build mastery (no hidden/lore at v1) | Tight authoring; covers the meaningful axes |
+| 2026-05-30 | Achievement rewards: military decorations only (no XP / loot / IAP cross-contamination) | Pure flavor reward; keeps reward systems cleanly separated |
+| 2026-05-30 | Quartermaster shop: static Common/Uncommon stock + rotating Rare/Epic (per-chapter refresh) | Reliable progression floor; rotating top-tier without FOMO clock pressure |
+| 2026-05-30 | Premium chest structure: 3 SKU tiers (Basic/Premium/Elite), single-item rolls, pity-timer at every 10 chests | Clean monetization tiers; pity-timer reduces regulatory and player-trust risk |
+| 2026-05-30 | Career XP pacing target: ~50–80 hours rookie→admiral (non-paying player) | Standard AAA single-player; commission IAP meaningful for time-poor players; loot grind continues at top tier |
 
 ---
 
