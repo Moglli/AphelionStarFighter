@@ -631,20 +631,6 @@ Three chest tiers, single-item rolls per chest:
 
 ### 9.9 What the loot system replaces
 
-### 9.8 IAP — loot boxes & cosmetics
-
-In addition to commission-buying (§3.6):
-
-- **Premium chests.** Real-money rolls at boosted rarity. Required guardrails:
-  - Published odds.
-  - Regional sales blocks where loot boxes are restricted (Belgium, Netherlands, others as they expand).
-  - Pity timer: guaranteed Rare-or-better after N chests.
-  - Non-paid alternative (mission drops + shop) clearly viable.
-  - Age-appropriate rating compliance.
-- **Cosmetic skins.** Paint, banner placement, hull decals, contrail colors. Zero gameplay impact. Revenue floor.
-
-### 9.9 What the loot system replaces
-
 The Diablo-style loot loop **absorbs and obsoletes** the following legacy systems:
 
 - **PERKS** (run-init starter buffs) → Legendary uniques fill the same "build-defining buff" role.
