@@ -217,6 +217,19 @@ ACT_RANKS and BOSSES are effectively replaced by the per-War chapter structure a
 | 2026-05-30 | Republic officer cast roles fixed: Kroger (admiral/propaganda voice), Brant (wing commander/briefer), Hale (squadron CO/flies), Tarsa (player's wingmate) | Standard rank stack. Names placeholder, ranks and roles canonical. |
 | 2026-05-30 | Saurian Houses set: Tssor'kan / Sk'rath / Vael'ari / Drazn — each with banner sigil and named ace | Heraldry now has something to render; aces tied to House identities. Placeholder names. |
 | 2026-05-30 | CH2 "setback" language in both Wars reframed as Pyrrhic victory, not loss | Player always wins missions to progress; the story-beat must read as "held the line at cost," not "lost." |
+| 2026-05-30 | War credits spent on PERSONAL ships only; fleet ships not editable | Focused meta loop; Shipyard is the single upgrade surface; fleet quality grows passively with tier |
+| 2026-05-30 | Upgrade structure: modular slot swap (Diablo-style) | Maximum replayability via build identity; most depth |
+| 2026-05-30 | Loot depth: Full Diablo — rarity tiers + affix rolls + Legendary uniques | Endless loot chase; biggest engine work but biggest replay value |
+| 2026-05-30 | Multi-class piloting: as tier climbs, player unlocks new ship classes to pilot; each has its own outfittable loadout | Fleet-of-pilotable-ships model; fighter remains valid at admiral rank |
+| 2026-05-30 | Slot scheme: class-typed (each class has own slots; modules are class-specific drops) | Most depth per class; module families don't overlap |
+| 2026-05-30 | Rarity tiers: Common / Uncommon / Rare / Epic / Legendary (standard ARPG palette) | Universally recognized; standard color codes |
+| 2026-05-30 | Affix system: stat-roll ladder by rarity + 1 unique Legendary affix per Legendary | Classic build-defining hunt loop |
+| 2026-05-30 | Drop sources: mission rewards + boss/ace drops + Republic Quartermaster shop | Three predictable sources; no mid-mission pickup loop (combat stays focused) |
+| 2026-05-30 | Brood missions drop bio-tech modules — risk/reward effects, distinct alien aesthetic | Adds visual + mechanical variety; Brood is a meaningful drop source despite "no civilization" |
+| 2026-05-30 | Pilot-class unlocks aligned with command tier (single XP track) | Intuitive; one progression motion |
+| 2026-05-30 | IAP vectors beyond commission: cosmetic skins + premium loot chests | Cosmetics are revenue floor; loot boxes need guardrails (odds, regional blocks, pity timer) |
+| 2026-05-30 | Inventory: one equipped loadout per ship class + shared finite stash + auto-salvage | No hoarding tax, no manual scrap chore; combat stays uncluttered |
+| 2026-05-30 | Legacy systems sunset: PERKS / TRAITS / BOONS / COMMANDER_PERKS / SERVICE_UPGRADES / EVENT_CARDS deleted; ACHIEVEMENTS survive | Clean break; functional roles absorbed by loot system + command-tier track + authored missions |
 
 ---
 
