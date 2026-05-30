@@ -103,20 +103,45 @@ Player's **command scope unlocks gradually over many runs**, replacing the in-ru
 
 **Open:** Are war credits per-War (lost when the War rotates out) or cross-War (universal currency)? Same question for ship upgrades.
 
-### 3.5 Run structure within a War
+### 3.5 Run structure within a War — Hybrid (campaign + sortie)
 
-> *(How the 5-act starmap maps to the new model — totally open.)*
+Each War is structured as a **Wing Commander / Freespace-style campaign:**
 
-**Open:** Does each War have its own multi-mission campaign (starmap-like)? Or is each run a single sortie / mission? Or is a War a long thread of varied missions with branching?
+- **Authored story missions** are the spine. They gate War progress: completing a story mission unlocks the next chapter of the War's narrative. These are hand-crafted, with named locations, briefings, and story beats.
+- **Side sorties** are an open pool of repeatable missions (patrol, escort, bounty, recon, etc.) the player can fly between story beats — for credits, XP, and to grind toward the next command tier.
+- A single run = jumping into the War, flying story or side missions back-to-back, until the pilot dies. On death, soft-reset to a new rookie pilot; story progress, upgrades, and command tier remain.
+
+**Open:** What's the rough split — how many story missions per War, how big is the side-sortie pool, and how does the pool evolve as story chapters advance?
+
+### 3.6 Command-tier unlocks
+
+- **Primary path: career XP track.** Kills and mission completions grant career XP. Tiers unlock at thresholds. Pure time/skill investment.
+- **Secondary path: paid commission (IAP).** Player can buy their next tier with real money. Revenue lever for the developer.
+
+**Tuning constraint (load-bearing):** Career XP pacing has to satisfy two audiences simultaneously:
+- A non-paying player must feel the grind is *fair and paced well* — never feel forced to pay.
+- A paying player must feel that buying a commission *meaningfully accelerated* their experience and was worth it.
+
+This means each tier should represent a clearly desirable jump in capability that takes a defined-but-non-trivial number of runs to earn naturally. We'll need to revisit XP rates and tier costs together once tiers and content are defined.
+
+**Open:** Cosmetic / ship-skin IAPs alongside commissions? Other monetization vectors?
+
+### 3.7 War rollover — career carries
+
+When a War retires and a new one starts:
+
+- War credits, ship upgrades, and command tier all **persist**. The pilot account is continuous.
+- The rollover is **purely narrative** — the player's identity and capabilities carry forward into the new conflict.
+- Implication: ship upgrades and credits are **universal**, not per-War. Upgrade shop content is shared across Wars.
 
 ### Open questions — core loop
 
 - [ ] What two Wars ship at v1 (factions, conflict premise, defender vs invader framing)?
-- [ ] What unlocks each command tier?
-- [ ] Do command tiers persist across Wars or reset?
-- [ ] War credits and ship upgrades — per-War or universal?
-- [ ] What does a single run look like structurally inside a War? (starmap? linear missions? freeform?)
-- [ ] What does "evolving story narrative" between patches look like operationally — do prior War outcomes affect future Wars?
+- [ ] How many story missions per War (rough size)?
+- [ ] How does the side-sortie pool evolve as War chapters advance?
+- [ ] Career XP curve — how many runs to go rookie → admiral, roughly?
+- [ ] Other monetization (cosmetics, skins, ship variants)?
+- [ ] How does "evolving story narrative" between patches look — do prior War outcomes affect future Wars (e.g. a faction that was defeated in War 1 doesn't appear in War 3)?
 
 ---
 
