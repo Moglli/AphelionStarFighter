@@ -223,10 +223,32 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 - Faction relationships are binary: humans = us, xenos = them. No diplomatic middle ground.
 - Dialogue/voice writing is straightforward: clear, confident, civic.
 
-### 7.2 Launch antagonist A — open
+### 7.2 Launch antagonist A — The Swarm (insectoid hive)
 
-### 7.3 Launch antagonist B — open
+**Identity:** Bio-organic alien hive. Mindless, voracious, incommunicable. Ships are grown, not built. They strip systems of biomass and move on. The Republic frames them as "locusts" — a natural disaster with a face.
+
+**Working name:** TBD (placeholder: "The Brood").
+
+**Why we fight them (in-fiction):** Existential. They eat worlds. No diplomacy is possible because there's no one to talk to. A perfect xenophobic target — easy to hate, no moral ambiguity.
+
+**Combat feel — direction:** *(to flesh out)*
+- Quantity over quality. Player feels like they're holding back a tide.
+- "Bug hunt" energy: sweeping fire, target-rich, panic management.
+- No comms warfare — they don't broadcast, don't taunt, just close and consume.
+
+### 7.3 Launch antagonist B — The Saurian Empire (proud reptilian warriors)
+
+**Identity:** Ancient reptilian warrior aristocracy. Named champions, honor codes, banner-bearing ships. They see humanity as upstarts encroaching on stars that should be theirs. They are skilled, proud, and *equal* in ambition — the dark mirror of the Terran Republic.
+
+**Working name:** TBD (placeholder: "The Var'sakh Dominion").
+
+**Why we fight them (in-fiction):** Sovereignty. They claim systems the Republic wants. Unlike the Swarm, this is a war between two civilizations — but the Republic frames it as the necessary defeat of an arrogant xenos pretender.
+
+**Combat feel — direction:** *(to flesh out)*
+- Quality over quantity. Fewer enemies, each a real threat.
+- "Honor duel" energy: named aces, capital captains, banner heraldry on hulls.
+- Comms warfare *is* present — taunts, challenges, named callsigns. They speak.
 
 ### 7.4 Future-faction palette — open
 
-> Other antagonists / sub-factions to seed for future Wars.
+> Other antagonists / sub-factions to seed for future Wars. Synthetics, Resonant Choir, and others remain candidates for post-launch.
