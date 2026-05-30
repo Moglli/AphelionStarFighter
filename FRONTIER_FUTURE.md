@@ -114,7 +114,7 @@ Each War is structured as a **Wing Commander / Freespace-style campaign:**
 
 **Open:** What's the rough split — how many story missions per War, how big is the side-sortie pool, and how does the pool evolve as story chapters advance?
 
-### 3.6 Command-tier unlocks
+### 3.6 Career-tier unlocks
 
 - **Primary path: career XP track.** Kills and mission completions grant career XP. Tiers unlock at thresholds. Pure time/skill investment.
 - **Secondary path: paid commission (IAP).** Player can buy their next tier with real money. Revenue lever for the developer.
@@ -123,9 +123,21 @@ Each War is structured as a **Wing Commander / Freespace-style campaign:**
 - A non-paying player must feel the grind is *fair and paced well* — never feel forced to pay.
 - A paying player must feel that buying a commission *meaningfully accelerated* their experience and was worth it.
 
-This means each tier should represent a clearly desirable jump in capability that takes a defined-but-non-trivial number of runs to earn naturally. We'll need to revisit XP rates and tier costs together once tiers and content are defined.
+Each tier represents a clearly desirable jump (new pilotable class + broader command scope). We'll revisit XP rates and tier costs once content is in.
 
-**Open:** Cosmetic / ship-skin IAPs alongside commissions? Other monetization vectors?
+### 3.6a Monetization vectors
+
+In addition to the **paid commission (tier-skip)** above, the IAP surface includes:
+
+- **Cosmetic skins.** Ship paint jobs, banner placements, hull decals, contrail colors. Zero gameplay impact. Universally uncontroversial; revenue floor.
+- **Loot boxes / premium chests.** Real-money chests that roll random modules at boosted rarity. **Carries regulatory risk** (BE/NL/AUS restrictions); implementation must include:
+  - Disclosed odds (required in several jurisdictions and good practice everywhere)
+  - Regional sales blocks where loot boxes are restricted
+  - Pity timer / guaranteed-Rare-or-better floor after N chests
+  - Free non-paid alternative path (already in place via mission drops + Quartermaster shop)
+  - Age-appropriate rating
+
+Not chosen (kept off the table): inventory expansion IAP; premium reroll/craft currency.
 
 ### 3.7 War rollover — career carries
 
