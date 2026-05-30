@@ -520,3 +520,106 @@ Briefings, voice lines, and propaganda blasts present the propaganda version as 
 **Op Locust Wind — true context (player never sees):**
 
 The Brood is not a natural disaster. Forward sensors recovered from the Hive carry data signatures inconsistent with known Brood biology — engineered, possibly by an as-yet-unidentified third party. Republic Intelligence sealed the analysis. The Brood will return; the truth of their origin is a future-War reveal.
+
+---
+
+## 9. Ship upgrades & loot system
+
+> The meta-progression spending loop. War credits + dropped loot + Quartermaster shop all feed into outfitting the personal ships the player pilots. Soft-death roguelite spine — what death takes (the pilot) is small; what death leaves (the gear, the rank, the upgrades) is large.
+
+### 9.1 Scope
+
+- **Personal ships only.** War credits and loot upgrade ships the player personally pilots. Fleet ships (the wings and capitals under their command) are Republic-issued and not editable. Fleet quality grows passively with command tier.
+- **Multi-class.** The player pilots a fleet of unlockable ship classes (see §3.2). Each class has its own loadout and its own item drops.
+
+### 9.2 Equipment slots — per ship class
+
+Each class has its own slot scheme. Modules are **class-typed** — a fighter cannon doesn't fit a frigate's ring-cannon array. Drops indicate which class they belong to.
+
+| Class | Slots |
+| --- | --- |
+| Fighter | Cannon, Missile, Shield, Engine, Hull (5) |
+| Bomber | Cannon, Missile Bay, Shield, Engine, Hull, PD Turret (6) |
+| Frigate | Ring Cannon, Missile Bay, Shield, Engine, Hull, PD Array, Targeting (7) |
+| Cruiser | Forward Cannon, Missile Bay, Shield, Engine, Hull, PD Array, Broadside, Targeting (8) |
+| Battleship | Broadside Array, Missile Bay, Torpedo Tubes, Heavy Laser, Shield, Engine, Hull, PD Array, Targeting (9) |
+| Carrier | Hangar, Missile Bay, Shield, Engine, Hull, PD Array, Targeting (7) |
+
+These slot lists map directly onto the engine's existing per-class module system (`src/modules.js`).
+
+### 9.3 Rarity tiers
+
+Standard 5-tier ARPG palette.
+
+| Tier | Color | Notes |
+| --- | --- | --- |
+| Common | gray | Base stats, no affixes |
+| Uncommon | green | 1 stat affix |
+| Rare | blue | 2 stat affixes |
+| Epic | purple | 3 stat affixes |
+| Legendary | orange | 4 stat affixes + **1 unique Legendary affix** (build-defining special effect) |
+
+### 9.4 Affix system
+
+- **Stat affixes** roll from a pool per slot (cannon affixes ≠ engine affixes). Examples for a cannon: +% damage, +% fire rate, +magazine size, +% accuracy, +% range, +% projectile speed.
+- **Affix count scales by rarity** — Common = 0, Uncommon = 1, Rare = 2, Epic = 3, Legendary = 4 stat affixes.
+- **Legendary uniques** are the hunt — special effects that enable specific builds. Example pool seeds: "Kills heal shield 2%", "Every 5th shot triple-bursts", "Range no longer falls off damage", "Missiles auto-fire on critical hit", "Shield regen doesn't pause when hit". Each Legendary item is named (e.g. *"Iron Hammer of Vorago"*) and tied to a specific unique effect.
+
+### 9.5 Drop sources
+
+Three concurrent sources. No mid-mission pickup loop — drops appear on the end-of-mission summary.
+
+1. **Mission rewards.** Completing a chapter or side sortie awards a fixed-or-rolled drop. Predictable cadence; the loot bag IS the post-mission screen.
+2. **Boss / ace drops.** Named enemies (Saurian aces, banner cruisers, the Hive-ship) drop unique items. Story-specific Legendaries hunted from specific bosses. "I need Khelovar to drop again."
+3. **Republic Quartermaster shop.** Baseline shop where Common / Uncommon items are always available for credits. Rares and Epics rotate in. Lets unlucky players progress; gives credits a guaranteed sink. Tier-gated (only items for ship classes the player has unlocked).
+
+**Brood drops — bio-tech tier:** Brood missions reward reverse-engineered bio-tech modules. Visually distinct from human gear (organic, pulsing, slightly horrible). Mechanically: high-risk/high-reward effects (e.g. "Bio-Plate: regenerates HP but ramping shield drain"; "Spore Pod: missiles spawn drone-clouds that explode after 3s"). Republic propaganda frames them as "spoils of science."
+
+### 9.6 Inventory & stash
+
+- **One equipped loadout per ship class.** When the player selects a class to pilot, they fly with whatever's currently equipped on that class.
+- **Shared stash** (~50–100 modules, finite). Holds items across all ship classes.
+- **Auto-salvage.** At end-of-mission, drops the player doesn't Keep or Stash auto-convert to credits. When the stash is full, oldest non-favorite items auto-salvage to make room. No manual scrap chore; no item-hoarding tax.
+- **Favorite / lock flag** on stashed items prevents accidental auto-salvage.
+
+No in-mission inventory mechanic — combat stays focused.
+
+### 9.7 Quartermaster shop — TBD detail
+
+Open items: refresh cadence (per run / per chapter / per real-day?); whether Rare/Epic rotations are persistent or per-player; pricing curve relative to drop-rate; whether unique shop-only items exist or every item is also droppable.
+
+### 9.8 IAP — loot boxes & cosmetics
+
+In addition to commission-buying (§3.6):
+
+- **Premium chests.** Real-money rolls at boosted rarity. Required guardrails:
+  - Published odds.
+  - Regional sales blocks where loot boxes are restricted (Belgium, Netherlands, others as they expand).
+  - Pity timer: guaranteed Rare-or-better after N chests.
+  - Non-paid alternative (mission drops + shop) clearly viable.
+  - Age-appropriate rating compliance.
+- **Cosmetic skins.** Paint, banner placement, hull decals, contrail colors. Zero gameplay impact. Revenue floor.
+
+### 9.9 What the loot system replaces
+
+The Diablo-style loot loop **absorbs and obsoletes** the following legacy systems:
+
+- **PERKS** (run-init starter buffs) → Legendary uniques fill the same "build-defining buff" role.
+- **TRAITS** (in-run promotion picks) → Tier rewards from command-tier track.
+- **BOONS** (mid-run stackable buffs) → No longer applicable (no procedural events; authored missions instead).
+- **COMMANDER_PERKS** (capital/wing-commander level-ups) → Fleet ships are not editable; passive growth with command tier instead.
+- **SERVICE_UPGRADES** (meta-progression unlocks) → Loot system + command-tier track.
+- **EVENT_CARDS** (procedural mid-run choices) → Authored mission writing.
+
+Achievements survive as a parallel milestone system.
+
+### Open questions — loot system
+
+- [ ] Module families per slot — name pool, base stat curves (Pulse / Burst / Marksman / Scatter / Auto cannons, etc. for the Cannon slot, and equivalents for every other slot across every ship class).
+- [ ] Affix pool — what specific affixes can roll on each slot type.
+- [ ] Legendary unique pool — the special effects that define each Legendary item.
+- [ ] Quartermaster refresh cadence and pricing.
+- [ ] Loot box content / odds tables and pity-timer numbers.
+- [ ] Cosmetic-skin catalog and pricing.
+- [ ] Stash size and salvage credit values.
+- [ ] How Brood bio-tech visually distinguishes from human gear (UI iconography + ship-mounted visual).
