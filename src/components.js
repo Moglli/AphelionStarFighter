@@ -601,8 +601,9 @@ export const DEFAULT_OWNED_COMPONENTS = Object.keys(COMPONENTS).filter(
 
 // Maps a slot id to the canonical default component for it. Used when
 // the design references a slot but doesn't supply a value, or supplies
-// an unknown one — we slot the default in.
-function defaultForSlot(slotId) {
+// an unknown one — we slot the default in. Exported so the procedural
+// generator (shipgen.js) can fall a slot back to its default.
+export function defaultForSlot(slotId) {
   for (const id of DEFAULT_OWNED_COMPONENTS) {
     const comp = COMPONENTS[id];
     if (comp.slots.includes(slotId)) return id;
