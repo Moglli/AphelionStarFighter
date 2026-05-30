@@ -199,9 +199,27 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 
 > Drafting space for the new faction roster. Decisions land in §6 once locked.
 
-### 7.1 The Terran human empire — open
+### 7.1 The Terran human empire — Manifest-Destiny Republic
 
-**Vision direction:** A militant, expansionist human power that has decided humanity's survival demands the eradication of xenos. The player is a pilot inside this institution. Specific identity (theocratic? secular-imperial? survivor-empire?) is open.
+**Identity:** A democratic-on-paper, jingoistic-in-practice human republic. **Service guarantees citizenship.** Humanity has decided the stars are its birthright; the rest of the galaxy is in the way. Starship Troopers / Heinlein tone — clean propaganda, civic pride, parade-ground confidence.
+
+**Working name:** TBD. (Placeholder candidates: "Terran United Command", "Terran Republic", "Sol Republic". Pick at content-pass.)
+
+**Voice / aesthetic:**
+- **Propaganda-clean visual style** — recruitment posters, neon civic pride, lit-up parade hangars. The opposite of grimdark.
+- **Bright confident briefings** — "Citizens. Your Republic asks of you a simple duty." Pep-talk cadence, even when the orders are brutal.
+- **Patriotic comms chatter** — wingmates whoop, anthems on the comm, mission-end speeches.
+- **Civic-religious overlay** — humanity treated as the rightful inheritor of the stars; xenos as obstacles to a manifest destiny.
+
+**Player POV: True believer.**
+- Player has bought the ideology in full. Briefings *hit*. Squadron banter is sincere, not ironic.
+- Dialogue, mission narration, and HUD voice-lines all written from inside the worldview.
+- Immersion strategy: the player isn't a cog or a cynic — they're the *hero* of their own crusade. The institution and the player are aligned. The contrast (and the design challenge) is that what feels heroic to the player is, by any external read, genocidal. The game doesn't flinch from that; it just doesn't make the player flinch either.
+
+**Implications for content:**
+- Briefings can be earnest and stirring. We don't need to undercut them.
+- Faction relationships are binary: humans = us, xenos = them. No diplomatic middle ground.
+- Dialogue/voice writing is straightforward: clear, confident, civic.
 
 ### 7.2 Launch antagonist A — open
 
