@@ -189,3 +189,24 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 | 2026-05-30 | Run shape: hybrid campaign + sortie (Wing Commander style) | Authored story missions give immersion; side sorties give grindable replay |
 | 2026-05-30 | Command tiers unlock via career XP **plus** IAP "buy commission" | Primary XP track is fair; IAP gives revenue lever — XP curve must satisfy both audiences |
 | 2026-05-30 | War rollover: credits, upgrades, tier all carry. Universal, not per-War | Player career is continuous across Wars; new War is narrative, not mechanical reset |
+| 2026-05-30 | Two launch Wars target two different antagonist factions | Maximum variety; each War distinct in enemy roster, tactics, story |
+| 2026-05-30 | Tone: heroic offensive + 40K-style extreme xenophobia | Establishes the player's institutional perspective; defines all faction relationships |
+| 2026-05-30 | Full faction redesign — current Terran/Reavers/Hegemony/Voidsworn/Thren are placeholders | Existing roster doesn't carry the new tone; cleaner slate, no half-fits |
+
+---
+
+## 7. Faction design — work area
+
+> Drafting space for the new faction roster. Decisions land in §6 once locked.
+
+### 7.1 The Terran human empire — open
+
+**Vision direction:** A militant, expansionist human power that has decided humanity's survival demands the eradication of xenos. The player is a pilot inside this institution. Specific identity (theocratic? secular-imperial? survivor-empire?) is open.
+
+### 7.2 Launch antagonist A — open
+
+### 7.3 Launch antagonist B — open
+
+### 7.4 Future-faction palette — open
+
+> Other antagonists / sub-factions to seed for future Wars.
