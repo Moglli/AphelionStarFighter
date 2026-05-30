@@ -76,20 +76,21 @@ Frontier becomes a **galaxy-wide war drama** with a live, evolving meta-narrativ
 
 **Open:** What two Wars ship at launch? (See §3 open questions.)
 
-### 3.2 Career-tier command progression
+### 3.2 Career-tier progression (command scope + pilot class)
 
-Player's **command scope unlocks gradually over many runs**, replacing the in-run rank/promotion ladder. Tiers (rough, to be refined):
+Player's career advancement is a **single XP track** that simultaneously unlocks two things at each tier: the **command scope** they can wield AND the **ship class** they can personally pilot. The piloting unlock lags one tier behind the command-scope unlock on average — you can pilot what you've earned the right to lead.
 
-| Tier | Player can control |
-| --- | --- |
-| 0 — Rookie | Their own fighter only. No orders to anyone. |
-| 1 — Wing Lead | Command **one fighter wing** (their own). |
-| 2 — Strike Lead | Command **all friendly fighters**. |
-| 3 — Strike Group Lead | Command **all strike craft** (fighters + bombers). |
-| 4 — Tactical Officer | Strike craft + **frigates**. |
-| 5+ — Captain / Commodore / Admiral | Progressively cruisers, capitals, full fleet. |
+| Tier | Command scope | Pilotable ship classes |
+| --- | --- | --- |
+| 0 — Rookie | None | Fighter only |
+| 1 — Wing Lead | Own fighter wing | Fighter |
+| 2 — Strike Lead | All friendly fighters | Fighter, **Bomber** |
+| 3 — Strike Group Lead | All strike craft (fighters + bombers) | + **Frigate** |
+| 4 — Tactical Officer | Strike craft + frigates | + **Cruiser** |
+| 5 — Captain | + cruisers, capitals | + **Battleship**, **Carrier** |
+| 6+ — Commodore / Admiral | Full fleet | All classes |
 
-**Open:** What unlocks each tier — banked war credits, accolade thresholds, story-mission completion, or hybrid? Do tiers reset per-War or carry across all Wars?
+The player picks **which class to pilot** per mission/run from those they've unlocked. The fighter remains a valid choice at admiral rank (agility matters); higher classes are heavier and slower but command more battlefield presence.
 
 ### 3.3 Soft-death meta-progression
 
