@@ -199,6 +199,44 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 
 ---
 
+## 7a. Combat-mechanics constraints (study summary)
+
+> Findings from a deep read of the current battle code. These bound what enemy designs are cheap to ship vs. require new engine work.
+
+**Existing capabilities (free to use):**
+- 7 ship classes (fighter / bomber / frigate / cruiser / battleship / carrier / station). Each faction is a **race spec** in `src/races.js` that overrides per-class stats: HP, maxSpeed, turnRate, damage, cooldown, armor, etc. Whole classes can be omitted (Thren has no frigates/cruisers/battleships, just fighters/bombers/2 carriers).
+- Roster scaling per act+column: `1 + (actIndex-1) × 0.5 + col × 0.08`. Battles open with strike-craft skirmishes and grow into capital brawls — confirms the "small to big" progression the user described.
+- Captain traits modify AI numerically (`aiOrbitMul`, `weaponSpreadMul`, `pdCooldownMul`, `aiAggressionMul`, etc.). Easy hook for faction-specific behavior tuning.
+- `neverSurrender = true` flag for boss/ace ships — Saurian aces and Brood-ships are already supported.
+- Per-class wing stance system (engage / charge / standoff / hold / fallback). Faction defaults can preset these.
+- Carrier replenishment rate is per-race tunable — Swarm brood-ships can hatch fighters faster than Terran carriers.
+- Damage model: shields → armor → hull, with module destruction. Missiles bypass shields; torpedoes bypass shields + armor. Faction weapons can specialize.
+
+**Engine constraints (would need new work):**
+- **No environmental hazards.** No asteroids, debris obstacles, nebulae, fog-of-war, or sensor falloff. Wrecks are cosmetic — no collision. Open-space combat only.
+- **No waves / reinforcements within a battle** (except the Act-5 boss exception). All ships spawn at battle start; no mid-fight spawn-from-source.
+- **No special damage types** (EMP, cloak, boarding, salvage). All damage is kinetic/explosive.
+- **Heading-locked ships** — no strafing. Combat is twitchy for fighters (3.2 rad/s turn), ponderous for capitals (BB at 0.15 rad/s = ~40s for a 180° turn).
+- **No sensor / detection mechanics.** Players always see all ships in the arena. No "dread of the unknown" support out of the box.
+
+**Race-distinct combat already proven:**
+- Terran: balanced baseline.
+- Reavers: 48 fighters @ 22HP, hyper-fast, fragile — already a "swarm" template.
+- Hegemony: 18 fighters @ 52HP, heavy, slow, brutal — already a "quality" template.
+- Thren: pure strike-craft + 2 mega-carriers, no mid-tier capitals — bio-swarm template.
+
+### Implication for our two new factions
+
+**Saurians** map naturally onto a Hegemony-derived template (quality, low count, hard-hitting) with heavy reliance on captain traits and `neverSurrender` aces. Fits the engine *today*.
+
+**Swarm** can take two paths:
+- **Path A (engine-fit):** Re-skin a Reavers/Thren-style template — huge fighter count, fragile, fast, brood-ship carriers that replenish at extreme rates. Atmospheric dread is delivered via *audio + comms + visual design*, not gameplay mechanics. Cheap to ship.
+- **Path B (engine-extend):** Build environmental hazards (asteroid fields, debris obstacles, fog-of-war) so we can deliver the true "asteroid hunt" feel. Much more work; reusable for future factions too.
+
+We'll pick a path below.
+
+---
+
 ## 7. Faction design — work area
 
 > Drafting space for the new faction roster. Decisions land in §6 once locked.
