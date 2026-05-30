@@ -249,10 +249,11 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 
 **Why we fight them (in-fiction):** Sovereignty. They claim systems the Republic wants. Unlike the Swarm, this is a war between two civilizations — but the Republic frames it as the necessary defeat of an arrogant xenos pretender.
 
-**Combat feel — direction:** *(to flesh out)*
-- Quality over quantity. Fewer enemies, each a real threat.
-- "Honor duel" energy: named aces, capital captains, banner heraldry on hulls.
-- Comms warfare *is* present — taunts, challenges, named callsigns. They speak.
+**Combat feel — provisional direction (pending combat-mechanics study):**
+- **Saurians map naturally onto the game's existing combat escalation pattern.** The game already opens with small strike-craft skirmishes and grows into capital engagements; the Saurian War leans into that — every fight is a step up the ladder, named flagships at the top.
+- Capital duels as set-pieces: named banner-cruisers / battlecruisers with escort, friendly capital engages enemy capital while player handles fighter screen.
+- Named captains on comms, banner heraldry on hulls, taunts and challenges in voice lines.
+- *To verify and detail against existing combat mechanics.*
 
 ### 7.4 Future-faction palette — open
 
