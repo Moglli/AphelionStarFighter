@@ -98,11 +98,13 @@ The player picks **which class to pilot** per mission/run from those they've unl
 - **What persists:** war credits (banked at run-end), ship upgrades, command tier, War-state contributions, achievements.
 - New run starts back in the active War with whatever upgrades and command tier the player has earned.
 
-### 3.4 Currency model — two tiers
+### 3.4 Currency model — single tier (war credits)
 
-- **In-run credits:** used mid-run (recruits, repairs, refuels — whatever the new run-internal economy is). Lost on death.
-- **War credits:** banked at run-end, spent **between runs** in the Republic Quartermaster shop and as the auto-salvage proceeds for unwanted loot. Persist through death and War-rotation. Universal, not per-War.
-- The legacy `servicePoints` / Service Hall is **sunset** under the new model — its functional role is absorbed by the loot system and the command-tier track.
+- **War credits** are the only currency. Earned from mission rewards, kill bounties, and auto-salvage of unwanted loot. Banked continuously — never lost on death.
+- Spent at the Quartermaster shop, on premium chests (real-money chests payout in items, not credits), and on any future credit sinks (cosmetics, etc.).
+- The earlier two-tier model (in-run credits + war credits) is **dropped**. With no fleet editability, no procedural events, and no mid-run port mechanics, the second-tier currency had no real role left.
+- Universal — not per-War. Carries across War rollovers.
+- The legacy `servicePoints` / Service Hall is sunset along with PERKS / TRAITS / BOONS / SERVICE_UPGRADES / EVENT_CARDS — its functional role is absorbed by the loot system and the command-tier track.
 
 ### 3.5 Run structure within a War — Hybrid (campaign + sortie)
 
