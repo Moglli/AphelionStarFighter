@@ -160,20 +160,20 @@ When a War retires and a new one starts:
 
 ## 4. Content & systems — direction so far
 
-Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, EVENT_CARDS, ACHIEVEMENTS, ACT_RANKS, BOSSES) will need to be re-evaluated against the new framing. Some likely survive (re-themed); some are obsoleted by tier/upgrade systems.
+Legacy data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, EVENT_CARDS, ACT_RANKS) are **sunset**. Their functional roles are absorbed by:
+
+- **Loot system (§9)** — Legendary affixes replace starter perks and stackable boons.
+- **Career-tier track (§3.2 / §3.6)** — tier rewards replace in-run promotion picks.
+- **Authored mission writing (§8)** — chapter scripts replace EVENT_CARDS.
+- **Achievements** — survive as a parallel milestone system.
+
+ACT_RANKS and BOSSES are effectively replaced by the per-War chapter structure and named-ace casting (§8).
 
 ### Open questions — content
 
-- [ ] What categories of ship upgrades exist? (weapons / hull / engines / electronics / consumables?) How many tiers each?
-- [ ] How do we deliver in-run immersion — briefings, named NPCs, comms chatter, debriefs, persistent characters across runs?
-- [ ] Do EVENT_CARDS survive in some form, or is in-run story handled via authored mission scripts now?
-- [ ] What's the role (if any) of perks/traits/boons under the new model?
 - [ ] How does War state get visualized between runs (newsfeed, galaxy map, faction power tracker)?
-- [ ] What replaces the achievements system, or do achievements remain a parallel system?
-
-### Decisions
-
-- _Pending_
+- [ ] Achievement structure under the new model — what's tracked, what rewards?
+- [ ] Career XP gain rates per mission type — how many runs to reach each tier?
 
 ---
 
