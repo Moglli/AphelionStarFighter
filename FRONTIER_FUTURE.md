@@ -599,9 +599,37 @@ Three concurrent sources. No mid-mission pickup loop — drops appear on the end
 
 No in-mission inventory mechanic — combat stays focused.
 
-### 9.7 Quartermaster shop — TBD detail
+### 9.7 Quartermaster shop — structure
 
-Open items: refresh cadence (per run / per chapter / per real-day?); whether Rare/Epic rotations are persistent or per-player; pricing curve relative to drop-rate; whether unique shop-only items exist or every item is also droppable.
+- **Static base stock.** Common and Uncommon items are permanent — always available at the same prices. Lets unlucky players reliably progress.
+- **Rotating Rares and Epics.** Higher-rarity items rotate in on a refresh schedule (daily real-time OR per-chapter completion — pick one at implementation, leaning per-chapter to avoid clock-watching pressure).
+- **Tier-gated.** Only items for ship classes the player has unlocked appear in the shop. No teasing what you can't yet pilot.
+- **Drop-source relationship.** Most shop items are also droppable from missions; a small subset of Rare/Epic items are shop-exclusive (give the credit-grind path a unique reward).
+- **Pricing curve.** Pricing tied to drop-rarity — Common cheap, Legendary not sold (Legendaries are drop-only or chest-only).
+
+### 9.8 Loot box / premium chest structure
+
+Three chest tiers, single-item rolls per chest:
+
+| Chest | Price | Rarity weighting | Notes |
+| --- | --- | --- | --- |
+| Basic | Cheap | Common 50% / Uncommon 35% / Rare 12% / Epic 2.5% / Legendary 0.5% | Entry SKU; soft revenue floor |
+| Premium | Mid | Uncommon 50% / Rare 30% / Epic 15% / Legendary 5% | Mid-spend SKU |
+| Elite | Expensive | Rare 40% / Epic 40% / Legendary 18% / Mythic 2% (if introduced later) | Whale SKU; best Legendary odds |
+
+(Odds are placeholder; pin at balance pass.)
+
+**Pity timer:** every 10 chests of any tier rolls at least one Rare-or-better.
+
+**Class-targeting:** chest rolls respect tier-gating (player can't roll a Cruiser cannon before unlocking Cruiser piloting); the system shifts the roll to a class they have access to.
+
+**Required guardrails** (legal/regulatory; reiterated from §3.6a):
+- Disclosed odds on every chest in-product.
+- Regional sales blocks where loot boxes are restricted.
+- The mission-drop + Quartermaster-shop path is clearly viable without chest purchases.
+- Age-appropriate rating.
+
+### 9.9 What the loot system replaces
 
 ### 9.8 IAP — loot boxes & cosmetics
 
