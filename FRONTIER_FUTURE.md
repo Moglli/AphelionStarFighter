@@ -198,6 +198,14 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 | 2026-05-30 | Two launch Wars are two fronts of one Republic crusade | Lets us share a global meta-state ("Republic war effort"), reuse propaganda voice, and let the player move between Wars without narrative whiplash. |
 | 2026-05-30 | Swarm combat: Path A (engine-fit reskin of Reavers/Thren template) | Ships now; engine-extension (environmental hazards) deferred to a later pass. Dread carried by audio/visual/dialogue. |
 | 2026-05-30 | Saurian cultural distinctness: distinct silhouettes, distinct weapon systems, banner heraldry on capitals | Reads as alien at a glance; not just stat-overlays. Mid-fight voice deferred; pre-battle hails first. |
+| 2026-05-30 | Launch Wars locked at concept level: Op Locust Wind (Brood) + Op Dragon's Jaw (Saurian) | 5-chapter spines + 8-mission sortie pools each; shared staging at Novus Spes; shared Republic officer cast. |
+| 2026-05-30 | Game's voice = propaganda only. Reality lives in designer notes (§8.4), invisible to player | Preserves locked True Believer POV; future Wars can mine subtext as reveal arcs. |
+| 2026-05-30 | Locust Wind CH4 = "Drown the hatchery" (kill brood-ships before Hive assault) | Engine has no rescue mechanic; thematic finality before the boss. |
+| 2026-05-30 | Dragon's Jaw CH4 = force *DRAKAR-TSSOR* to strike colors; Varas escapes | Engine has capture-via-surrender, not boarding; preserves trophy moment & sets up CH5 hardliners. |
+| 2026-05-30 | Dragon's Jaw CH5 = hardliner Houses (Drazn / Sk'rath) refuse armistice; player exterminates them | Engine has clean win/lose only; treaty-first / battle-second preserves political-spin angle and gives a real boss fight (Khelovar). |
+| 2026-05-30 | Republic officer cast roles fixed: Kroger (admiral/propaganda voice), Brant (wing commander/briefer), Hale (squadron CO/flies), Tarsa (player's wingmate) | Standard rank stack. Names placeholder, ranks and roles canonical. |
+| 2026-05-30 | Saurian Houses set: Tssor'kan / Sk'rath / Vael'ari / Drazn — each with banner sigil and named ace | Heraldry now has something to render; aces tied to House identities. Placeholder names. |
+| 2026-05-30 | CH2 "setback" language in both Wars reframed as Pyrrhic victory, not loss | Player always wins missions to progress; the story-beat must read as "held the line at cost," not "lost." |
 
 ---
 
