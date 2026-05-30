@@ -50,7 +50,9 @@ Frontier becomes a **galaxy-wide war drama** with a live, evolving meta-narrativ
 ### Launch scope (v1 of the new system)
 
 - **One playable race:** Terrans only (other races deferred — design should not preclude them).
-- **Two concurrent Wars** at launch (concepts TBD).
+- **Two concurrent Wars** at launch, each against a **different antagonist faction** (concepts TBD).
+- **Tone:** Heroic offensive — Terran humanity on the attack. Treatment is **40K-style extreme xenophobia**: humanity supreme, alien life as existential threat to be purged. The player flies for an institution that views compromise with xenos as heresy.
+- **Faction roster: full redo.** The current Terran/Reavers/Hegemony/Voidsworn/Thren palette is treated as placeholders. New Terran identity is a blank slate; new antagonist factions designed from scratch.
 - **Career progression** that unlocks player command scope over many runs (see §3).
 - **Two-tier currency:** in-run credits + war credits (see §3).
 - **Soft-death roguelite meta:** ship upgrades and war credits persist; each death starts a new rookie pilot in the same War.
