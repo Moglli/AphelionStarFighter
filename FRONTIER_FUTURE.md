@@ -233,10 +233,13 @@ Existing data tables (PERKS, TRAITS, BOONS, COMMANDER_PERKS, SERVICE_UPGRADES, E
 
 **Why we fight them (in-fiction):** Existential. They eat worlds. No diplomacy is possible because there's no one to talk to. A perfect xenophobic target — easy to hate, no moral ambiguity.
 
-**Combat feel — direction:** *(to flesh out)*
-- Quantity over quality. Player feels like they're holding back a tide.
-- "Bug hunt" energy: sweeping fire, target-rich, panic management.
-- No comms warfare — they don't broadcast, don't taunt, just close and consume.
+**Combat feel — provisional direction (pending combat-mechanics study):**
+- "Hunter becomes hunted" atmospheric pattern. Encounters often staged in dense terrain — asteroid belts, debris fields, dead-hulk graveyards.
+- Drones nest in cover; player flushes them out room-by-room.
+- Brood-ships are anchored deep, protected by environmental hazards.
+- Slower-paced, environment-driven, exploration-tinged tension.
+- Still no comms warfare — Swarm doesn't speak. Wing chatter carries the atmosphere instead (nervous wingmates, dread in their voices).
+- *To verify against existing combat mechanics.*
 
 ### 7.3 Launch antagonist B — The Saurian Empire (proud reptilian warriors)
 
