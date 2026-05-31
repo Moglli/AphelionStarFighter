@@ -11490,6 +11490,269 @@ html, body {
 }
 .battleplan-launch-btn:active { transform: scale(0.985); }
 
+/* --- Frontier hub (NEW War-based Frontier — FRONTIER_FUTURE.md) ------- */
+/* Column screen bound to the menu-root viewport (same flex trap as
+   battleplan): header + scrolling body + sticky footer. Republic amber. */
+.menu-screen.menu-frontier {
+  flex-direction: column !important;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  background: linear-gradient(180deg, #0b0703 0%, #161009 100%);
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  position: relative; /* anchors the absolute .fh-editor-host bottom sheet */
+}
+.frontier-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #3a2a12;
+  background: #0a0703;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.frontier-header h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 14px;
+  letter-spacing: 0.16em;
+  color: #fc8;
+}
+.frontier-career {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  min-width: 120px;
+}
+.frontier-career .fh-rank { font-size: 12px; color: #fed; font-weight: 700; letter-spacing: 0.08em; }
+.frontier-career .fh-tier { color: #c95; font-weight: 400; }
+.frontier-career .fh-xpbar {
+  width: 110px; height: 5px; background: #2a1d0c; border-radius: 3px; overflow: hidden;
+}
+.frontier-career .fh-xpfill { height: 100%; background: linear-gradient(90deg, #c84, #fd9); }
+.frontier-career .fh-credits { font-size: 11px; color: #fd9; }
+.frontier-career .fh-credits .cr { color: #a87; font-size: 9px; }
+
+.frontier-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+  padding-bottom: 110px;
+}
+.fh-war-select { display: flex; gap: 10px; margin-bottom: 16px; }
+.fh-war-card {
+  flex: 1;
+  text-align: left;
+  padding: 12px;
+  background: #160f06;
+  border: 1px solid #3a2a12;
+  border-radius: 10px;
+  color: #fed;
+  cursor: pointer;
+}
+.fh-war-card.active { border-color: #fc8; background: #241606; box-shadow: 0 0 0 1px #c84 inset; }
+.fh-war-card .fh-war-name { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
+.fh-war-card .fh-war-enemy { font-size: 10px; color: #c95; margin-top: 3px; letter-spacing: 0.08em; }
+.fh-war-card .fh-war-prog { font-size: 10px; color: #9a7; margin-top: 6px; }
+
+.fh-war-pitch { font-size: 12px; color: #cdb; line-height: 1.5; margin-bottom: 8px; }
+.fh-war-geo { font-size: 10px; color: #a87; letter-spacing: 0.04em; margin-bottom: 14px; }
+.fh-section-title {
+  font-size: 11px; letter-spacing: 0.18em; color: #fc8;
+  margin: 14px 0 8px; border-bottom: 1px solid #2a1d0c; padding-bottom: 5px;
+}
+.fh-mission-list { display: flex; flex-direction: column; gap: 8px; }
+.fh-mission {
+  display: flex; align-items: flex-start; gap: 10px; text-align: left;
+  padding: 10px 12px; background: #130d05; border: 1px solid #2e2210;
+  border-radius: 8px; color: #fed; cursor: pointer; width: 100%;
+}
+.fh-mission.selected { border-color: #fd9; background: #241606; box-shadow: 0 0 0 1px #c84 inset; }
+.fh-mission.fh-locked { opacity: 0.45; cursor: not-allowed; }
+.fh-mission.fh-status-next { border-color: #6a4; }
+.fh-mission-badge { font-size: 14px; line-height: 1.4; color: #fc8; flex-shrink: 0; }
+.fh-mission.fh-status-next .fh-mission-badge { color: #8e6; }
+.fh-mission-no { font-size: 10px; color: #c95; flex-shrink: 0; width: 32px; line-height: 1.4; letter-spacing: 0.06em; }
+.fh-mission-text { display: flex; flex-direction: column; gap: 2px; }
+.fh-mission-title { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+.fh-mission-sum { font-size: 10px; color: #a98; line-height: 1.4; }
+
+.fh-pilot-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.fh-pilot-chip {
+  padding: 8px 14px; background: #160f06; border: 1px solid #3a2a12;
+  border-radius: 8px; color: #fed; font-size: 11px; letter-spacing: 0.08em; cursor: pointer;
+}
+.fh-pilot-chip.active { border-color: #fc8; background: #241606; color: #fff; }
+.fh-cmd-chip { color: #8cf; border-color: #2c4670; letter-spacing: 0.1em; }
+.fh-cmd-chip.active { color: #fff; border-color: #8cf; background: #0e2238; }
+
+.fh-stat-summary { float: right; font-weight: 400; letter-spacing: 0; }
+.fh-stat { color: #8e6; font-size: 10px; margin-left: 8px; }
+.fh-loadout { display: flex; flex-direction: column; gap: 6px; }
+.fh-lo-row {
+  display: grid; grid-template-columns: 96px 1fr auto; gap: 4px 10px; align-items: baseline;
+  padding: 8px 10px; background: #130d05; border: 1px solid #2e2210; border-radius: 8px;
+  width: 100%; text-align: left; cursor: pointer; color: #fed;
+}
+.fh-lo-row:active { transform: scale(0.992); }
+.fh-lo-empty { opacity: 0.6; }
+.fh-lo-slot { font-size: 10px; letter-spacing: 0.1em; color: #c95; }
+.fh-lo-mod { font-size: 12px; font-weight: 700; }
+.fh-lo-edit { font-size: 12px; color: #a87; }
+.fh-lo-affixes { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; }
+.fh-aff { font-size: 10px; color: #9c8; }
+.fh-aff-future { color: #76808a; }
+.fh-uniq { width: 100%; font-size: 10px; color: #f0902c; margin-top: 2px; }
+.fh-stash-bar { margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fh-shop-btn {
+  padding: 9px 14px; background: #1c1409; border: 1px solid #c84; border-radius: 8px;
+  color: #fc8; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; cursor: pointer;
+}
+.fh-shop-btn:active { transform: scale(0.99); }
+.fh-stash-line { font-size: 11px; letter-spacing: 0.1em; color: #a87; }
+.fh-shop-tag { font-size: 9px; letter-spacing: 0.08em; color: #a87; text-transform: uppercase; }
+.fh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.fh-citations-btn { color: #ffd680; border-color: #5a4a1a; }
+.fh-news-btn { color: #8cf; border-color: #2c4670; }
+.fh-chests-btn { color: #d9a8ff; border-color: #5a3a78; }
+
+/* Premium caches sheet */
+.fh-reveal { padding: 12px; margin-bottom: 10px; background: #1a1030; border: 1px solid #7a4ec0; border-radius: 10px; text-align: center; }
+.fh-reveal-tag { font-size: 9px; letter-spacing: 0.2em; color: #c9a8ff; }
+.fh-reveal-name { font-size: 15px; font-weight: 700; margin: 3px 0; }
+.fh-cand-sub { font-size: 9px; letter-spacing: 0.06em; color: #a87; text-transform: uppercase; }
+.fh-chest { padding: 10px 12px; background: #160f06; border: 1px solid #2e2210; border-radius: 8px; margin-bottom: 8px; }
+.fh-chest-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fh-chest-name { font-size: 13px; font-weight: 700; color: #e6d4ff; letter-spacing: 0.04em; }
+.fh-chest-top .fh-btn { flex: 0 0 auto; min-width: 120px; }
+.fh-chest-odds { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 7px; }
+.fh-odd { font-size: 10px; }
+.fh-chest-pity { margin-top: 8px; font-size: 11px; color: #c9a8ff; letter-spacing: 0.04em; }
+.fh-chest-note { margin-top: 6px; font-size: 9.5px; color: #8a7da0; line-height: 1.5; }
+
+/* War-state ribbon (chapter spine + completion) */
+.fh-ribbon { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0 14px; padding: 8px 12px; background: #130d05; border: 1px solid #2e2210; border-radius: 8px; }
+.fh-rib-spine { display: flex; align-items: center; }
+.fh-rib-node { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 1px solid #3a2a12; color: #a87; background: #1a1206; }
+.fh-rib-done { background: #2a3a12; border-color: #6a4; color: #cf9; }
+.fh-rib-next { border-color: #fc8; color: #fc8; box-shadow: 0 0 0 1px #c84 inset; }
+.fh-rib-link { width: 14px; height: 2px; background: #3a2a12; }
+.fh-rib-stat { font-size: 11px; letter-spacing: 0.08em; color: #fd9; white-space: nowrap; }
+
+/* Newsreel feed (bottom sheet) */
+.fh-news-item { padding: 10px 12px; background: #0c1322; border: 1px solid #1f2c44; border-radius: 8px; margin-bottom: 8px; }
+.fh-news-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; color: #bdf; letter-spacing: 0.04em; }
+.fh-news-who { font-size: 9px; font-weight: 400; color: #7a90b0; align-self: center; white-space: nowrap; }
+.fh-news-body { font-size: 11px; color: #b8c6da; line-height: 1.5; margin-top: 5px; }
+.fh-news-locked { font-size: 10px; color: #6a7da0; text-align: center; padding: 8px 4px; }
+
+/* Result-screen incoming transmission */
+.spoils-txs { display: flex; flex-direction: column; gap: 8px; }
+.spoils-tx { padding: 9px 11px; background: #0c1322; border: 1px solid #1f2c44; border-radius: 8px; }
+.spoils-tx-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 700; color: #bdf; }
+.spoils-tx-who { font-size: 9px; font-weight: 400; color: #7a90b0; align-self: center; }
+.spoils-tx-body { font-size: 11px; color: #b8c6da; line-height: 1.5; margin-top: 4px; }
+
+/* Citations / decorations wall (bottom sheet, reuses fh-editor-* shell) */
+.fh-cite { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; background: #130d05; border: 1px solid #2e2210; border-radius: 8px; opacity: 0.6; }
+.fh-cite.earned { opacity: 1; border-color: #5a4a1a; background: #16140a; }
+.fh-cite-medal { font-size: 15px; color: #4a4636; flex-shrink: 0; line-height: 1.3; }
+.fh-cite.earned .fh-cite-medal { color: #ffd680; }
+.fh-cite-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.fh-cite-name { font-size: 12px; font-weight: 700; color: #fed; }
+.fh-cite.earned .fh-cite-name { color: #ffe7a8; }
+.fh-cite-desc { font-size: 10px; color: #a87; }
+.fh-cite-badge { font-size: 9px; letter-spacing: 0.08em; color: #ffd680; border: 1px solid #5a4a1a; border-radius: 4px; padding: 2px 5px; align-self: center; }
+
+/* Loadout slot editor — bottom sheet over the hub */
+.fh-editor-host { position: absolute; inset: 0; z-index: 5; }
+.fh-editor-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.55); }
+.fh-editor-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  max-height: 72%; display: flex; flex-direction: column;
+  background: #100a04; border-top: 1.5px solid #c84;
+  border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
+}
+.fh-editor-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid #2e2210; flex-shrink: 0;
+  font-size: 12px; letter-spacing: 0.16em; color: #fc8;
+}
+.fh-editor-close {
+  width: 30px; height: 30px; background: transparent; border: 1px solid #3a2a12;
+  border-radius: 8px; color: #fed; font-size: 14px; cursor: pointer;
+}
+.fh-editor-list { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 10px; }
+.fh-editor-empty { font-size: 12px; color: #a87; padding: 16px 4px; text-align: center; }
+.fh-cand { padding: 10px 12px; background: #160f06; border: 1px solid #2e2210; border-radius: 8px; }
+.fh-cand.equipped { border-color: #6a4; background: #16170a; }
+.fh-cand-top { display: flex; align-items: center; justify-content: space-between; }
+.fh-cand-name { font-size: 12px; font-weight: 700; }
+.fh-fav { background: transparent; border: none; color: #5a5042; font-size: 16px; cursor: pointer; padding: 0 4px; }
+.fh-fav.on { color: #fd9; }
+.fh-cand-affixes { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; }
+.fh-cand-actions { display: flex; gap: 8px; margin-top: 6px; }
+.fh-btn {
+  flex: 1; padding: 9px; border-radius: 8px; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.08em; cursor: pointer; background: #1c1409; border: 1px solid #3a2a12; color: #fed;
+}
+.fh-btn-go { background: linear-gradient(180deg, #c84 0%, #a62 100%); border-color: #fc8; color: #fff; }
+.fh-btn-danger { background: #2a1410; border-color: #843; color: #f99; }
+
+.frontier-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px env(safe-area-inset-bottom);
+  background: #0a0703;
+  border-top: 1px solid #3a2a12;
+  z-index: 2;
+}
+.frontier-launch-hint { flex: 1; font-size: 11px; color: #a98; letter-spacing: 0.06em; }
+.frontier-footer .battleplan-launch-btn { width: auto; min-width: 160px; }
+.battleplan-launch-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Play-hub beta card accent for FRONTIER: WARS */
+.playhub-card-wars .playhub-card-icon { color: #fc8; }
+
+/* Frontier post-battle WAR SPOILS block (rewards + loot drops) */
+.spoils-block { margin: 10px 0 6px; }
+.spoils-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 12px; }
+.spoils-chip {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #fed;
+  padding: 5px 10px; background: #1c1409; border: 1px solid #c84; border-radius: 7px;
+}
+.spoils-chip.spoils-promo { background: #16170a; border-color: #8e6; color: #cf9; }
+.spoils-drops-title { font-size: 10px; letter-spacing: 0.16em; color: #c95; margin: 8px 0 6px; }
+.spoils-drops { display: flex; flex-direction: column; gap: 8px; }
+.spoils-drop { padding: 9px 11px; background: #130d05; border: 1px solid #2e2210; border-radius: 8px; }
+.spoils-drop-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.spoils-drop-name { font-size: 12px; font-weight: 700; }
+.spoils-badge { font-size: 9px; letter-spacing: 0.08em; color: #8e6; border: 1px solid #4a5; border-radius: 4px; padding: 2px 5px; }
+.spoils-badge.spoils-stashed { color: #a87; border-color: #543; }
+.spoils-drop-sub { font-size: 9px; letter-spacing: 0.06em; color: #a87; text-transform: uppercase; margin-top: 2px; }
+.spoils-drop-affixes { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; }
+.spoils-aff { font-size: 10px; color: #9c8; }
+.spoils-aff-future { color: #76808a; }
+.spoils-uniq { width: 100%; font-size: 10px; color: #f0902c; margin-top: 2px; }
+.spoils-nodrops { font-size: 11px; color: #a87; padding: 4px 0; }
+.spoils-medals { display: flex; flex-direction: column; gap: 6px; }
+.spoils-medal { display: flex; flex-direction: column; padding: 8px 11px; background: #16140a; border: 1px solid #5a4a1a; border-radius: 8px; color: #ffd680; }
+.spoils-medal-name { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+.spoils-medal-desc { font-size: 10px; color: #b9a96a; margin-top: 2px; }
+
 /* --- Fleet Plan overlay (all non-Frontier modes) --------------------- */
 /* Reuses the Battle Plan header/body/footer + bp-* chrome. The screen
    itself needs the explicit column direction (CLAUDE.md flex trap) and a

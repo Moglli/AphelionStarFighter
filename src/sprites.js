@@ -164,6 +164,58 @@ function applyRaceBaseFill(ctx, race, R, hullPath, side) {
     grad.addColorStop(1.0, "rgba(80, 240, 180, 0)");
     ctx.fillStyle = grad;
     ctx.fillRect(-R, -R * 0.3, R * 2, R * 0.6);
+  } else if (race === "brood") {
+    // Chitinous green-black carapace with a toxic bioluminescent sheen
+    // — alien, wet, organic. Cousin of the Thren flesh look but colder
+    // and more insectoid.
+    ctx.fillStyle = "rgba(18, 30, 12, 0.72)";
+    ctx.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
+    const sheen = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 1.1);
+    sheen.addColorStop(0.0, "rgba(150, 230, 70, 0.0)");
+    sheen.addColorStop(0.5, "rgba(130, 220, 60, 0.18)");
+    sheen.addColorStop(1.0, "rgba(180, 250, 110, 0.30)");
+    ctx.fillStyle = sheen;
+    ctx.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
+    // Segmented carapace bands across the spine — reads as exoskeleton.
+    ctx.fillStyle = "rgba(10, 18, 8, 0.45)";
+    for (let i = -2; i <= 2; i++) {
+      ctx.fillRect(i * R * 0.34 - R * 0.02, -R * 0.95, R * 0.05, R * 1.9);
+    }
+  } else if (race === "saurian") {
+    // Burnished bronze war-plate with a jade undertone and a dark keel
+    // seam — ancient, ornamented, armoured.
+    ctx.fillStyle = "rgba(120, 80, 28, 0.48)";
+    ctx.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
+    const jade = ctx.createLinearGradient(0, -R * 0.5, 0, R * 0.5);
+    jade.addColorStop(0.0, "rgba(90, 150, 90, 0.0)");
+    jade.addColorStop(0.5, "rgba(120, 180, 110, 0.16)");
+    jade.addColorStop(1.0, "rgba(90, 150, 90, 0.0)");
+    ctx.fillStyle = jade;
+    ctx.fillRect(-R * 1.3, -R * 0.5, R * 2.6, R);
+    // Heavy keel seam down the spine.
+    ctx.fillStyle = "rgba(24, 14, 6, 0.55)";
+    ctx.fillRect(-R, -R * 0.045, R * 2, R * 0.09);
+  } else if (race === "synthetics") {
+    // Brushed-steel underlay + a cold cyan circuit sheen + a faint grid,
+    // so the (randomly-shaped) hull still reads as machined metal, not
+    // organic or armoured.
+    ctx.fillStyle = "rgba(22, 34, 46, 0.62)";
+    ctx.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
+    const sheen = ctx.createLinearGradient(-R, -R, R, R);
+    sheen.addColorStop(0.0, "rgba(150, 235, 255, 0.0)");
+    sheen.addColorStop(0.5, "rgba(150, 235, 255, 0.16)");
+    sheen.addColorStop(1.0, "rgba(150, 235, 255, 0.0)");
+    ctx.fillStyle = sheen;
+    ctx.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
+    // Thin circuit grid lines.
+    ctx.strokeStyle = "rgba(120, 210, 240, 0.18)";
+    ctx.lineWidth = Math.max(0.5, R * 0.012);
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath(); ctx.moveTo(i * R * 0.4, -R); ctx.lineTo(i * R * 0.4, R); ctx.stroke();
+    }
+    // Bright cyan spine seam.
+    ctx.fillStyle = "rgba(170, 245, 255, 0.5)";
+    ctx.fillRect(-R, -R * 0.03, R * 2, R * 0.06);
   }
   ctx.restore();
 }
@@ -345,6 +397,86 @@ function drawRaceDetails(ctx, race, klass, R, accent) {
       ctx.fillStyle = halo;
       ctx.fillRect(-R * 0.1, -R * 0.4, R * 0.7, R * 0.8);
     }
+  } else if (race === "brood") {
+    // Segmented exoskeleton — transverse carapace ridges bowing across
+    // the body, tallest amidships. Reads as insectoid plating, not the
+    // Thren tissue/vein look.
+    ctx.strokeStyle = "rgba(8, 16, 6, 0.6)";
+    ctx.lineWidth = Math.max(0.8, R * 0.03);
+    ctx.lineCap = "round";
+    const segN = klass === "fighter" ? 3 : (klass === "battleship" || klass === "carrier") ? 7 : 5;
+    for (let i = 0; i < segN; i++) {
+      const f = i / (segN - 1 || 1);
+      const x = R * 0.5 - R * 1.2 * f;
+      const h = R * (0.62 - 0.34 * Math.abs(f - 0.5) * 2); // taller mid-body
+      ctx.beginPath();
+      ctx.moveTo(x, -h);
+      ctx.quadraticCurveTo(x + R * 0.12, 0, x, h);
+      ctx.stroke();
+    }
+    // Chitin barbs — small accent spikes jutting from the wing edges.
+    ctx.fillStyle = accent;
+    ctx.globalAlpha = 0.6;
+    const barbN = klass === "fighter" ? 2 : 4;
+    for (let i = 0; i < barbN; i++) {
+      const x = -R * 0.32 + R * 0.7 * (i / (barbN - 1 || 1));
+      for (const s of [1, -1]) {
+        const ye = s * R * 0.46;
+        ctx.beginPath();
+        ctx.moveTo(x - R * 0.045, ye * 0.72);
+        ctx.lineTo(x, ye);
+        ctx.lineTo(x + R * 0.045, ye * 0.72);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+    // Compound-eye cluster near the bow — grouped bioluminescent nodes
+    // (not the evenly-spaced spine nodes of the Thren).
+    const eyes = [[R * 0.55, 0], [R * 0.42, R * 0.10], [R * 0.42, -R * 0.10], [R * 0.30, 0]];
+    const eyeN = klass === "fighter" ? 2 : 4;
+    for (let i = 0; i < eyeN; i++) {
+      const [ex, ey] = eyes[i];
+      const er = Math.max(1.0, R * 0.035);
+      const halo = ctx.createRadialGradient(ex, ey, 0, ex, ey, er * 3);
+      halo.addColorStop(0, "rgba(170, 255, 90, 0.6)");
+      halo.addColorStop(1, "rgba(170, 255, 90, 0)");
+      ctx.fillStyle = halo;
+      ctx.fillRect(ex - er * 3, ey - er * 3, er * 6, er * 6);
+      ctx.fillStyle = "rgba(215, 255, 165, 0.95)";
+      ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (race === "saurian") {
+    // Overlapping scale-plate banding — rows of shallow arcs like reptile
+    // scales. Heavier, more ornamented than the Hegemony chevrons.
+    ctx.strokeStyle = "rgba(30, 18, 6, 0.5)";
+    ctx.lineWidth = Math.max(0.7, R * 0.02);
+    const rows = klass === "fighter" ? 2 : (klass === "battleship" || klass === "carrier") ? 5 : 3;
+    for (let r = 0; r < rows; r++) {
+      const yc = (-rows / 2 + r + 0.5) * (R * 1.0 / rows);
+      for (let c = 0; c < 4; c++) {
+        const xc = R * 0.45 - c * R * 0.32;
+        ctx.beginPath();
+        ctx.arc(xc, yc, R * 0.15, Math.PI * 0.15, Math.PI * 0.85);
+        ctx.stroke();
+      }
+    }
+    // Dorsal ridge crest down the spine.
+    ctx.strokeStyle = accent;
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = Math.max(1, R * 0.03);
+    ctx.beginPath(); ctx.moveTo(R * 0.6, 0); ctx.lineTo(-R * 0.7, 0); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // Ornamental gilt notch at the bow.
+    ctx.fillStyle = "rgba(255, 225, 160, 0.5)";
+    ctx.beginPath();
+    ctx.moveTo(R * 0.5, -R * 0.05); ctx.lineTo(R * 0.72, 0); ctx.lineTo(R * 0.5, R * 0.05);
+    ctx.closePath(); ctx.fill();
+    // House banner heraldry — capitals carry a House sigil amidships.
+    if (klass === "frigate" || klass === "cruiser" || klass === "battleship" || klass === "carrier") {
+      const house = { frigate: "hooked-talon", cruiser: "barbed-sun", battleship: "horned-serpent", carrier: "crashing-wave" }[klass];
+      drawSaurianSigil(ctx, house, R);
+    }
   } else {
     // Terran — a single thin spine highlight and an accent flash near
     // the bow. Cleanest read of the four; the "default" baseline.
@@ -355,6 +487,55 @@ function drawRaceDetails(ctx, race, klass, R, accent) {
     ctx.fillRect(R * 0.3, -R * 0.07, R * 0.3, R * 0.14);
     ctx.globalAlpha = 1;
   }
+}
+
+// Saurian House heraldry — a small emblem on a dark backing disc, drawn
+// amidships on capital hulls. One sigil per House (FRONTIER_FUTURE.md §8.3
+// SAURIAN_HOUSES). Capital class → House is fixed in drawRaceDetails so a
+// fleet shows a spread of banners. Sprite-baked (per race/klass), so every
+// ship of a class flies the same House — cheap, recognisable, collectible.
+function drawSaurianSigil(ctx, house, R) {
+  const s = R * 0.26;
+  ctx.save();
+  ctx.translate(-R * 0.05, 0);
+  ctx.fillStyle = "rgba(10, 8, 4, 0.6)";
+  ctx.beginPath(); ctx.arc(0, 0, s * 1.15, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(255, 215, 150, 0.9)";
+  ctx.fillStyle = "rgba(255, 215, 150, 0.92)";
+  ctx.lineWidth = Math.max(0.8, R * 0.02);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  if (house === "barbed-sun") {
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.38, 0, Math.PI * 2); ctx.fill();
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * s * 0.5, Math.sin(a) * s * 0.5);
+      ctx.lineTo(Math.cos(a) * s, Math.sin(a) * s);
+      ctx.stroke();
+    }
+  } else if (house === "horned-serpent") {
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.72, Math.PI * 0.2, Math.PI * 1.8); ctx.stroke();
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const a = i / 4 * Math.PI * 2 + Math.PI / 4;
+      ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * s * 0.46, Math.sin(a) * s * 0.46);
+    }
+    ctx.stroke();
+  } else if (house === "hooked-talon") {
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.78, Math.PI * 0.35, Math.PI * 1.45); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(s * 0.22, -s * 0.42);
+    ctx.quadraticCurveTo(s * 0.72, 0, s * 0.1, s * 0.5);
+    ctx.stroke();
+  } else { // crashing-wave (House Drazn)
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.8, s * 0.2);
+    ctx.quadraticCurveTo(-s * 0.2, -s * 0.6, s * 0.3, 0);
+    ctx.quadraticCurveTo(s * 0.6, s * 0.35, s * 0.85, -s * 0.1);
+    ctx.stroke();
+    ctx.beginPath(); ctx.arc(s * 0.32, 0, s * 0.16, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawSchematic(ctx, race, klass, side, R) {
@@ -681,6 +862,42 @@ export const FACTION_CELL_STATS = {
     carrier:    { hp: 18, armor: 0.10 },
     station:    { hp: 18, armor: 0.20 },
   },
+  // Brood: fragile chitin on drones, but the brood-ships/hive are
+  // heavily carapaced (they have to tank focus fire while hatching).
+  brood: {
+    armorName: "Living Chitin",
+    fighter:    { hp:  6, armor: 0.00 },
+    bomber:     { hp:  9, armor: 0.00 },
+    frigate:    { hp: 12, armor: 0.05 },
+    cruiser:    { hp: 16, armor: 0.12 },
+    battleship: { hp: 22, armor: 0.30 },   // hive-ship — meant to be ground down slowly
+    carrier:    { hp: 24, armor: 0.28 },   // brood-ship carapace
+    station:    { hp: 20, armor: 0.20 },
+  },
+  // Saurian: the quality faction — hardened plate across the board,
+  // tracking the Hegemony tank profile a touch heavier on capitals.
+  saurian: {
+    armorName: "Drathic War-Plate",
+    fighter:    { hp: 15, armor: 0.10 },
+    bomber:     { hp: 18, armor: 0.12 },
+    frigate:    { hp: 24, armor: 0.22 },
+    cruiser:    { hp: 30, armor: 0.32 },
+    battleship: { hp: 36, armor: 0.44 },
+    carrier:    { hp: 30, armor: 0.36 },
+    station:    { hp: 42, armor: 0.45 },
+  },
+  // The Assembly: modest plating (their resilience is shields/regen, not
+  // armor) — sits between Terran and Hegemony.
+  synthetics: {
+    armorName: "Self-Forged Alloy",
+    fighter:    { hp: 12, armor: 0.05 },
+    bomber:     { hp: 14, armor: 0.05 },
+    frigate:    { hp: 18, armor: 0.15 },
+    cruiser:    { hp: 24, armor: 0.22 },
+    battleship: { hp: 28, armor: 0.32 },
+    carrier:    { hp: 26, armor: 0.28 },
+    station:    { hp: 34, armor: 0.40 },
+  },
 };
 
 // Resolve block stats for a given faction + class. Falls back to Terran
@@ -698,6 +915,9 @@ const BLOCK_PALETTE = {
   reaver:    { r: 85,  g: 20,  b: 18  },
   voidsworn: { r: 12,  g: 20,  b: 60  },
   thren:     { r: 20,  g: 65,  b: 28  },
+  brood:     { r: 38,  g: 62,  b: 18  },   // dark moss chitin
+  saurian:   { r: 62,  g: 44,  b: 18  },   // bronze-bark plate
+  synthetics:{ r: 34,  g: 56,  b: 78  },   // cool brushed steel
 };
 
 // Module-type accent color mixed into system cells so you can read which
@@ -813,7 +1033,7 @@ export function rebuildBlockCanvas(ship) {
   // is gated to strike craft so we don't add a fat outline to a
   // battleship at high zoom.
   if (ship.klass === "fighter" || ship.klass === "bomber") {
-    const hull = getHull(ship.race, ship.klass);
+    const hull = ship.hullPoly || getHull(ship.race, ship.klass);
     const R = (ship.spec && ship.spec.radius) || 24;
     if (hull && hull.length > 2) {
       // Dark halo first (3-4px), then a side-tinted line on top so the
@@ -839,7 +1059,50 @@ export function rebuildBlockCanvas(ship) {
       bctx.stroke();
     }
   }
+
+  // Per-race identity overlay on the block hull (the in-game render path —
+  // the schematic-sprite greeble in drawRaceDetails only shows on the
+  // no-cell fallback). Brood eye-glow + Saurian crest & House heraldry.
+  if (ship.race === "brood" || ship.race === "saurian") {
+    drawBlockRaceDetails(bctx, ship, halfX, halfY);
+  }
   ship.blockDirty = false;
+}
+
+// Race signature drawn ON TOP of the cell grid (block canvas). Translate
+// to the ship's local origin, then draw in radius-space like the sprite
+// greeble. Brood: bioluminescent compound-eye cluster near the bow.
+// Saurian: dorsal ridge crest + House banner heraldry on capitals
+// (FRONTIER_FUTURE.md §8.3 — the committed "banner on capitals" read).
+function drawBlockRaceDetails(bctx, ship, halfX, halfY) {
+  const R = (ship.spec && ship.spec.radius) || 24;
+  const klass = ship.klass;
+  bctx.save();
+  bctx.translate(halfX + 1, halfY + 1);
+  if (ship.race === "brood") {
+    const eyes = [[R * 0.55, 0], [R * 0.42, R * 0.10], [R * 0.42, -R * 0.10], [R * 0.30, 0]];
+    const eyeN = klass === "fighter" ? 2 : (klass === "battleship" || klass === "carrier") ? 4 : 3;
+    for (let i = 0; i < eyeN; i++) {
+      const [ex, ey] = eyes[i];
+      const er = Math.max(1.2, R * 0.04);
+      const halo = bctx.createRadialGradient(ex, ey, 0, ex, ey, er * 3.2);
+      halo.addColorStop(0, "rgba(180, 255, 100, 0.75)");
+      halo.addColorStop(1, "rgba(180, 255, 100, 0)");
+      bctx.fillStyle = halo;
+      bctx.fillRect(ex - er * 3.2, ey - er * 3.2, er * 6.4, er * 6.4);
+      bctx.fillStyle = "rgba(225, 255, 180, 0.95)";
+      bctx.beginPath(); bctx.arc(ex, ey, er, 0, Math.PI * 2); bctx.fill();
+    }
+  } else if (ship.race === "saurian") {
+    bctx.strokeStyle = "rgba(255, 210, 140, 0.55)";
+    bctx.lineWidth = Math.max(1, R * 0.025);
+    bctx.beginPath(); bctx.moveTo(R * 0.55, 0); bctx.lineTo(-R * 0.62, 0); bctx.stroke();
+    if (klass === "frigate" || klass === "cruiser" || klass === "battleship" || klass === "carrier") {
+      const house = { frigate: "hooked-talon", cruiser: "barbed-sun", battleship: "horned-serpent", carrier: "crashing-wave" }[klass];
+      drawSaurianSigil(bctx, house, R);
+    }
+  }
+  bctx.restore();
 }
 
 // BFS from the core cell through 4-connected non-dead cells. Any cell not
@@ -912,7 +1175,7 @@ function pointInHull(poly, px, py) {
 // size is R*2 / cols (and the same on the rows axis).
 //
 // Returns null when the class has no entry in CELL_GRID (defensive).
-export function buildCells(klass, R, race = "terran") {
+export function buildCells(klass, R, race = "terran", polyOverride = null) {
   const spec = (CELL_GRID_OVERRIDES[race] && CELL_GRID_OVERRIDES[race][klass]) || CELL_GRID[klass];
   if (!spec) return null;
   const cols = spec.cols;
@@ -921,7 +1184,11 @@ export function buildCells(klass, R, race = "terran") {
   const cellHpMax = blockStats.hp;
   const cellArmor = blockStats.armor;
   const cellHullCost = CELL_HULL_COST[klass] || 0.5;
-  const hull = getHull(race, klass);
+  // polyOverride lets a ship carry a custom (e.g. procedurally generated)
+  // silhouette — the cell grid is culled to whatever hull it's given,
+  // so the rendered block-hull IS the override. Falls back to the
+  // canonical hand-authored hull.
+  const hull = polyOverride || getHull(race, klass);
   // Per-axis cell size. The X span is fixed at 2R (hull |x| ≤ 1). The Y
   // span must cover the hull's ACTUAL half-height: many non-Terran
   // cruisers / battleships / bombers reach |y| ≈ 0.85–0.95, well past the

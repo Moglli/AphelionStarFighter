@@ -397,9 +397,170 @@ export const RACES = {
       ],
     },
   },
+
+  // ===================================================================
+  // NEW War-based Frontier antagonists (FRONTIER_FUTURE.md §7). Path A
+  // engine-fit: Brood = Reaver-derived fragile-fast-swarm; Saurian =
+  // Hegemony-derived quality-over-quantity. Enemy-only (spawned red-side
+  // via frontier/wars.js#FACTION_RACE) — not added to player-facing
+  // unlock lists. RACE_KEYS auto-includes them, so sprites prebake and
+  // they're also selectable in skirmish/custom (harmless bonus).
+  // ===================================================================
+  brood: {
+    key: "brood",
+    name: "The Brood",
+    tagline: "Devouring swarm",
+    accent: "#ad5",                 // acid bio-green
+    // The Brood is an organic hive — NO energy shields anywhere. They
+    // survive on living chitin (per-cell armor in FACTION_CELL_STATS) +
+    // raw hull mass alone. `shield: null` is load-bearing: it must
+    // override the base class shield (deepMerge assigns null through), so
+    // shieldMax resolves to 0 AND the shield-generator modules drop out
+    // (they gate on `!!spec.shield` in modules.js). EVERY class needs the
+    // explicit null — without it (e.g. the cruiser) the base class shield
+    // is inherited.
+    //
+    // Drone: weakest hull in the game, fastest, suicidal-aggressive
+    // (Frontier defaults its stance to CHARGE). Anemic guns — the threat
+    // is the sheer number, hatched endlessly from brood-ships.
+    fighter: {
+      hp: 16, maxSpeed: 605, turnRate: 3.9,
+      shield: null,
+      weapon: { damage: 2.8, cooldown: 0.16, capacity: 18, reloadTime: 0.7 },
+    },
+    // The Brood fields ONLY drones (fighters) and brood-ships (carriers).
+    // NO bombers, frigates, cruisers, OR battleships — those classes are
+    // deliberately absent (no spec, never rostered, and the Frontier war
+    // filter folds them away — see mission.js FACTION_FIELDS). The
+    // brood-ship hatches fighters only.
+    //
+    // Brood-ship (carrier): heavy carapace, hatches drones at ~3× the
+    // Terran rate (Reaver carrier is 12s; Brood is 4.5s). Fighters only.
+    carrier: {
+      hp: 1600, maxSpeed: 32,
+      shield: null, armor: { max: 950 },
+      // bomber:0 is load-bearing — replenish DEEP-MERGES over the base
+      // carrier (which hatches bombers at 36s), so omitting `bomber` would
+      // let the base value survive. Explicit 0 = fighters only.
+      replenish: { fighter: 4.5, bomber: 0 },
+    },
+    // Brood-ships are GROWN, not built — each has a unique, randomly
+    // generated silhouette (shipgen.js via createShip's hullPoly path).
+    // Drones keep the fixed organic fighter hull (a swarm of identical
+    // grubs reads better than random noise). Listing more classes here
+    // makes them procedural too — that's how the future all-random
+    // faction opts in, with no core change.
+    proceduralHulls: ["carrier"],
+    // Pure swarm: drones + brood-ships. No bomber/frigate/cruiser/
+    // battleship entries.
+    roster: { fighter: 74, carrier: 6 },
+  },
+  saurian: {
+    key: "saurian",
+    name: "Var'sakh Dominion",
+    tagline: "Proud reptilian warriors",
+    accent: "#dc7",                 // burnished bronze
+    // Quality over quantity: each Saurian craft is significantly tougher
+    // and harder-hitting than its Terran counterpart. Fewer of them.
+    fighter: {
+      hp: 50, maxSpeed: 360, turnRate: 2.8,
+      shield: { max: 38, regen: 8, regenDelay: 3.2 },
+      weapon: { damage: 5.5, cooldown: 0.20 },
+    },
+    bomber: {
+      hp: 95, maxSpeed: 185, turnRate: 1.6,
+      shield: { max: 55 },
+      missilePods: { count: 2, damage: 70 },
+    },
+    frigate: {
+      hp: 200, maxSpeed: 108,
+      shield: { max: 130 }, armor: { max: 175, wearRate: 0.5 },
+    },
+    cruiser: {
+      hp: 580, maxSpeed: 62,
+      shield: { max: 340 }, armor: { max: 400, wearRate: 0.45 },
+      missilePods: { count: 3 },
+    },
+    // Banner-flagship: +~13% hull over the Hegemony battleship — the
+    // heaviest single hull the player faces short of a boss.
+    battleship: {
+      hp: 1700, maxSpeed: 27,
+      shield: { max: 800 }, armor: { max: 900, wearRate: 0.4 },
+      pdCannons: { count: 8 },
+    },
+    carrier: {
+      hp: 1500, maxSpeed: 34,
+      shield: { max: 700 }, armor: { max: 800 },
+    },
+    // Few but hard — the dark mirror of the Republic line.
+    roster: { fighter: 16, bomber: 4, frigate: 5, cruiser: 2, battleship: 1, carrier: 1 },
+  },
+
+  // ===================================================================
+  // The Assembly — a self-forging machine intelligence. It field-builds
+  // every hull on the spot from modular stock, so NO two ships look
+  // alike: ALL classes get a procedurally generated silhouette (the
+  // `proceduralHulls` list below + createShip's hullPoly path; the
+  // shipgen.js core is untouched). Mechanically the dark mirror of an
+  // organic faction: cold, precise, and RESILIENT via fast-regenerating
+  // shields (machine self-repair) rather than armor or numbers — its own
+  // niche vs Hegemony armor / Voidsworn mega-shields / Brood swarm.
+  // ===================================================================
+  synthetics: {
+    key: "synthetics",
+    name: "The Assembly",
+    tagline: "Self-forging machines",
+    accent: "#9ff",                  // icy machine cyan
+    fighter: {
+      hp: 40, maxSpeed: 430, turnRate: 3.1,
+      shield: { max: 32, regen: 14, regenDelay: 1.8 },
+      weapon: { damage: 4.2, cooldown: 0.17 },
+    },
+    bomber: {
+      hp: 95, maxSpeed: 200, turnRate: 1.7,
+      shield: { max: 48, regen: 10, regenDelay: 2.5 },
+      missilePods: { count: 2, damage: 55 },
+    },
+    frigate: {
+      hp: 170, maxSpeed: 120,
+      shield: { max: 140, regen: 20, regenDelay: 2.5 }, armor: { max: 70 },
+    },
+    cruiser: {
+      hp: 520, maxSpeed: 70,
+      shield: { max: 360, regen: 26, regenDelay: 3 }, armor: { max: 200 },
+      missilePods: { count: 3 },
+    },
+    battleship: {
+      hp: 1500, maxSpeed: 30,
+      shield: { max: 850, regen: 34, regenDelay: 3.5 }, armor: { max: 600 },
+      pdCannons: { count: 8 },
+    },
+    carrier: {
+      hp: 1450, maxSpeed: 36,
+      shield: { max: 750, regen: 30 }, armor: { max: 600 },
+      replenish: { fighter: 14.0 },
+    },
+    // EVERY combat class is procedurally hulled — the defining trait.
+    // (Station omitted: defend-mode only + no generateHull envelope; it
+    // falls back to the canonical hull, never seen in the War.)
+    proceduralHulls: ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"],
+    roster: { fighter: 22, bomber: 5, frigate: 4, cruiser: 2, battleship: 1, carrier: 1 },
+  },
 };
 
 export const RACE_KEYS = Object.keys(RACES);
+
+/**
+ * True if (race, klass) should get a procedurally-generated hull
+ * silhouette instead of the canonical hand-authored one. Pure faction
+ * DATA — the procedural CORE (shipgen.js) and createShip's override path
+ * are both generic, so opting a new faction/class in is just adding the
+ * class to that race's `proceduralHulls` list.
+ */
+export function isProceduralHull(race, klass) {
+  const r = RACES[race];
+  return !!(r && Array.isArray(r.proceduralHulls) && r.proceduralHulls.includes(klass));
+}
 
 // Non-linear hull-HP scaling by class tier. Capitals were too brittle —
 // a battleship would crumble in ~30 s of focused fire which made big

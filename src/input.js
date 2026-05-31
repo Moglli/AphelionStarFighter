@@ -39,6 +39,17 @@ import {
 } from "./fleetcommand.js";
 import { ADMIRAL_CLASSES } from "./modes/admiral.js";
 import { ESCORT_SIZE } from "./game.js";
+// NEW War-based Frontier (FRONTIER_FUTURE.md) — hub data sources.
+import { WARS, getWar, nextChapter } from "./frontier/wars.js";
+import * as frontierState from "./frontier/state.js";
+import * as frontierInv from "./frontier/inventory.js";
+import * as frontierShop from "./frontier/shop.js";
+import * as frontierAch from "./frontier/achievements.js";
+import * as frontierNews from "./frontier/newsreel.js";
+import * as frontierChests from "./frontier/chests.js";
+import { SLOTS_BY_CLASS, RARITY_BY_ID, RARITIES } from "./frontier/loot.js";
+// Rarity sort rank (common=0 … legendary=4) for the loadout editor list.
+const RARITY_ORDER = RARITIES.reduce((a, r, i) => { a[r.id] = i; return a; }, {});
 
 const DEADZONE = 0.15;
 
@@ -604,6 +615,12 @@ export class StartMenu {
     // Persisted in-memory across opens so the player's directive/wing
     // choices survive returning to the menu. Lazily seeded on first open.
     this._fleetPlanState = null;
+    // NEW War-based Frontier hub (FRONTIER_FUTURE.md). Selection state
+    // persists in-memory across opens. _pendingFrontierLaunch is drained
+    // by main.js#consumeFrontierLaunch to start the battle.
+    this.showFrontierHub = false;
+    this._frontierSel = { warId: null, missionType: null, missionId: null, pilotClass: null, commandMode: false, editSlot: null, shopOpen: false, citationsOpen: false, newsreelOpen: false, chestsOpen: false, lastChest: null };
+    this._pendingFrontierLaunch = null;
     // Shipyard overlay — design-your-own-ship meta-progression store.
     // Opens from the home screen card; closes back to home on save.
     this.showShipyard = false;
@@ -1063,6 +1080,7 @@ export class StartMenu {
     if (this.showSettings) screenName = 'settings';
     else if (this.showRefill) screenName = 'refill';
     else if (this.showFleetPlan) screenName = 'fleetPlan';
+    else if (this.showFrontierHub) screenName = 'frontierHub';
     else if (this.showCustom) screenName = 'custom';
     else if (this.showRunSetup) screenName = 'runSetup';
     else if (this.showPromotion) screenName = 'promotion';
@@ -2151,6 +2169,7 @@ export class StartMenu {
       shipyard: this._buildShipyardMenuState(),
       battlePlan: this._buildBattlePlanMenuState(),
       fleetPlan: this._buildFleetPlanMenuState(),
+      frontierHub: this.showFrontierHub ? this._buildFrontierHubMenuState() : null,
       factions: RACE_KEYS,
       factionMeta: meta ? Object.fromEntries(RACE_KEYS.map(k => [k, { wins: meta.runsWon }])) : {},
       frontierStatus,
@@ -2160,6 +2179,133 @@ export class StartMenu {
                   this.selectedMode === "roguelite" ? (run ? "RESUME CAMPAIGN" : "NEW CAMPAIGN") :
                   "DEPLOY",
     };
+  }
+
+  // Assemble the Frontier-hub menu state from the persistent career
+  // block + the in-memory selection. Seeds sensible selection defaults
+  // (active War, run's pilot class) so the hub opens usable.
+  _buildFrontierHubMenuState() {
+    const f = frontierState.getFrontier();
+    const prog = frontierState.currentTierProgress();
+    const pilotClasses = frontierState.pilotableNow();
+    const sel = this._frontierSel;
+    if (!sel.warId) sel.warId = f.activeWarId || (WARS[0] && WARS[0].id) || null;
+    if (!sel.pilotClass || !pilotClasses.includes(sel.pilotClass)) {
+      sel.pilotClass = (f.run && f.run.pilotClass && pilotClasses.includes(f.run.pilotClass))
+        ? f.run.pilotClass : pilotClasses[0];
+    }
+    const wars = WARS.map((w) => {
+      const ws = (f.wars && f.wars[w.id]) || { chaptersCompleted: 0, completed: false, sortiesFlown: 0 };
+      return {
+        id: w.id, codename: w.codename, enemyFaction: w.enemyFaction,
+        completed: !!ws.completed, chaptersCompleted: ws.chaptersCompleted || 0,
+        chaptersTotal: w.chapters.length, sortiesFlown: ws.sortiesFlown || 0,
+      };
+    });
+    let selectedWar = null;
+    const war = getWar(sel.warId);
+    if (war) {
+      const ws = (f.wars && f.wars[war.id]) || { chaptersCompleted: 0, kills: {} };
+      const done = ws.chaptersCompleted || 0;
+      let killCount = 0;
+      for (const v of Object.values(ws.kills || {})) killCount += v;
+      selectedWar = {
+        id: war.id, codename: war.codename, pitch: war.pitch, enemyFaction: war.enemyFaction,
+        staging: war.staging, finalTarget: war.geography.finalTarget,
+        chapters: war.chapters.map((c, i) => ({
+          id: c.id, title: c.title, summary: c.summary,
+          status: i < done ? "done" : (i === done ? "next" : "locked"),
+        })),
+        sorties: war.sorties.map((s) => ({ id: s.id, name: s.name, summary: s.summary })),
+        // War-state ribbon (§10.3): spine progress + completion% + kills.
+        completionPct: Math.round((done / war.chapters.length) * 100),
+        killCount,
+        warCompleted: !!ws.completed,
+      };
+    }
+    // Equipped loadout + aggregate stats for the selected pilot class.
+    const pc = sel.pilotClass;
+    const slots = SLOTS_BY_CLASS[pc] || [];
+    const lo = frontierInv.getLoadout(pc);
+    const stash = frontierInv.getStash();
+    const byId = new Map(stash.map((mm) => [mm.id, mm]));
+    const loadout = slots.map((sl) => {
+      const mod = lo[sl.key] ? byId.get(lo[sl.key]) : null;
+      return {
+        slot: sl.key, label: sl.label,
+        module: mod ? {
+          name: mod.name, rarity: mod.rarity,
+          color: (RARITY_BY_ID[mod.rarity] || {}).color || "#9aa3ad",
+          affixes: (mod.affixes || []).map((a) => ({ label: a.label, value: a.value, applied: a.applied })),
+          unique: mod.unique ? mod.unique.desc : null,
+        } : null,
+      };
+    });
+    const stats = frontierInv.loadoutStatsFor(pc);
+
+    // Slot editor (bottom sheet): when a loadout slot is open, list the
+    // stash modules valid for (pilot class, slot) + the currently
+    // equipped one, each with equip/salvage/favorite affordances.
+    let editor = null;
+    if (sel.editSlot) {
+      const sdef = slots.find((s) => s.key === sel.editSlot);
+      if (sdef) {
+        const equippedId = lo[sel.editSlot] || null;
+        const toView = (mod) => ({
+          id: mod.id, name: mod.name, rarity: mod.rarity,
+          color: (RARITY_BY_ID[mod.rarity] || {}).color || "#9aa3ad",
+          favorite: !!mod.favorite, salvageValue: mod.salvageValue || 0,
+          equipped: mod.id === equippedId,
+          affixes: (mod.affixes || []).map((a) => ({ label: a.label, value: a.value, applied: a.applied })),
+          unique: mod.unique ? mod.unique.desc : null,
+        });
+        const candidates = stash
+          .filter((mm) => mm.klass === pc && mm.slot === sel.editSlot)
+          .map(toView)
+          // Equipped first, then by rarity desc, then favorites.
+          .sort((a, b) => (b.equipped - a.equipped) || (RARITY_ORDER[b.rarity] - RARITY_ORDER[a.rarity]) || (b.favorite - a.favorite));
+        const curMod = equippedId ? byId.get(equippedId) : null;
+        editor = {
+          slot: sel.editSlot, label: sdef.label,
+          current: curMod ? toView(curMod) : null,
+          candidates,
+        };
+      }
+    }
+
+    // Quartermaster shop sheet (mutually exclusive with the editor).
+    const shop = sel.shopOpen ? frontierShop.getShopView() : null;
+    // Citations / decorations wall.
+    const citations = sel.citationsOpen ? frontierAch.achievementsView() : null;
+    // Newsreel feed.
+    const newsreel = sel.newsreelOpen ? frontierNews.newsreelView() : null;
+    // Premium caches.
+    let chests = null;
+    if (sel.chestsOpen) {
+      chests = frontierChests.getChestsView();
+      chests.lastReward = sel.lastChest || null;
+    }
+
+    return {
+      editor, shop, citations, newsreel, chests,
+      career: {
+        rankName: prog.current.name, tierIndex: prog.current.tier,
+        xp: f.careerXp, xpIntoTier: prog.xpIntoTier, xpForNext: prog.xpForNext,
+        fraction: prog.fraction, credits: f.warCredits, commandScope: prog.current.commandScope,
+      },
+      wars, selectedWarId: sel.warId, selectedWar, pilotClasses,
+      canCommand: frontierState.canCommandNow(),
+      sel: { warId: sel.warId, missionType: sel.missionType, missionId: sel.missionId, pilotClass: sel.pilotClass, commandMode: sel.commandMode },
+      hasRun: frontierState.hasActiveRun(),
+      loadout, stats, stashCount: stash.length,
+    };
+  }
+
+  /** Drained by main.js to launch a Frontier mission. Null when none pending. */
+  consumeFrontierLaunch() {
+    const p = this._pendingFrontierLaunch;
+    this._pendingFrontierLaunch = null;
+    return p;
   }
 
   _wireMenuCallbacks() {
@@ -2576,6 +2722,109 @@ export class StartMenu {
           this._layoutRunSetup(this._lastViewW || 1200, this._lastViewH || 800);
           this.showRunSetup = true;
         }
+      },
+      // NEW War-based Frontier hub (FRONTIER_FUTURE.md). Pure DOM
+      // overlay — no canvas layout, just flip the show flag.
+      onPlayHubFrontierWars: () => { this.showFrontierHub = true; },
+      onFrontierHubBack: () => { this.showFrontierHub = false; },
+      onFrontierHubSelectWar: (warId) => {
+        if (this._frontierSel.warId !== warId) {
+          // Switching War invalidates the prior mission pick (its id
+          // belongs to the other War's spine/pool).
+          this._frontierSel.missionType = null;
+          this._frontierSel.missionId = null;
+        }
+        this._frontierSel.warId = warId;
+      },
+      onFrontierHubSelectMission: (missionType, missionId) => {
+        this._frontierSel.missionType = missionType;
+        this._frontierSel.missionId = missionId;
+      },
+      onFrontierHubSelectPilot: (klass) => {
+        // Different class = different slots, so close any open editor.
+        if (this._frontierSel.pilotClass !== klass) this._frontierSel.editSlot = null;
+        this._frontierSel.pilotClass = klass;
+        this._frontierSel.commandMode = false; // picking a hull = pilot, not command
+      },
+      // Take FLEET COMMAND (admiral) instead of piloting. pilotClass is
+      // kept (loot drops still target it). Gated by canCommand in the UI.
+      onFrontierHubSelectCommand: () => { this._frontierSel.commandMode = true; },
+      // --- Loadout slot editor (bottom sheet) ---
+      onFrontierHubEditSlot: (slot) => {
+        // Toggle: tapping the open slot again closes the sheet.
+        this._frontierSel.editSlot = (this._frontierSel.editSlot === slot) ? null : slot;
+        this._frontierSel.shopOpen = false; // sheets are mutually exclusive
+        this._frontierSel.citationsOpen = false;
+        this._frontierSel.newsreelOpen = false;
+        this._frontierSel.chestsOpen = false;
+      },
+      // --- Quartermaster shop (bottom sheet) ---
+      onFrontierHubOpenShop: () => {
+        this._frontierSel.shopOpen = true;
+        this._frontierSel.editSlot = null;
+        this._frontierSel.citationsOpen = false;
+        this._frontierSel.newsreelOpen = false;
+        this._frontierSel.chestsOpen = false;
+      },
+      onFrontierHubCloseShop: () => { this._frontierSel.shopOpen = false; },
+      onFrontierHubBuy: (itemId) => { frontierShop.buyItem(itemId); },
+      // --- Citations / decorations wall (bottom sheet) ---
+      onFrontierHubOpenCitations: () => {
+        this._frontierSel.citationsOpen = true;
+        this._frontierSel.editSlot = null;
+        this._frontierSel.shopOpen = false;
+        this._frontierSel.newsreelOpen = false;
+        this._frontierSel.chestsOpen = false;
+      },
+      onFrontierHubCloseCitations: () => { this._frontierSel.citationsOpen = false; },
+      // --- Newsreel feed (bottom sheet) ---
+      onFrontierHubOpenNewsreel: () => {
+        this._frontierSel.newsreelOpen = true;
+        this._frontierSel.editSlot = null;
+        this._frontierSel.shopOpen = false;
+        this._frontierSel.citationsOpen = false;
+        this._frontierSel.chestsOpen = false;
+      },
+      onFrontierHubCloseNewsreel: () => { this._frontierSel.newsreelOpen = false; },
+      // --- Premium caches (bottom sheet) ---
+      onFrontierHubOpenChests: () => {
+        const s = this._frontierSel;
+        s.chestsOpen = true; s.lastChest = null;
+        s.editSlot = null; s.shopOpen = false; s.citationsOpen = false; s.newsreelOpen = false;
+      },
+      onFrontierHubCloseChests: () => { this._frontierSel.chestsOpen = false; this._frontierSel.lastChest = null; },
+      onFrontierHubOpenChest: (tierId) => {
+        const res = frontierChests.openChest(tierId);
+        if (res && res.ok) {
+          const m = res.module;
+          this._frontierSel.lastChest = {
+            name: m.name, rarity: m.rarity, slotLabel: m.slotLabel, klass: m.klass,
+            color: (RARITY_BY_ID[m.rarity] || {}).color || "#9aa3ad",
+            affixes: (m.affixes || []).map((a) => ({ label: a.label, value: a.value, applied: a.applied })),
+            unique: m.unique ? m.unique.desc : null, pityHit: !!res.pityHit,
+          };
+        }
+      },
+      onFrontierHubCloseEditor: () => { this._frontierSel.editSlot = null; },
+      onFrontierHubEquip: (moduleId) => {
+        const s = this._frontierSel;
+        if (s.editSlot) frontierInv.equip(s.pilotClass, s.editSlot, moduleId);
+        s.editSlot = null; // close after equipping
+      },
+      onFrontierHubUnequip: () => {
+        const s = this._frontierSel;
+        if (s.editSlot) frontierInv.unequip(s.pilotClass, s.editSlot);
+      },
+      onFrontierHubSalvage: (moduleId) => { frontierInv.salvage(moduleId); },
+      onFrontierHubFavorite: (moduleId) => { frontierInv.toggleFavorite(moduleId); },
+      onFrontierHubLaunch: () => {
+        const s = this._frontierSel;
+        if (!s.warId || !s.missionId || !s.missionType || !s.pilotClass) return;
+        this._pendingFrontierLaunch = {
+          warId: s.warId, missionId: s.missionId,
+          missionType: s.missionType, pilotClass: s.pilotClass,
+          command: !!s.commandMode,
+        };
       },
       onPlayHubSkirmish: () => { this._baseScreen = 'skirmish'; },
       onPlayHubCustom:   () => {

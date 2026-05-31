@@ -172,6 +172,535 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-05-31 (new faction: The Assembly — ALL ships procedural)
+- **New race `synthetics` ("The Assembly")** — a self-forging machine
+  intelligence whose EVERY combat class gets a procedurally-generated
+  hull (no two ships alike). Built entirely on the existing generic
+  procedural-hull path — `shipgen.js` core UNCHANGED. Registration mirrors
+  Brood/Saurian (races.js stats+roster, ship.js FACTION_SHIELD/MODULE/
+  MODULE_STYLE, sprites.js FACTION_CELL_STATS/BLOCK_PALETTE/applyRaceBaseFill)
+  EXCEPT it has NO hand-authored HULLS — `proceduralHulls` lists all 6
+  combat classes, so createShip rolls each via generateHull.
+  - Mechanical niche: cold + RESILIENT via FAST-REGENERATING shields
+    (machine self-repair, regen 14–34) rather than armor/numbers —
+    distinct from Hegemony armor / Voidsworn mega-shields / Brood swarm.
+    Cyan-steel aesthetic (icy machine-cyan accent, brushed-steel block
+    palette, circuit-sheen base fill, octagon/panel modules).
+  - This is the "all-random faction" the proceduralHulls hook was
+    designed for — confirms the design goal: a fully-random faction is
+    just a race entry + `proceduralHulls: [all classes]`, zero core or
+    createShip change. (Station omitted from the list — no generateHull
+    envelope; falls back to canonical, never seen in a War.)
+  - Available in skirmish/custom now (auto-included in RACE_KEYS); not yet
+    tied to a Frontier War — ready to drop into one.
+  Verified: 24/24 node (all 6 classes flagged+spawn valid procedural hulls
+  + cell grids; two cruisers distinct; shielded w/ fast regen; other races
+  unaffected) + browser sheet render of 6 classes × 2 instances = 12
+  DISTINCT hulls, 0 errors. Screenshot confirms machined cyan-steel
+  silhouettes, all unique.
+
+### 2026-05-31 (procedural hulls wired in — Brood-ships randomized)
+- **shipgen.js (the dormant 2026-05-30 procedural-ship core) is now wired
+  to live ships, via a GENERIC, faction-data-driven path** — the core
+  module itself was NOT modified (a fully-random faction is coming; the
+  hook must stay reusable).
+- **Brood are now fighters + brood-ships ONLY** (dropped the hive/
+  battleship per owner: "they only have fighters and brood ships").
+  roster `{ fighter: 74, carrier: 6 }`; `mission.js FACTION_FIELDS.brood`
+  allow = `{fighter,carrier}` (bomber/frigate→fighter, cruiser/battleship
+  →carrier). **Brood-ships (carriers) get a UNIQUE procedurally-generated
+  hull each**; drones keep the fixed organic fighter hull. Still shieldless.
+- **The generic hook** (reusable for the future all-random faction):
+  - `createShip` resolves its hull polygon ONCE with priority
+    `design.hullPoly` (explicit override) → procedural roll (if
+    `isProceduralHull(race,klass)`) → canonical `getHull`. The chosen
+    `poly` is threaded to BOTH `buildModules` and `buildCells` (which
+    gained an optional `polyOverride` arg) and stored as `ship.hullPoly`;
+    `drawShip` + the strike-craft block outline prefer `ship.hullPoly`.
+  - WHICH ships are procedural is pure faction DATA: `RACES[race]
+    .proceduralHulls` (a class list) + `races.js#isProceduralHull`. The
+    future all-random faction just lists all its classes — zero core /
+    createShip change. (Procedural LOADOUTS — shipgen's `generateLoadout`
+    — are NOT wired yet; only hull APPEARANCE, which is what was asked.)
+  - **GOTCHA: `buildCells` derived the hull internally from
+    `getHull(race,klass)`** (not a passed poly) — it's the real visual
+    path for cell ships (carriers render as a cell grid culled to the
+    hull). Had to add the `polyOverride` param or the random silhouette
+    wouldn't actually render. `buildModules` already took the poly as an
+    arg.
+  - Hull seeded by `mulberry32(ship.id)` → distinct per ship, render-
+    stable, no Date.now/Math.random. `generateHull` self-validates
+    against the hull contract + falls back, so a bad roll can't poison
+    geometry.
+  Verified: 19/19 node (50 generated carrier hulls all pass validateHull;
+  brood carriers distinct + shieldless + cells + modules placed; brood
+  fighter/saurian carrier stay canonical; roster + war filter
+  fighter/carrier-only) + browser fleet smoke (5 brood-ships → 5 DISTINCT
+  hulls, all shieldless, red = fighter/carrier only, 134 detonations, 0
+  errors). Screenshot confirms varied organic brood-ship silhouettes.
+
+### 2026-05-31 (Brood = pure swarm — no bombers/frigates/cruisers)
+- **The Brood now fields ONLY drones (fighters), brood-ships (carriers),
+  and the hive (battleship).** Removed the bomber/frigate/cruiser spec
+  overrides from `races.js`; race roster → `{ fighter: 74, battleship: 1,
+  carrier: 5 }`; carrier `replenish` hatches fighters only.
+  - **GOTCHA 1 (carrier bomber hatch): `replenish` DEEP-MERGES over the
+    base carrier** (which has `bomber: 36`), so omitting `bomber` let the
+    base value survive and brood-ships kept hatching bombers ~36s in. Must
+    set `replenish: { fighter: 4.5, bomber: 0 }` explicitly. `ship.js`
+    `updateReplenishment` now gates each line on `rep.X > 0`.
+  - **GOTCHA 2 (the war uses GENERIC rosters): the Frontier mission
+    rosters (`mission.js BASE_ROSTERS`) are faction-agnostic** and include
+    frigate/cruiser/etc., so the race roster alone doesn't stop them in a
+    War. New `FACTION_FIELDS` filter (`applyFactionFields`) folds a
+    faction's disallowed classes into substitutes BEFORE spawn — Brood:
+    bomber/frigate → fighter, cruiser → brood-ship (carrier). Saurian
+    unrestricted (fields the full line).
+  Verified: 11/11 (every battle kind's brood red roster excludes
+  bomber/frigate/cruiser; saurian keeps them) + a 40s in-war smoke with
+  brood-ships actively hatching — red stayed fighter/carrier only,
+  `everBomber/Frigate/Cruiser` all false, 0 errors.
+- **Hosting**: the public URL (`…/claude/play/starfighter/`) is served by
+  `/root/mypage/server.py`'s `play_starfighter` route straight from
+  `/root/aphelionstarfighter/` (raw vanilla-ES-module source, default
+  `index.html` → relative `src/main.js`). So source edits go LIVE with no
+  build/copy — players just need a hard refresh (src files are
+  un-hashed, so the browser module cache must be busted). `dist/` is NOT
+  what's served.
+
+### 2026-05-31 (menu route — FRONTIER = new War mode; legacy → Classic)
+- **The prominent play-hub "FRONTIER" card now opens the NEW War mode**
+  (Brood/Saurian); the legacy roguelite moved to a "CLASSIC CAMPAIGN"
+  card below it (still fully playable, run-state intact). Fixes the
+  user-facing confusion that the main Frontier button opened the old
+  roguelite (Terran-fighter enemies). The new mode itself was always
+  correct — it was purely a routing/discoverability issue.
+- **Zero callback rewiring needed** — `onPlayHubFrontier`→legacy and
+  `onPlayHubFrontierWars`→new were already correct. Just reordered +
+  relabeled the two `_buildPlayHub` cards: the `#playhub-frontier-wars`
+  card became the prominent "FRONTIER" (RECOMMENDED, DEPLOY, gets the
+  `playhub-card-frontier` hero styling); `#playhub-frontier` became
+  "CLASSIC CAMPAIGN" (LEGACY/CLASSIC tag). `_syncPlayHub` still drives
+  the legacy card's RESUME/Act/callsign + NEW CAREER secondary — correct,
+  since that card IS the legacy one (its id is unchanged).
+  - NOTE: home hero "FRONTIER" card still routes to the play hub (`onHomePlay`)
+    — unchanged, so the play hub (and thus Classic Campaign + skirmish/
+    custom) stays reachable; only the card the player taps to enter a
+    Frontier mode changed which mode is prominent.
+  Verified: play-hub card order [FRONTIER(DEPLOY)→new hub, CLASSIC
+  CAMPAIGN(START)→legacy runSetup, Skirmish, Custom]; FRONTIER click sets
+  showFrontierHub, CLASSIC click sets showRunSetup; 0 errors. Screenshot
+  confirms layout.
+
+### 2026-05-31 (Brood faction — shieldless, armor + hull only)
+- **The Brood now have NO energy shields on any class** — they survive on
+  living-chitin armor (per-cell `FACTION_CELL_STATS.brood`) + raw hull
+  mass alone, fitting the organic-hive identity. Set `shield: null` on all
+  6 brood classes in `races.js`.
+  - **GOTCHA: `shield: null` (not `{max:0}`) is required, and EVERY class
+    needs it.** (1) The base class spec has a shield, and `resolveSpec`
+    deep-merges race over base — `deepMerge` assigns `null` straight
+    through (line 555-556), so null actually clears it; `{max:0}` would
+    leave `spec.shield` truthy. (2) The shield-generator modules gate on
+    `!!spec.shield` (modules.js), so only a falsy shield drops them —
+    `{max:0}` would keep vestigial shield-gen modules on a 0-shield hull.
+    (3) The brood cruiser previously had NO shield key → it was silently
+    inheriting the base cruiser shield; it needed the explicit null too.
+  - Effect: `shieldMax`/`shield` = 0, no shield-generator modules, and
+    every incoming hit routes straight to the block/armor/hull path
+    (brood are permanently "shield-down"). Saurian shields untouched.
+  Verified: 27/27 (all 6 brood classes shieldMax 0 + spec.shield null + 0
+  shield-gen modules; saurian fighter/BB still shielded w/ modules) + a
+  900-tick Locust Wind smoke (all brood shieldMax 0, brood taking hull/
+  armor damage, 0 errors).
+
+### 2026-05-31 (new Frontier — premium caches / loot boxes §9.8)
+- **Last core deliverable.** `frontier/chests.js`: 3 SKU tiers
+  (Basic/Premium/Elite) with the §9.8 rarity weights, single-item rolls,
+  a pity timer (Rare-or-better guaranteed every `PITY_INTERVAL=10`,
+  counter `frontier.chestPity` resets on ANY Rare+ — natural or forced),
+  class-targeting (rolls only `pilotableNow()` classes), and disclosed
+  odds. Hub ◇ CACHES bottom sheet (5th sheet): SKU cards w/ color-coded
+  odds + OPEN button, an ACQUIRED reveal banner for the just-opened item,
+  pity-progress line, and a free-path disclosure note.
+  - **MONETIZATION NOTE: no payment backend exists, so caches spend WAR
+    CREDITS as a placeholder** (premium-steep: 500/1500/4000). The
+    regulated MECHANIC (weighted roll + pity + odds disclosure +
+    class-targeting + free-path-intact guardrail) is the deliverable;
+    swapping the spend rail to real IAP later is one function
+    (`chests.js` calls `spendCredits` — replace with `payFor`). Mythic
+    tier (§9.8 Elite 2%) deferred → folded into Legendary.
+  - Save: `frontier.chestPity: 0` (number; spread-preserved, no guard
+    needed). The 5 hub bottom sheets (editor/shop/citations/newsreel/
+    chests) remain mutually exclusive — each open nulls the other four.
+  Verified: 13/13 node tests (odds sum 100, affordability, deduct+stash,
+  tier-gating fighter-only at rookie, pity floors to Rare+ on the 10th +
+  resets, elite natural-Rare+ resets) + browser (open → reveal "Afterburn
+  Drive", −1500cr, stash+1, odds/pity/disclosure shown), 0 errors.
+- **ALL FRONTIER_FUTURE.md core deliverables are now implemented.** Built
+  this session (newest first): caches §9.8 · newsreel+ribbon §10 ·
+  pilot-class/fleet-command deploy §3.2 · faction greeble+heraldry §7/§8 ·
+  real Brood+Saurian races §7 · achievements+decorations §11 · post-battle
+  WAR SPOILS · Quartermaster §9.7 · loadout editor · loot engine+inventory
+  §9 · playable hub+menu route · data/persistence spine §3. Still
+  deferred (battle-layer, out of §-scope): Legendary unique EFFECTS wired
+  into combat (data rolls + displays, just inert) — needs crit/range-
+  falloff systems that don't exist. All `frontier` work is enemy-only /
+  additive; legacy `roguelite` mode untouched; save v4.
+
+### 2026-05-30 (new Frontier — newsreel + war-state ribbon §10)
+- **Story-first immersion layer.** `frontier/newsreel.js`: ~8 authored
+  Kroger/Brant propaganda segments per War (chapter-completion +
+  kill-milestone), each keyed to a DERIVABLE trigger (per-War chapters /
+  kills / war-won — same metrics shape as achievements). `checkNewsreel()`
+  unlocks into `frontier.newsreel` (id list, unlock order) at the end of
+  `resolveMissionOutcome` → `outcome.newTransmissions`; surfaced as an
+  `INCOMING TRANSMISSION` block on the result screen (hud) AND a hub
+  ▶ NEWSREEL bottom sheet (latest-first feed + locked-count teaser).
+  New save field `frontier.newsreel: []` (array-guarded in
+  mergeWithDefaults; no schema bump).
+- **War-state ribbon** (§10.3) in the hub's selected-War detail: a
+  chapter-spine strip (done/next/locked nodes) + `completionPct` + total
+  kill count, computed in `_buildFrontierHubMenuState`.
+  - GOTCHA: the hub signature only keyed on `fh.wars` (which omits the
+    kill ledger), so killCount changes alone wouldn't re-render — added
+    `swr:[completionPct,killCount,warCompleted]` + `nr:fh.newsreel` to the
+    sig so the ribbon/feed refresh.
+  - The four hub bottom sheets (editor / shop / citations / newsreel) are
+    mutually exclusive — every open-callback nulls the other three on
+    `_frontierSel`.
+  Verified: 8/8 node tests + browser (win → transmission on spoils;
+  ribbon shows 1/5 done + "20% · 10 down"; NEWSREEL feed plays the
+  segment + "+11 classified" footer), 0 errors.
+
+### 2026-05-30 (new Frontier — pilot-class deploy + fleet command)
+- **The command-tier track is now exercised in battle.** Two things:
+  (1) confirmed capital PILOTING already worked (the hub picks a
+  pilotClass → `buildMissionConfig` sets `playerDesign={hull:pilotClass}`
+  → `promotePlayer` spawns that hull) — it was just never reachable since
+  rookies only unlock fighter. (2) NEW **FLEET COMMAND** option: a tier-
+  gated deploy choice that launches admiral mode instead of piloting.
+- `career.js#COMMAND_MIN_TIER=3` (Strike Group Lead) + `canCommand(xp)`;
+  `state.js#canCommandNow()`. The hub pilot row gains a `⚑ FLEET COMMAND`
+  chip when unlocked (`fh-cmd-chip`, blue); picking a hull clears command
+  mode and vice-versa. `_frontierSel.commandMode` rides the launch payload
+  as `command`.
+- `mission.js`: `command` flag → `battleMode:"command"`, `playerDesign`/
+  `loadoutStats` nulled (no player ship). `modes/frontier.js` setup now
+  branches: command → set `spectating+admiralMode+directives+
+  spectateCamera` BEFORE spawnRoster (so it skips promotePlayer and the
+  fleet flies on AI), mirroring the legacy roguelite command branch; fly
+  → spawn + promotePlayer + applyLoadoutToShip as before. `main.js`
+  already set `input.admiralActive` from `game.admiralMode` post-launch.
+  - NOTE: in command mode `resolveMissionOutcome`'s `playerKIA` is always
+    false (`!admiralMode && playerKIA`), so an admiral only soft-dies on a
+    LOSS, never from ship death — correct (you're not in a cockpit).
+    Loot drops still target `fc.pilotClass` (the last-picked hull).
+  Verified (browser, 0 errors): at Captain tier all 6 classes pilotable +
+  command chip shown; piloting cruiser → player ship klass "cruiser";
+  FLEET COMMAND → admiral mode (no player ship, spectating, 12 blue on AI,
+  full directive panel). Screenshots of both.
+
+### 2026-05-30 (new Frontier — per-faction greeble + Saurian heraldry)
+- **Brood + Saurian now have visible in-game hull signatures** beyond the
+  silhouette/color from the prior slice. Brood: bioluminescent
+  compound-eye glow cluster at the bow. Saurian: dorsal bronze ridge
+  crest + **House banner heraldry on capitals** (§8.3 committed feature) —
+  a sigil disc amidships, one House per capital class so a fleet shows a
+  spread: frigate=Vael'ari hooked-talon, cruiser=Sk'rath barbed-sun,
+  battleship=Tssor'kan horned-serpent, carrier=Drazn crashing-wave.
+- **LOAD-BEARING GOTCHA: in-game ships render from the BLOCK CANVAS, not
+  the schematic sprite.** Every class in `CELL_GRID` (fighter→carrier)
+  draws via `ship.blockCanvas` (cell grid); the prebaked schematic sprite
+  (where `drawRaceDetails` greeble + `applyRaceBaseFill` live) is ONLY the
+  no-cell fallback (stations / classes absent from CELL_GRID). So race
+  greeble added to `drawRaceDetails` is INVISIBLE in normal play. The
+  identity overlay that actually shows is a NEW `drawBlockRaceDetails`
+  pass at the end of `rebuildBlockCanvas` (sprites.js), drawn on top of
+  the cells. (The drawRaceDetails brood/saurian branches were kept anyway
+  for the fallback + future icon paths — harmless, just rarely hit.)
+  - The overlay translates to the ship's local origin (`halfX+1,halfY+1`)
+    and draws in radius-space; `drawSaurianSigil(bctx,house,R)` is shared
+    between the sprite path and the block path.
+  - Heraldry/eyes sit UNDER the shield bubble (same as Thren spine nodes),
+    so they read once shields drop — hull shape + faction color carry
+    identity while shields are up.
+  Verified: faction sprite-sheet render (brood green organic + eye-glow;
+  saurian bronze + crest + capital sigils) + 1200-tick two-faction combat
+  smoke exercising block rebuilds under damage — 0 errors.
+
+### 2026-05-30 (new Frontier — real Brood + Saurian factions §7)
+- **The two Frontier antagonists are now real races** (were placeholder-
+  mapped to reavers/hegemony). `races.js` gains `brood` ("The Brood",
+  fragile-fast organic swarm — 16hp/605spd drones, 4.5s carrier
+  replenish, dense-PD/no-gun hive battleship) and `saurian` ("Var'sakh
+  Dominion", quality — 50hp shielded fighters, +HP armored capitals).
+  `frontier/wars.js#FACTION_RACE` now points brood→brood, saurian→saurian
+  (the ONLY line to change if these specs are retuned). Enemy-only:
+  deliberately NOT added to unlockedRaces/Factions/warProgress/custom-
+  picker/reputation — they spawn red-side via the Frontier mission
+  bridge. (RACE_KEYS auto-includes them, so sprites prebake + they're
+  also selectable in skirmish/custom — harmless.)
+- **Distinct silhouettes** via a new `ship.js#mk()` half-profile hull
+  generator: author only the top edge (nose→tail, y≥0, x strictly
+  decreasing) and mk mirrors the lower edge to GUARANTEE y-symmetry +
+  terran-matching winding — a new hull can't ship self-intersecting or
+  wrong-wound. HULLS.brood = organic manta/beetle curves; HULLS.saurian
+  = swept predatory rakes (6 classes each; station omitted → terran
+  fallback, never spawned in Frontier).
+  - **GOTCHA: mk() handles an off-axis nose** (carriers start `[1,0.06]`
+    for a blunt flight-deck prow) — if `top[0].y≈0` it drops the nose
+    from the mirror (shared vertex), else it mirrors the whole edge so
+    the nose closes as an edge. Initially missed this → carriers failed
+    the y-symmetry check. Also `slice()` before `reverse()` so mk never
+    mutates the caller's array.
+- **Visual identity**: added brood/saurian to FACTION_SHIELD,
+  FACTION_MODULE, MODULE_STYLE (ship.js — brood bio/green organic,
+  saurian bronze/ornate octagon), FACTION_CELL_STATS + BLOCK_PALETTE
+  (sprites.js — brood fragile-drones/tanky-hive, saurian hardened
+  across the board), and `applyRaceBaseFill` branches (brood chitin
+  carapace bands + toxic sheen; saurian bronze war-plate + jade keel).
+  All faction maps fall back to terran for unknown keys — used the
+  CORRECT keys (`brood`/`saurian`) everywhere incl. BLOCK_PALETTE (the
+  one with the legacy `reaver`-vs-`reavers` bug).
+  Verified: 24/24 hull validity (winding+symmetry) + resolveSpec merges
+  + browser launch of both Wars (THE BROOD: 16hp drones, organic hulls;
+  VAR'SAKH DOMINION: 50hp fighters, swept hulls; correct roster/target-
+  panel labels), combat ticks clean, 0 errors. FOLLOW-UP (deferred):
+  per-race greeble in drawRaceDetails (currently only base-fill identity);
+  Saurian House banner heraldry on capitals; mid-fight comms voice.
+
+### 2026-05-30 (new Frontier — achievements + decorations §11)
+- **Pure-flavor milestone system** (FRONTIER_FUTURE.md §11 — no XP/loot/
+  IAP cross-contamination). `frontier/achievements.js`: 14 achievements
+  across combat/career/build, ALL derivable from existing frontier state
+  (kills ledger, career tier, per-War chapters, equipped loadouts) — no
+  new counters. `checkAchievements()` recomputes the earned set + unlocks
+  newly-satisfied ones into `frontier.unlockedAchievements` +
+  `frontier.decorations` (idempotent), called at the end of
+  `resolveMissionOutcome` (after rewards/kills bank). New decorations
+  surface on the result screen (`renderDecorationsAwardedHTML`, shown
+  win OR loss — a defeat can still cross a kill milestone); a hub
+  ✦ CITATIONS bottom sheet (third sheet, mutually exclusive with the
+  loadout editor + Quartermaster) shows all 14 grouped by category,
+  earned (gold AWARDED) vs locked (desc + live "x/100" progress).
+  - GOTCHA: the three hub bottom sheets (editor / shop / citations) are
+    mutually exclusive — each open-callback nulls the other two
+    (`editSlot`/`shopOpen`/`citationsOpen` on `_frontierSel`).
+  - NOTE: confirmed the loot-slice in-battle kill ledger works — the
+    probe's "11/100" Centurion progress = ~10 red deaths emitting
+    `shipDestroyed` → `frontierState.recordKill` during the battle + 1
+    manual. (Synthesising fake `shipDestroyed` events in a probe WITHOUT
+    x/y throws in audio.sfxExplosion — use `window.frontier.recordKill`
+    to tick the ledger in tests, not raw events.)
+  Verified: 9/9 node tests (unlock/idempotent/progress/view) + browser
+  (win awards first-blood + baptism on spoils; CITATIONS shows 2/14), 0
+  errors.
+
+### 2026-05-30 (new Frontier — post-battle WAR SPOILS screen)
+- **Mission rewards + loot drops now surface on the match-over screen**
+  (were landing silently in the stash). `hud.js#renderFrontierSpoilsHTML`
+  renders a WAR SPOILS block (XP/credits chips, PROMOTED chip, then loot
+  cards with rarity color + slot tag + affixes + EQUIPPED/STASHED badge),
+  prepended above the standard battle report in `_syncMatchOver`'s new
+  `game.mode === "frontier"` branch. Title/subtitle made frontier-aware:
+  VICTORY / DEFEAT / "PILOT LOST" (soft-death) with a carries-forward
+  subtitle.
+- **Data flow**: `state.js` completeChapter/Sortie now return
+  `xpGained`/`creditsGained`/`promoted`; `mission.js#resolveMissionOutcome`
+  builds a render-ready `outcome.rewards` + `outcome.drops` (mapped to a
+  plain view — does NOT leak live stash module refs to the HUD — with
+  `equipped` captured at award time, before the player can touch the
+  loadout). hud imports `RARITY_BY_ID` from `frontier/loot.js` for colors.
+  - GOTCHA: relies on the same timing guarantee as `lastBattleReport` —
+    the `matchEnded` subscriber (sets `game.frontierOutcome`) runs
+    synchronously inside `update()`, before the HUD's `draw` builds the
+    once-per-match panel, so the data is present on frame 1. Spoils only
+    render on a win (`outcome.won`); losses show title/subtitle only.
+  Verified (browser, 0 errors): forced win → panel shows VICTORY +
+  spoils block + 2 reward chips + 1 drop card with EQUIPPED badge.
+
+### 2026-05-30 (new Frontier — Quartermaster shop)
+- **Credit sink + reliable progression floor** (FRONTIER_FUTURE.md §9.7).
+  `frontier/shop.js`: persisted stock (`frontier.shop`) with a STATIC
+  section (Common/Uncommon, infinite restock — buying mints a fresh
+  stash copy, listing stays) and a ROTATING section (Rare/Epic, one-off,
+  consumed on buy). Legendaries NOT sold. Tier-gated to `pilotableNow()`
+  classes. Prices by rarity (80/200/600/1500). Reached via a
+  ⚒ QUARTERMASTER button in the hub → a bottom sheet (same pattern as the
+  loadout editor; second `#frontier-shop` host, mutually exclusive with
+  the editor). New `state.js#spendCredits` (affordability-checked deduct).
+  - **GOTCHA: stock refreshes on a KEY, not a timer** — `refreshKeyFor` =
+    total chapters-completed across wars + sorted unlocked-classes sig.
+    `ensureShop` regenerates only when the key changes (chapter clear or
+    a tier-up unlocking a new class), matching §9.7's per-chapter,
+    no-FOMO-clock decision.
+  - **GOTCHA: `ensureShop` has a read-only fast path** — it runs every
+    frame while the sheet is open (built in `_buildFrontierHubMenuState`),
+    so it only calls `saveStore.update` when actually regenerating;
+    otherwise a debounced write would fire every frame.
+  - **GOTCHA: buy is spend-first** — `spendCredits` is the atomic
+    affordability gate (no deduction on failure); only then is a fresh
+    module minted into the stash and rotating stock pruned.
+  Verified: 15/15 node tests (tier-gating, static/rotating rarity split,
+  no-legendary, price-by-rarity, broke→fail, buy deduct+stash+restock,
+  rotating-consume, chapter-clear reroll) + browser probe (open → 8
+  cards → buy drops credits/grows stash/static restocks → close), 0 errors.
+
+### 2026-05-30 (new Frontier — manual loadout editor UI)
+- **Loot is now fully interactive: tap any loadout slot in the hub to
+  open a bottom-sheet editor** listing every stash module valid for that
+  (class, slot) — EQUIP / UNEQUIP / SALVAGE (banks credits) / ★favorite,
+  with the equipped item pinned top and the rest sorted rarity-desc.
+  Auto-equip-on-drop (prior slice) stays as the zero-touch default; this
+  adds deliberate choice + salvage + favorite-locking.
+- **Implementation**: `menus.js` adds a `#frontier-editor` host
+  (position:absolute over the `position:relative` `.menu-frontier`
+  screen) rendered from `menuState.frontierHub.editor`; loadout rows are
+  now `<button data-fh-slot>`; the existing delegated `_onFrontierHubClick`
+  gained the editor actions (checked FIRST since the sheet overlays the
+  body). `input.js` `_frontierSel.editSlot` drives it + 6 callbacks
+  (editSlot toggle / close / equip / unequip / salvage / favorite); the
+  `editor` payload (candidates filtered by class+slot, sorted via
+  `RARITY_ORDER`) is built in `_buildFrontierHubMenuState`.
+  - GOTCHA: `onFrontierHubEditSlot` TOGGLES (tap same slot = close), and
+    equip/unequip read `_frontierSel.editSlot` rather than a DOM-threaded
+    slot — equip auto-closes the sheet, unequip leaves it open.
+  - GOTCHA: editor changes ride the hub's signature diff (`ed: fh.editor`
+    in the sig) so the sheet re-renders in-place; selecting a different
+    pilot class clears `editSlot` (different slot set).
+  Verified via real DOM clicks (0 errors): open → 3 candidates, epic
+  sorted top → EQUIP sets loadout + damage mult 1.2 + auto-close →
+  UNEQUIP clears → ★ toggles → SALVAGE banks +60cr & shrinks stash →
+  CLOSE hides sheet.
+
+### 2026-05-30 (new Frontier — Diablo-style loot system core)
+- **Modular loot engine + inventory wired end-to-end** (FRONTIER_FUTURE.md
+  §9). New `frontier/loot.js` (pure: 5 rarity tiers, per-class slot defs
+  §9.2, per-category affix pools, module families, Legendary uniques,
+  `rollModule`/`rollDrop`/`computeLoadoutStats`) + `frontier/inventory.js`
+  (stash + per-class loadouts over the existing save `frontier.stash`/
+  `loadouts` — NO schema bump; mergeWithDefaults already preserved them).
+  Mission win → `awardDrops` (boss source when neverSurrender); equipped
+  loadout multipliers applied to the player ship in battle; hub shows a
+  per-class loadout panel + stat summary + stash count.
+- **GOTCHA: loot stats are applied POST-SPAWN in `modes/frontier.js`,
+  NOT via playerSpecOverride.** `createShip` runs `applyDesign` AFTER the
+  specOverride deep-merge, and applyDesign re-stamps default component
+  stats over every slot — so any weapon/hull values injected via
+  specOverride get clobbered. `applyLoadoutToShip` scales the live ship's
+  cached fields after spawn: hpMax/hp, shieldMax/shieldBaseMax/shield,
+  and CLONES the shared spec + each `ship.weapons[i].spec` before
+  scaling maxSpeed/turnRate/damage/cooldown (spec-poison hazard — the
+  resolved race spec is shared across all ships of that race/class).
+  Verified: +50% hull → hp 35→53, +50% dmg → weapon 4→6.
+- **GOTCHA: `computeLoadoutStats` only aggregates APPLIED_STATS**
+  (hp/shield/speed/turn/damage/fireRate/missileDamage) into `1+Σaffix`
+  multipliers. Other rolled affixes (range, armor, PD, targeting, etc.)
+  and ALL Legendary unique effects still roll/display/persist but are
+  flavor-only today — forward-compatible data for later combat wiring.
+- **GOTCHA (stopgap): dropped modules AUTO-EQUIP into an empty matching
+  slot** (`awardDrops`) so loot is impactful before the manual equip UI
+  ships. Auto-salvage at `STASH_CAP=80` skips favorited AND equipped
+  modules (`_equippedIn` guard) — never nukes worn/locked gear; overflows
+  rather than destroy protected items if everything is protected.
+- Drops awarded at match END use PRE-battle loadout stats (snapshotted in
+  `buildMissionConfig` at launch) — you fly with what you had; new drops
+  apply next mission. NOT yet: manual equip/swap UI, Quartermaster shop,
+  premium chests, Legendary effects in combat, per-class drops beyond the
+  flown class.
+
+### 2026-05-30 (new Frontier — playable hub UI + menu route)
+- **The new War-based Frontier is now reachable + playable from the
+  menu** (no longer console-only). New play-hub card "FRONTIER: WARS
+  (BETA)" (`#playhub-frontier-wars`, separate from the legacy Frontier
+  card) → a new full-screen DOM overlay `menu-frontier` (the Pilot's-
+  Lounge-lite hub): career header (rank/tier/XP bar/war credits), War
+  selector (2 cards), the selected War's chapter spine (done ✓ / next ▶
+  flyable / locked 🔒) + 8-sortie board, a pilot-class picker (from
+  `pilotableNow()`), and a LAUNCH footer. Full loop verified: select →
+  launch → battle → win banks chapter+credits+XP → CONTINUE returns to
+  the hub; v3→v4 migration + the legacy roguelite flow untouched.
+- **Architecture** (mirrors the Fleet Plan overlay): `menus.js`
+  `_buildFrontierHub`/`_syncFrontierHub` (signature-diffed, scrollTop
+  preserved) + ONE delegated `_onFrontierHubClick` (data-fh-war /
+  data-fh-mission[+mtype] / data-fh-pilot). `input.js`: `showFrontierHub`
+  flag + screenName-chain entry, `_frontierSel` selection (persists
+  across opens), `_buildFrontierHubMenuState` (reads frontier/state.js),
+  hub callbacks, `consumeFrontierLaunch()`. `main.js` menu branch drains
+  the launch (startNewPilot if none + `launchFrontierMission` + chrome)
+  and returns to the hub on match-end/quit for `mode === "frontier"`.
+- **GOTCHA (load-bearing, cost an hour): a `return;` inside the menu
+  branch of `frame()` breaks the RAF loop.** `frame()` only reschedules
+  via `requestAnimationFrame(frame)` at its BOTTOM — any early `return`
+  after a launch kills the animation loop (match never advances, input
+  flags never drain). The legacy roguelite `return` survives only
+  because its path "should never fire." The frontier launch fires every
+  time, so it must NOT return — gate the rest with
+  `const choice = fl ? null : consumeStart()` and fall through.
+- **GOTCHA: switching War in the hub clears the selected mission** (its
+  id belongs to the other War's spine/pool) — `onFrontierHubSelectWar`
+  nulls `missionType`/`missionId`.
+- **GOTCHA: hub is a pure DOM overlay** — unlike runMap/runSetup it needs
+  NO `_layout*` canvas method; opening is just `showFrontierHub = true`.
+  Added `frontierHub` to the `overlays` scrim list in `showScreen`.
+- Reused `.battleplan-back`/`.battleplan-launch-btn` chrome; new
+  `.menu-frontier` screen honours the flex-direction:column + min-height:0
+  scroll trap (Republic amber theme vs Fleet Plan's blue). NOT yet:
+  loot, capital command-mode piloting, real faction art, result screen
+  beyond the shared battle report.
+
+### 2026-05-30 (new War-based Frontier — data + persistence spine)
+- **First slice of the FRONTIER_FUTURE.md redesign: a parallel `frontier`
+  mode + `src/frontier/` namespace, built ALONGSIDE the legacy 8.6k-line
+  `roguelite.js` (untouched).** The two coexist; the menu route still
+  points at roguelite until the new mode is playable. New files:
+  `frontier/career.js` (single XP→tier track, 0–6, tier derived from XP —
+  NOT stored), `frontier/wars.js` (the two launch Wars as data: Op Locust
+  Wind / Op Dragon's Jaw, chapter spines + 8-sortie pools), `frontier/
+  state.js` (read/write funnel over the save's `frontier` block),
+  `frontier/mission.js` (mission→battle bridge + outcome resolver),
+  `modes/frontier.js` (mode hooks, registered key `frontier`, NOT in
+  MODE_KEYS).
+  - **Save schema v4** (`save.js`): additive `frontier` block (careerXp,
+    warCredits, unlockedClasses, per-class loadouts, stash, per-War
+    progress, live `run`, decorations/trophies/achievements). Migration
+    v3→v4 seeds it; mergeWithDefaults deep-merges (unions `wars` keys +
+    `unlockedClasses`, preserves `run`/arrays verbatim). Legacy
+    `roguelite` block preserved untouched — verified on a synthetic v3
+    save.
+  - **GOTCHA: commandTier is NEVER stored — it's a pure function of
+    careerXp** (`career.js#tierForXp`). Read tier/unlocks via
+    `state.js#currentTier`/`pilotableNow`, never a saved field, so they
+    can't drift from the XP they track.
+  - **GOTCHA: soft-death banks XP/credits CONTINUOUSLY** (grantXp/
+    bankCredits write straight to meta), so a pilot loss never costs
+    earned progress — `killPilot` only nulls the live `run`. Verified:
+    a loss soft-kills the pilot while careerXp persists.
+  - **GOTCHA: chapter completion only advances the War spine if it's the
+    NEXT uncompleted chapter** (`completeChapter` guards on
+    `nextChapter`); out-of-order / re-flown chapters still pay
+    XP+credits but don't push the story. (The spine probe's
+    `winAdvanced:0` for a directly-launched ch3 is this guard firing,
+    not a bug.)
+  - **GOTCHA: new factions are PLACEHOLDER-mapped to existing races** in
+    `wars.js#FACTION_RACE` (brood→reavers, saurian→hegemony — the §7a
+    engine-fit templates). When the real Brood/Saurian races land in
+    `races.js`, change ONLY that map. `raceForFaction` falls through to
+    the key itself so a real race keyed under its own name Just Works.
+  - **Wiring**: `main.js` imports the bridge, adds a `matchEnded` →
+    `resolveMissionOutcome` subscriber (banks reward / soft-kills) + a
+    Frontier kill-ledger `shipDestroyed` subscriber (note: `recordKill`
+    is ALSO a shipyard.js export already imported — the frontier one is
+    reached via `frontierState.recordKill`), and exposes a `window.
+    frontier` test surface (launch + state reads). NOT yet built:
+    Pilot's Lounge UI, menu route, loot system, command/admiral piloting
+    for capitals (all fly-mode today), real faction art. Verified: 30/30
+    node logic checks; browser probe launches a capital-assault chapter
+    (13 blue / 17 red incl. brood fighter boost), player spawns, 600
+    ticks zero throws; win banks XP+credits, loss soft-kills cleanly;
+    v3→v4 migration preserves legacy roguelite state.
+
 ### 2026-05-29 (spectator/admiral camera — pan/zoom bug sweep)
 - **Fixed buggy map panning in spectate/command, plus a sweep of the whole
   spectator/admiral camera.** Ten verified fixes across input.js / main.js /

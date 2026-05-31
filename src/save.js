@@ -10,7 +10,7 @@ import { DEFAULT_INVENTORY } from "./cosmetics.js";
 import { DEFAULT_PLAYER_DESIGN, DEFAULT_OWNED_COMPONENTS } from "./components.js";
 
 const STORAGE_KEY = "aphelion.save.v1";
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 const WRITE_DEBOUNCE_MS = 250;
 const LEGACY_CAMPAIGN_KEY = "aphelion.campaign.v1";
 
@@ -89,6 +89,48 @@ const DEFAULT_SAVE = Object.freeze({
   // campaign that lived under the old aphelion.campaign.v1 key. `meta`
   // is cross-run state (unlocks, war progress); `current` is the live
   // run state (null when no run is in progress).
+  // NEW War-based Frontier (FRONTIER_FUTURE.md). Built alongside the
+  // legacy `roguelite` block, which stays intact until the new mode is
+  // playable and the menu route is swapped over. Career meta persists
+  // across pilot deaths AND War rollovers (soft-death roguelite): only
+  // `run` (the live rookie pilot) is wiped on death. commandTier is NOT
+  // stored — it's derived from careerXp via career.js (single source of
+  // truth). Per-War keys are seeded for the two launch Wars; state.js
+  // lazily creates any added later (mergeWithDefaults unions the keys).
+  frontier: {
+    careerXp: 0,
+    warCredits: 0,
+    // Tier-derived pilotable classes are the floor; this list lets an
+    // IAP commission grant a class above the XP floor. Read path unions
+    // it with the tier's classes.
+    unlockedClasses: ["fighter"],
+    // One equipped loadout per ship class. Values are maps of
+    // slot → stash-item id (empty until the loot slice lands).
+    loadouts: {
+      fighter: {}, bomber: {}, frigate: {}, cruiser: {}, battleship: {}, carrier: {},
+    },
+    // Shared finite module stash (Diablo-style). Empty until loot lands.
+    stash: [],
+    activeWarId: null,
+    wars: {
+      "locust-wind": { chaptersCompleted: 0, completed: false, sortiesFlown: 0, kills: {} },
+      "dragons-jaw": { chaptersCompleted: 0, completed: false, sortiesFlown: 0, kills: {} },
+    },
+    // Live rookie pilot. null between runs (soft-death wipes it).
+    run: null,
+    decorations: [],
+    trophies: [],
+    unlockedAchievements: [],
+    // Quartermaster stock (frontier/shop.js). Lazily (re)generated; null
+    // until first visited. Preserved verbatim by mergeWithDefaults.
+    shop: null,
+    // Unlocked newsreel segment ids (frontier/newsreel.js), in unlock
+    // order. Authored propaganda; pure flavor.
+    newsreel: [],
+    // Premium-cache pity counter (frontier/chests.js) — caches opened
+    // since the last Rare-or-better. Guarantees Rare+ every PITY_INTERVAL.
+    chestPity: 0,
+  },
   roguelite: {
     meta: {
       runsCompleted: 0,
@@ -163,6 +205,15 @@ const MIGRATIONS = {
       roguelite: data.roguelite || null,
     };
   },
+  // v3 → v4: introduce the new War-based Frontier block. Purely
+  // additive — the legacy `roguelite` block is untouched (both coexist
+  // until the menu route is swapped). mergeWithDefaults fills the full
+  // shape, so seeding null here is enough.
+  3: (data) => ({
+    ...data,
+    schemaVersion: 4,
+    frontier: data.frontier || null,
+  }),
 };
 
 function deepClone(value) {
@@ -254,6 +305,44 @@ function mergeWithDefaults(loaded) {
       })(),
       current: (loaded.roguelite && loaded.roguelite.current) || null,
     },
+    // Frontier (new mode): deep-merge so additive fields land without a
+    // schema bump. `wars` unions keys (a War added later seeds in for
+    // existing saves); `unlockedClasses` unions (never drop a granted
+    // class); `loadouts` deep-merges per class; `run` and the array
+    // collections are preserved verbatim (a live pilot / earned
+    // trophies must not be stamped over with defaults).
+    frontier: (() => {
+      const lf = loaded.frontier || {};
+      const baseF = base.frontier;
+      const unlocked = (() => {
+        const set = new Set(Array.isArray(lf.unlockedClasses) ? lf.unlockedClasses : []);
+        for (const c of baseF.unlockedClasses) set.add(c);
+        return [...set];
+      })();
+      const loadouts = { ...baseF.loadouts };
+      if (lf.loadouts) {
+        for (const k of Object.keys(loadouts)) {
+          loadouts[k] = { ...loadouts[k], ...(lf.loadouts[k] || {}) };
+        }
+      }
+      const wars = { ...deepClone(baseF.wars), ...(lf.wars || {}) };
+      return {
+        ...baseF,
+        ...lf,
+        careerXp: typeof lf.careerXp === "number" ? lf.careerXp : 0,
+        warCredits: typeof lf.warCredits === "number" ? lf.warCredits : 0,
+        unlockedClasses: unlocked,
+        loadouts,
+        wars,
+        stash: Array.isArray(lf.stash) ? lf.stash : [],
+        decorations: Array.isArray(lf.decorations) ? lf.decorations : [],
+        trophies: Array.isArray(lf.trophies) ? lf.trophies : [],
+        unlockedAchievements: Array.isArray(lf.unlockedAchievements) ? lf.unlockedAchievements : [],
+        newsreel: Array.isArray(lf.newsreel) ? lf.newsreel : [],
+        run: lf.run || null,
+        activeWarId: lf.activeWarId || null,
+      };
+    })(),
   };
 }
 

@@ -30,6 +30,10 @@ import {
   recordKill, computeRunPayout, bankRunPayout,
   buyHull, setHull, buyComponent, equipComponent, renameShip, setPaint,
 } from "./shipyard.js";
+// NEW War-based Frontier (FRONTIER_FUTURE.md). Wired alongside the
+// legacy roguelite; reached programmatically (no menu route yet).
+import { launchFrontierMission, resolveMissionOutcome } from "./frontier/mission.js";
+import * as frontierState from "./frontier/state.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -42,6 +46,13 @@ const game = createGame();
 window.game = game; // for console smoke-testing
 window.input = input; // exposed for browser-side test probes
 window.saveStore = saveStore; // exposed so probes share the singleton
+// NEW Frontier test surface — programmatic launch + career-state reads
+// until the menu route is built. Mirrors the window.game/input probes.
+window.frontier = {
+  ...frontierState,
+  launch: (opts, size) => launchFrontierMission(game, opts, size),
+  outcome: () => game.frontierOutcome || null,
+};
 
 // Dismiss the boot splash once the engine is ready. Two RAFs so the
 // first paint draws the menu UI before the splash fades out — feels
@@ -206,6 +217,14 @@ events.on("shipDestroyed", ({ x, y, intensity }) => {
 events.on("shipDestroyed", ({ klass, side, isPlayer }) => {
   if (!activeRun || isPlayer || side !== "red") return;
   recordKill(activeRun, klass);
+});
+
+// New Frontier kill ledger: tally enemy kills against the active War +
+// grant per-class career XP (state.js banks it continuously).
+events.on("shipDestroyed", ({ klass, side, isPlayer }) => {
+  if (game.mode !== "frontier" || !game.frontierContext) return;
+  if (isPlayer || side !== "red") return;
+  frontierState.recordKill(game.frontierContext.warId, klass);
 });
 
 // Heavy laser — one-shot sustained whine for the beam's duration.
@@ -662,6 +681,14 @@ events.on("matchEnded", ({ winner }) => {
   else if (winner === "red") audio.sfxDefeat();
 });
 
+// New Frontier outcome: bank mission rewards on a win, soft-kill the
+// pilot on a loss/KIA. (UI for the result screen is a later slice; this
+// just closes the persistence loop.)
+events.on("matchEnded", ({ mode, winner }) => {
+  if (mode !== "frontier") return;
+  game.frontierOutcome = resolveMissionOutcome(game, winner);
+});
+
 events.on("matchEnded", ({ mode, winner }) => {
   if (mode !== "roguelite" || !activeRun || !pendingNode) return;
   // Snapshot the run reference up front — completeNode can clear it
@@ -855,7 +882,28 @@ function frame(now) {
   regenTick(energy);
 
   if (game.state === "menu") {
-    const choice = input.startMenu.consumeStart();
+    // NEW War-based Frontier launch (FRONTIER_FUTURE.md). Drained
+    // separately from consumeStart — the hub's LAUNCH builds its own
+    // modeConfig. Starts a fresh rookie pilot if none is alive (career
+    // XP/credits persist across pilots), else just (re)flags the War.
+    const fl = input.startMenu.consumeFrontierLaunch();
+    if (fl) {
+      if (!frontierState.hasActiveRun()) frontierState.startNewPilot(fl.warId, fl.pilotClass);
+      else frontierState.setActiveWar(fl.warId);
+      const cfg = launchFrontierMission(game, fl);
+      if (cfg) {
+        input.startMenu.showFrontierHub = false;
+        input.resetForNewMatch();
+        zoom = DEFAULT_ZOOM;
+        input.admiralActive = !!game.admiralMode;
+        audio.start();
+      }
+    }
+    // Skip the normal start path when a Frontier launch was just
+    // consumed this frame. NOTE: do NOT `return` here — frame() must
+    // fall through to the requestAnimationFrame(frame) reschedule at
+    // the bottom, or the RAF loop dies after launch.
+    const choice = fl ? null : input.startMenu.consumeStart();
     // Energy gate: deduct exactly here. The menu already filtered
     // clicks via canSpend, so a failure path is defensive only —
     // re-open the refill overlay and skip the start.
@@ -1066,6 +1114,7 @@ function frame(now) {
     const advanceBtn = input.consumeMatchAdvance();
     if (game.matchOver && (advanceEnter || advanceBtn)) {
       const wasRoguelite = game.mode === "roguelite";
+      const wasFrontier = game.mode === "frontier";
       restart(game);
       audio.stop();
       refresh();
@@ -1077,6 +1126,10 @@ function frame(now) {
         input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
         input.startMenu.showRunMap = true;
       }
+      // New Frontier: return to the hub (rewards already banked by the
+      // matchEnded subscriber). A soft-death loss left no active run —
+      // the hub handles that (LAUNCH restarts a fresh rookie pilot).
+      if (wasFrontier) input.startMenu.showFrontierHub = true;
     }
   }
 
@@ -1087,6 +1140,7 @@ function frame(now) {
   // run on the same node.
   if (game.state === "playing" && !game.matchOver && input.consumeQuitRequest()) {
     const wasRoguelite = game.mode === "roguelite";
+    const wasFrontier = game.mode === "frontier";
     restart(game);
     audio.stop();
     refresh();
@@ -1095,6 +1149,9 @@ function frame(now) {
       input.startMenu._layoutRunMap(viewW || 1200, viewH || 800);
       input.startMenu.showRunMap = true;
     }
+    // Frontier: a mid-match QUIT abandons the sortie (no reward, run
+    // stays alive) and returns to the hub.
+    if (wasFrontier) input.startMenu.showFrontierHub = true;
   }
 
   // In-match SETTINGS (HUD pill): pop the menu's settings overlay over

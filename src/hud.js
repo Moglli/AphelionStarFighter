@@ -4,6 +4,7 @@ import { getSpectateTarget } from "./game.js";
 import { RACES } from "./races.js";
 
 import { classIconSvg, CLASS_SHORT_LABELS } from "./ship-icons.js";
+import { RARITY_BY_ID } from "./frontier/loot.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
 
@@ -76,6 +77,70 @@ function countBySide(ships) {
 // attributes stamped here — so the markup stays a pure string and the panel
 // is built exactly once per match (no per-frame innerHTML churn that would
 // reset the player's tab choice / expanded rows / scroll). Returns '' if no
+// Frontier "war spoils" block (NEW War-based Frontier). Renders the
+// mission rewards (XP + credits, promotion) and the loot drops on the
+// post-battle screen so a win feels rewarding — drops otherwise land
+// silently in the stash. Reads game.frontierOutcome (set by main.js's
+// matchEnded subscriber). Returns "" for losses / non-frontier matches.
+function renderFrontierSpoilsHTML(outcome) {
+  if (!outcome || !outcome.won) return "";
+  const rw = outcome.rewards || {};
+  const chips = [];
+  if (rw.xpGained) chips.push(`<span class="spoils-chip">+${rw.xpGained} XP</span>`);
+  if (rw.creditsGained) chips.push(`<span class="spoils-chip">+${rw.creditsGained} cr</span>`);
+  if (rw.promoted) chips.push(`<span class="spoils-chip spoils-promo">PROMOTED · ${rw.rankName}</span>`);
+  const dropCard = (d) => {
+    const color = (RARITY_BY_ID[d.rarity] || {}).color || "#9aa3ad";
+    const aff = (d.affixes || []).map((a) =>
+      `<span class="spoils-aff${a.applied ? "" : " spoils-aff-future"}">+${Math.round(a.value * 100)}% ${a.label}</span>`).join("");
+    const uniq = d.unique ? `<div class="spoils-uniq">★ ${d.unique}</div>` : "";
+    const badge = d.equipped ? `<span class="spoils-badge">EQUIPPED</span>` : `<span class="spoils-badge spoils-stashed">STASHED</span>`;
+    return `<div class="spoils-drop">
+      <div class="spoils-drop-top"><span class="spoils-drop-name" style="color:${color}">${d.name}</span>${badge}</div>
+      <div class="spoils-drop-sub">${d.klass} · ${d.slotLabel}</div>
+      <div class="spoils-drop-affixes">${aff}${uniq}</div>
+    </div>`;
+  };
+  const drops = (outcome.drops || []);
+  const dropsHtml = drops.length
+    ? drops.map(dropCard).join("")
+    : `<div class="spoils-nodrops">No salvage recovered.</div>`;
+  return `
+    <div class="spoils-block">
+      <div class="endstats-section-title" style="color:#fc8;">WAR SPOILS</div>
+      <div class="spoils-chips">${chips.join("")}</div>
+      <div class="spoils-drops-title">LOOT RECOVERED · ${drops.length}</div>
+      <div class="spoils-drops">${dropsHtml}</div>
+    </div>`;
+}
+
+// Decorations awarded this match (any win/loss). Pure-flavor medals from
+// the achievements system; shown above the battle report.
+function renderDecorationsAwardedHTML(outcome) {
+  const decos = (outcome && outcome.newDecorations) || [];
+  if (!decos.length) return "";
+  const rows = decos.map((d) =>
+    `<div class="spoils-medal">✦ <span class="spoils-medal-name">${d.name}</span><span class="spoils-medal-desc">${d.desc || ""}</span></div>`).join("");
+  return `<div class="spoils-block">
+    <div class="endstats-section-title" style="color:#ffd680;">DECORATIONS AWARDED</div>
+    <div class="spoils-medals">${rows}</div>
+  </div>`;
+}
+
+// Incoming propaganda transmissions unlocked this match (newsreel). Pure
+// flavor; shown above the battle report on win or loss.
+function renderTransmissionsHTML(outcome) {
+  const tx = (outcome && outcome.newTransmissions) || [];
+  if (!tx.length) return "";
+  const rows = tx.map((s) =>
+    `<div class="spoils-tx"><div class="spoils-tx-head">▶ ${s.title}<span class="spoils-tx-who">${s.speaker}</span></div>
+     <div class="spoils-tx-body">${s.body}</div></div>`).join("");
+  return `<div class="spoils-block">
+    <div class="endstats-section-title" style="color:#8cf;">INCOMING TRANSMISSION</div>
+    <div class="spoils-txs">${rows}</div>
+  </div>`;
+}
+
 // report.
 function renderBattleReportHTML(report) {
   if (!report) return "";
@@ -1334,9 +1399,11 @@ export class BattleHUD {
         return;
       }
 
+      const frontierOutcome = game.mode === "frontier" ? game.frontierOutcome : null;
       let msg;
       if (stalled) msg = "STALEMATE";
       else if (isRoguelite) msg = won ? "NODE CLEARED" : "FLEET LOSSES";
+      else if (game.mode === "frontier") msg = won ? "VICTORY" : (frontierOutcome && frontierOutcome.pilotEnded ? "PILOT LOST" : "DEFEAT");
       else msg = won ? "VICTORY" : "DEFEAT";
       this._matchoverTitle.textContent = msg;
 
@@ -1347,6 +1414,13 @@ export class BattleHUD {
         const sub = won ? "Returning to starmap..." : "Fleet took losses -- check the starmap.";
         this._matchoverSubtitle.textContent = sub;
         this._matchoverSubtitle.style.color = won ? "#bfd" : "#fdb";
+      } else if (game.mode === "frontier") {
+        // Soft-death: a loss or a KIA-on-win ends the pilot; career
+        // progress (XP/credits/gear) persists into the next rookie.
+        this._matchoverSubtitle.textContent = (frontierOutcome && frontierOutcome.pilotEnded)
+          ? "Pilot lost. Career progress carries to your next recruit."
+          : (won ? "Spoils secured. Returning to Novus Spes." : "");
+        this._matchoverSubtitle.style.color = won ? "#fd9" : "#fdb";
       } else {
         this._matchoverSubtitle.textContent = "";
       }
@@ -1417,6 +1491,14 @@ export class BattleHUD {
             ${capturedBlock}
             ${battleHtml}
           `;
+          this._matchoverAAR.style.display = "block";
+        } else if (game.mode === "frontier") {
+          // New War-based Frontier: war-spoils (rewards + loot, win only)
+          // + any decorations awarded (win or loss), above the report.
+          const spoils = renderFrontierSpoilsHTML(game.frontierOutcome);
+          const decos = renderDecorationsAwardedHTML(game.frontierOutcome);
+          const tx = renderTransmissionsHTML(game.frontierOutcome);
+          this._matchoverAAR.innerHTML = spoils + decos + tx + battleHtml;
           this._matchoverAAR.style.display = "block";
         } else {
           // Non-roguelite modes (skirmish / custom / open / defend): the

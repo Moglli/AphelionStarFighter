@@ -191,7 +191,7 @@ export class MenuSystem {
     }
 
     // Scrim: visible for overlays, hidden for base screens (home / main / about)
-    const overlays = ["settings", "refill", "custom", "runSetup", "battleChoice", "battlePlan", "fleetPlan", "resupply", "event", "promotion", "shipyard"];
+    const overlays = ["settings", "refill", "custom", "runSetup", "battleChoice", "battlePlan", "fleetPlan", "frontierHub", "resupply", "event", "promotion", "shipyard"];
     if (this._scrim) {
       this._scrim.style.display = (name && overlays.includes(name)) ? "block" : "none";
     }
@@ -293,6 +293,12 @@ export class MenuSystem {
     // 8b. Fleet Plan overlay — the run-free pre-battle planner shown
     // before every non-Frontier match (per-class directives + wings).
     this._buildFleetPlan(root);
+
+    // 8c. Frontier hub (NEW War-based Frontier — FRONTIER_FUTURE.md).
+    // The between-run home: War selection + chapter spine + sortie
+    // board + pilot-class picker + LAUNCH. Built alongside the legacy
+    // Frontier run-map; reached via the play-hub "FRONTIER: WARS" card.
+    this._buildFrontierHub(root);
 
     // 9. Resupply Overlay
     this._buildResupply(root);
@@ -788,13 +794,23 @@ export class MenuSystem {
         <div class="playhub-spacer"></div>
       </header>
       <div class="playhub-body">
-        <article class="playhub-card playhub-card-frontier" id="playhub-frontier">
+        <article class="playhub-card playhub-card-frontier playhub-card-wars" id="playhub-frontier-wars">
+          <div class="playhub-card-icon">⚑</div>
+          <div class="playhub-card-meta">
+            <div class="playhub-card-eyebrow">REPUBLIC WAR EFFORT</div>
+            <div class="playhub-card-title">FRONTIER</div>
+            <div class="playhub-card-sub">War against the Brood and the Saurian Dominion — authored fronts, a pilot career, loot, and fleet command.</div>
+            <div class="playhub-card-tag">RECOMMENDED</div>
+          </div>
+          <button class="playhub-card-cta" id="playhub-frontier-wars-cta">DEPLOY</button>
+        </article>
+        <article class="playhub-card" id="playhub-frontier">
           <div class="playhub-card-icon">★</div>
           <div class="playhub-card-meta">
-            <div class="playhub-card-eyebrow">CAMPAIGN</div>
-            <div class="playhub-card-title">FRONTIER</div>
-            <div class="playhub-card-sub" id="playhub-frontier-sub">5-act roguelite career. Captains, rivals, and the Apheliotrope.</div>
-            <div class="playhub-card-tag" id="playhub-frontier-tag">RECOMMENDED</div>
+            <div class="playhub-card-eyebrow">LEGACY</div>
+            <div class="playhub-card-title">CLASSIC CAMPAIGN</div>
+            <div class="playhub-card-sub" id="playhub-frontier-sub">The original 5-act roguelite officer career.</div>
+            <div class="playhub-card-tag" id="playhub-frontier-tag">CLASSIC</div>
           </div>
           <div class="playhub-card-cta-stack">
             <button class="playhub-card-cta" id="playhub-frontier-cta">START</button>
@@ -863,14 +879,23 @@ export class MenuSystem {
     };
     this._addListener(screen.querySelector("#playhub-custom"), "click", customGo);
     this._addListener(screen.querySelector("#playhub-custom-cta"), "click", (e) => { e.stopPropagation(); customGo(); });
+    // FRONTIER: WARS (beta) → the new War-based Frontier hub. Separate
+    // entry from the legacy Frontier card so the old roguelite flow is
+    // untouched while the new mode is built out.
+    const warsGo = () => {
+      if (this._callbacks.onPlayHubFrontierWars) this._callbacks.onPlayHubFrontierWars();
+    };
+    this._addListener(screen.querySelector("#playhub-frontier-wars"), "click", warsGo);
+    this._addListener(screen.querySelector("#playhub-frontier-wars-cta"), "click", (e) => { e.stopPropagation(); warsGo(); });
 
     root.appendChild(screen);
     this._screens.playHub = screen;
   }
 
   _syncPlayHub(s) {
-    // Update the FRONTIER card to reflect run state: shows CONTINUE
-    // + a small "act / rank" line when there's an active career.
+    // Update the CLASSIC CAMPAIGN card (legacy roguelite) to reflect run
+    // state: RESUME + an "act / rank" line when there's an active career.
+    // (The prominent FRONTIER card above is the new War mode — static.)
     if (!this._playhubFrontierCta) return;
     const run = (s && s.runState && s.runState.run) || null;
     if (run) {
@@ -881,8 +906,8 @@ export class MenuSystem {
       if (this._playhubFrontierNew) this._playhubFrontierNew.style.display = "";
     } else {
       this._playhubFrontierCta.textContent = "START";
-      this._playhubFrontierSub.textContent = "5-act roguelite career. Captains, rivals, and the Apheliotrope.";
-      this._playhubFrontierTag.textContent = "RECOMMENDED";
+      this._playhubFrontierSub.textContent = "The original 5-act roguelite officer career.";
+      this._playhubFrontierTag.textContent = "CLASSIC";
       this._playhubFrontierTag.classList.remove("playhub-card-tag-active");
       if (this._playhubFrontierNew) this._playhubFrontierNew.style.display = "none";
     }
@@ -2830,6 +2855,417 @@ export class MenuSystem {
     }
   }
 
+  // ---- Frontier hub (NEW War-based Frontier) ------------------------------
+  // The between-run home. Reads menuState.frontierHub (assembled in
+  // input.js from src/frontier/state.js). Body is innerHTML-rebuilt on
+  // a signature change (scroll position preserved), so all dynamic
+  // controls route through ONE delegated click handler.
+
+  _buildFrontierHub(root) {
+    const screen = document.createElement("div");
+    screen.className = "menu-screen menu-frontier";
+    screen.dataset.screen = "frontierHub";
+    screen.innerHTML = `
+      <header class="frontier-header">
+        <button class="battleplan-back" id="frontier-back" title="Back">←</button>
+        <h2>FRONTIER · REPUBLIC WAR EFFORT</h2>
+        <div class="frontier-career" id="frontier-career"></div>
+      </header>
+      <div class="frontier-body" id="frontier-body"></div>
+      <footer class="frontier-footer">
+        <span class="frontier-launch-hint" id="frontier-launch-hint">Select a mission</span>
+        <button class="battleplan-launch-btn" id="frontier-launch" disabled>LAUNCH →</button>
+      </footer>
+      <div class="fh-editor-host" id="frontier-editor" style="display:none;"></div>
+      <div class="fh-editor-host" id="frontier-shop" style="display:none;"></div>
+      <div class="fh-editor-host" id="frontier-citations" style="display:none;"></div>
+      <div class="fh-editor-host" id="frontier-newsreel" style="display:none;"></div>
+      <div class="fh-editor-host" id="frontier-chests" style="display:none;"></div>
+    `;
+    root.appendChild(screen);
+    this._screens.frontierHub = screen;
+
+    this._fhCareer = screen.querySelector("#frontier-career");
+    this._fhBody = screen.querySelector("#frontier-body");
+    this._fhLaunch = screen.querySelector("#frontier-launch");
+    this._fhLaunchHint = screen.querySelector("#frontier-launch-hint");
+    this._fhEditor = screen.querySelector("#frontier-editor");
+    this._fhShop = screen.querySelector("#frontier-shop");
+    this._fhCitations = screen.querySelector("#frontier-citations");
+    this._fhNewsreel = screen.querySelector("#frontier-newsreel");
+    this._fhChests = screen.querySelector("#frontier-chests");
+    this._fhSig = null;
+
+    this._addListener(screen.querySelector("#frontier-back"), "click", () => {
+      if (this._callbacks.onFrontierHubBack) this._callbacks.onFrontierHubBack();
+    });
+    this._addListener(this._fhLaunch, "click", () => {
+      if (this._callbacks.onFrontierHubLaunch) this._callbacks.onFrontierHubLaunch();
+    });
+    this._addListener(screen, "click", (e) => this._onFrontierHubClick(e));
+  }
+
+  _onFrontierHubClick(e) {
+    const cb = this._callbacks;
+    const t = e.target;
+    // --- Editor actions (checked first; the sheet overlays the body) ---
+    const favEl = t.closest("[data-fh-fav]");
+    if (favEl) { if (cb.onFrontierHubFavorite) cb.onFrontierHubFavorite(favEl.dataset.fhFav); return; }
+    const equipEl = t.closest("[data-fh-equip]");
+    if (equipEl) { if (cb.onFrontierHubEquip) cb.onFrontierHubEquip(equipEl.dataset.fhEquip); return; }
+    if (t.closest("[data-fh-unequip]")) { if (cb.onFrontierHubUnequip) cb.onFrontierHubUnequip(); return; }
+    const salvEl = t.closest("[data-fh-salvage]");
+    if (salvEl) { if (cb.onFrontierHubSalvage) cb.onFrontierHubSalvage(salvEl.dataset.fhSalvage); return; }
+    if (t.closest("[data-fh-closeeditor]")) { if (cb.onFrontierHubCloseEditor) cb.onFrontierHubCloseEditor(); return; }
+    // --- Quartermaster shop actions ---
+    const buyEl = t.closest("[data-fh-buy]");
+    if (buyEl) { if (cb.onFrontierHubBuy) cb.onFrontierHubBuy(buyEl.dataset.fhBuy); return; }
+    if (t.closest("[data-fh-closeshop]")) { if (cb.onFrontierHubCloseShop) cb.onFrontierHubCloseShop(); return; }
+    if (t.closest("[data-fh-shop]")) { if (cb.onFrontierHubOpenShop) cb.onFrontierHubOpenShop(); return; }
+    // --- Citations wall ---
+    if (t.closest("[data-fh-closecitations]")) { if (cb.onFrontierHubCloseCitations) cb.onFrontierHubCloseCitations(); return; }
+    if (t.closest("[data-fh-citations]")) { if (cb.onFrontierHubOpenCitations) cb.onFrontierHubOpenCitations(); return; }
+    // --- Newsreel ---
+    if (t.closest("[data-fh-closenewsreel]")) { if (cb.onFrontierHubCloseNewsreel) cb.onFrontierHubCloseNewsreel(); return; }
+    if (t.closest("[data-fh-newsreel]")) { if (cb.onFrontierHubOpenNewsreel) cb.onFrontierHubOpenNewsreel(); return; }
+    // --- Premium caches ---
+    const openChestEl = t.closest("[data-fh-openchest]");
+    if (openChestEl) { if (cb.onFrontierHubOpenChest) cb.onFrontierHubOpenChest(openChestEl.dataset.fhOpenchest); return; }
+    if (t.closest("[data-fh-closechests]")) { if (cb.onFrontierHubCloseChests) cb.onFrontierHubCloseChests(); return; }
+    if (t.closest("[data-fh-chests]")) { if (cb.onFrontierHubOpenChests) cb.onFrontierHubOpenChests(); return; }
+    // --- Loadout slot → open editor ---
+    const slotEl = t.closest("[data-fh-slot]");
+    if (slotEl) { if (cb.onFrontierHubEditSlot) cb.onFrontierHubEditSlot(slotEl.dataset.fhSlot); return; }
+    // --- War / mission / pilot selection ---
+    const warEl = t.closest("[data-fh-war]");
+    if (warEl) { if (cb.onFrontierHubSelectWar) cb.onFrontierHubSelectWar(warEl.dataset.fhWar); return; }
+    const missionEl = t.closest("[data-fh-mission]");
+    if (missionEl && !missionEl.classList.contains("fh-locked")) {
+      if (cb.onFrontierHubSelectMission) {
+        cb.onFrontierHubSelectMission(missionEl.dataset.fhMtype, missionEl.dataset.fhMission);
+      }
+      return;
+    }
+    if (t.closest("[data-fh-command]")) { if (cb.onFrontierHubSelectCommand) cb.onFrontierHubSelectCommand(); return; }
+    const pilotEl = t.closest("[data-fh-pilot]");
+    if (pilotEl) { if (cb.onFrontierHubSelectPilot) cb.onFrontierHubSelectPilot(pilotEl.dataset.fhPilot); return; }
+  }
+
+  _fhFactionName(faction) {
+    return ({ brood: "THE BROOD", saurian: "VAR'SAKH DOMINION" })[faction] || (faction || "").toUpperCase();
+  }
+
+  _syncFrontierHub(s) {
+    const fh = s && s.frontierHub;
+    if (!fh || !this._fhBody) return;
+    const sig = JSON.stringify({
+      c: fh.career, w: fh.wars, sw: fh.selectedWarId, sel: fh.sel,
+      p: fh.pilotClasses, run: fh.hasRun,
+      lo: fh.loadout, st: fh.stats, sc: fh.stashCount, ed: fh.editor, sh: fh.shop, ci: fh.citations,
+      nr: fh.newsreel, cc: fh.canCommand, chx: fh.chests,
+      swr: fh.selectedWar ? [fh.selectedWar.completionPct, fh.selectedWar.killCount, fh.selectedWar.warCompleted] : null,
+    });
+    if (sig === this._fhSig) return;
+    this._fhSig = sig;
+    const scroll = this._fhBody.scrollTop;
+
+    // --- Career header chip ---
+    const car = fh.career || {};
+    const pct = Math.round((car.fraction || 0) * 100);
+    this._fhCareer.innerHTML = `
+      <div class="fh-rank">${car.rankName || "Rookie"}<span class="fh-tier"> · T${car.tierIndex || 0}</span></div>
+      <div class="fh-xpbar" title="Career XP"><div class="fh-xpfill" style="width:${pct}%"></div></div>
+      <div class="fh-credits">${(car.credits || 0).toLocaleString()} <span class="cr">war cr</span></div>
+    `;
+
+    // --- War selector ---
+    const wars = fh.wars || [];
+    const warCards = wars.map((w) => {
+      const active = w.id === fh.selectedWarId;
+      const prog = w.completed ? "COMPLETED" : `Ch ${w.chaptersCompleted}/${w.chaptersTotal}`;
+      return `<button class="fh-war-card${active ? " active" : ""}" data-fh-war="${w.id}">
+        <div class="fh-war-name">${w.codename}</div>
+        <div class="fh-war-enemy">vs ${this._fhFactionName(w.enemyFaction)}</div>
+        <div class="fh-war-prog">${prog}</div>
+      </button>`;
+    }).join("");
+
+    // --- Selected War detail ---
+    let detail = "";
+    const sw = fh.selectedWar;
+    if (sw) {
+      const chapters = sw.chapters.map((c, i) => {
+        const locked = c.status === "locked";
+        const sel = fh.sel && fh.sel.missionType === "chapter" && fh.sel.missionId === c.id;
+        const badge = c.status === "done" ? "✓" : (c.status === "next" ? "▶" : "🔒");
+        return `<button class="fh-mission fh-status-${c.status}${sel ? " selected" : ""}${locked ? " fh-locked" : ""}"
+          data-fh-mission="${c.id}" data-fh-mtype="chapter"${locked ? " disabled" : ""}>
+          <span class="fh-mission-badge">${badge}</span>
+          <span class="fh-mission-no">CH${i + 1}</span>
+          <span class="fh-mission-text"><span class="fh-mission-title">${c.title}</span>
+          <span class="fh-mission-sum">${c.summary}</span></span>
+        </button>`;
+      }).join("");
+      const sorties = sw.sorties.map((so) => {
+        const sel = fh.sel && fh.sel.missionType === "sortie" && fh.sel.missionId === so.id;
+        return `<button class="fh-mission fh-sortie${sel ? " selected" : ""}" data-fh-mission="${so.id}" data-fh-mtype="sortie">
+          <span class="fh-mission-badge">◆</span>
+          <span class="fh-mission-text"><span class="fh-mission-title">${so.name}</span>
+          <span class="fh-mission-sum">${so.summary}</span></span>
+        </button>`;
+      }).join("");
+      // War-state ribbon (§10.3): chapter spine nodes + completion% + kills.
+      const ribbonNodes = sw.chapters.map((c, i) =>
+        `<span class="fh-rib-node fh-rib-${c.status}" title="${c.title}">${i + 1}</span>`)
+        .join('<span class="fh-rib-link"></span>');
+      const ribbon = `
+        <div class="fh-ribbon">
+          <div class="fh-rib-spine">${ribbonNodes}</div>
+          <div class="fh-rib-stat">${sw.warCompleted ? "WAR WON · " : ""}${sw.completionPct}% · ${sw.killCount} down</div>
+        </div>`;
+      detail = `
+        <div class="fh-war-pitch">${sw.pitch}</div>
+        <div class="fh-war-geo">Staging: ${sw.staging} · Final target: ${sw.finalTarget}</div>
+        ${ribbon}
+        <div class="fh-section-title">CAMPAIGN — STORY SPINE</div>
+        <div class="fh-mission-list">${chapters}</div>
+        <div class="fh-section-title">SIDE SORTIES</div>
+        <div class="fh-mission-list">${sorties}</div>
+      `;
+    }
+
+    // --- Pilot-class picker ---
+    const classes = fh.pilotClasses || ["fighter"];
+    const cmd = !!(fh.sel && fh.sel.commandMode);
+    const pilotChips = classes.map((k) =>
+      `<button class="fh-pilot-chip${(!cmd && fh.sel && fh.sel.pilotClass === k) ? " active" : ""}" data-fh-pilot="${k}">
+        ${CLASS_SHORT_LABELS[k] || k.toUpperCase()}</button>`).join("")
+      // FLEET COMMAND (admiral) — unlocked at a command-scope tier. Hand
+      // your ship to the AI and direct the whole fleet.
+      + (fh.canCommand
+        ? `<button class="fh-pilot-chip fh-cmd-chip${cmd ? " active" : ""}" data-fh-command="1">⚑ FLEET COMMAND</button>`
+        : "");
+
+    // --- Loadout panel for the selected pilot class ---
+    const STAT_LBL = { hp: "HULL", shield: "SHIELD", speed: "SPD", turn: "TURN", damage: "DMG", fireRate: "ROF", missileDamage: "MSL" };
+    const statSummary = Object.entries(fh.stats || {})
+      .filter(([, v]) => v > 1.0001)
+      .map(([k, v]) => `<span class="fh-stat">+${Math.round((v - 1) * 100)}% ${STAT_LBL[k] || k}</span>`)
+      .join("");
+    const loadoutRows = (fh.loadout || []).map((row) => {
+      if (!row.module) {
+        return `<button class="fh-lo-row fh-lo-empty" data-fh-slot="${row.slot}"><span class="fh-lo-slot">${row.label}</span><span class="fh-lo-mod">— empty —</span><span class="fh-lo-edit">▸</span></button>`;
+      }
+      const m = row.module;
+      const aff = (m.affixes || []).map((a) =>
+        `<span class="fh-aff${a.applied ? "" : " fh-aff-future"}">+${Math.round(a.value * 100)}% ${a.label}</span>`).join("");
+      const uniq = m.unique ? `<div class="fh-uniq">★ ${m.unique}</div>` : "";
+      return `<button class="fh-lo-row" data-fh-slot="${row.slot}"><span class="fh-lo-slot">${row.label}</span>
+        <span class="fh-lo-mod" style="color:${m.color}">${m.name}</span><span class="fh-lo-edit">▸</span>
+        <div class="fh-lo-affixes">${aff}${uniq}</div></button>`;
+    }).join("");
+
+    this._fhBody.innerHTML = `
+      <div class="fh-war-select">${warCards}</div>
+      <div class="fh-war-detail">${detail}</div>
+      <div class="fh-section-title">PILOT — FLY AS</div>
+      <div class="fh-pilot-row">${pilotChips}</div>
+      <div class="fh-section-title">LOADOUT ${statSummary ? `<span class="fh-stat-summary">${statSummary}</span>` : ""}</div>
+      <div class="fh-loadout">${loadoutRows}</div>
+      <div class="fh-stash-bar">
+        <button class="fh-shop-btn" data-fh-shop="1">⚒ QUARTERMASTER</button>
+        <button class="fh-shop-btn fh-citations-btn" data-fh-citations="1">✦ CITATIONS</button>
+        <button class="fh-shop-btn fh-news-btn" data-fh-newsreel="1">▶ NEWSREEL</button>
+        <button class="fh-shop-btn fh-chests-btn" data-fh-chests="1">◇ CACHES</button>
+        <span class="fh-stash-line">STASH · ${fh.stashCount || 0}</span>
+      </div>
+    `;
+    this._fhBody.scrollTop = scroll;
+
+    // --- Slot editor bottom sheet ---
+    if (fh.editor) {
+      const ed = fh.editor;
+      const affLine = (mod) => {
+        const aff = (mod.affixes || []).map((a) =>
+          `<span class="fh-aff${a.applied ? "" : " fh-aff-future"}">+${Math.round(a.value * 100)}% ${a.label}</span>`).join("");
+        const uniq = mod.unique ? `<div class="fh-uniq">★ ${mod.unique}</div>` : "";
+        return `<div class="fh-cand-affixes">${aff}${uniq}</div>`;
+      };
+      const card = (mod) => `
+        <div class="fh-cand${mod.equipped ? " equipped" : ""}">
+          <div class="fh-cand-top">
+            <span class="fh-cand-name" style="color:${mod.color}">${mod.name}${mod.equipped ? " · EQUIPPED" : ""}</span>
+            <button class="fh-fav${mod.favorite ? " on" : ""}" data-fh-fav="${mod.id}" title="Favorite (protect from auto-salvage)">★</button>
+          </div>
+          ${affLine(mod)}
+          <div class="fh-cand-actions">
+            ${mod.equipped
+              ? `<button class="fh-btn" data-fh-unequip="1">UNEQUIP</button>`
+              : `<button class="fh-btn fh-btn-go" data-fh-equip="${mod.id}">EQUIP</button>`}
+            <button class="fh-btn fh-btn-danger" data-fh-salvage="${mod.id}">SALVAGE ${mod.salvageValue}cr</button>
+          </div>
+        </div>`;
+      const list = ed.candidates.length
+        ? ed.candidates.map(card).join("")
+        : `<div class="fh-editor-empty">No ${ed.label} modules in the stash yet. Win missions to find some.</div>`;
+      this._fhEditor.innerHTML = `
+        <div class="fh-editor-backdrop" data-fh-closeeditor="1"></div>
+        <div class="fh-editor-sheet">
+          <div class="fh-editor-head"><span>${ed.label} · EQUIP</span>
+            <button class="fh-editor-close" data-fh-closeeditor="1">✕</button></div>
+          <div class="fh-editor-list">${list}</div>
+        </div>`;
+      this._fhEditor.style.display = "block";
+    } else {
+      this._fhEditor.innerHTML = "";
+      this._fhEditor.style.display = "none";
+    }
+
+    // --- Quartermaster shop bottom sheet ---
+    if (fh.shop) {
+      const shopCard = (mod) => {
+        const aff = (mod.affixes || []).map((a) =>
+          `<span class="fh-aff${a.applied ? "" : " fh-aff-future"}">+${Math.round(a.value * 100)}% ${a.label}</span>`).join("");
+        const uniq = mod.unique ? `<div class="fh-uniq">★ ${mod.unique}</div>` : "";
+        return `<div class="fh-cand">
+          <div class="fh-cand-top"><span class="fh-cand-name" style="color:${mod.color}">${mod.name}</span>
+            <span class="fh-shop-tag">${mod.klass} · ${mod.slotLabel}</span></div>
+          <div class="fh-cand-affixes">${aff}${uniq}</div>
+          <div class="fh-cand-actions">
+            <button class="fh-btn fh-btn-go" data-fh-buy="${mod.id}"${mod.affordable ? "" : " disabled"}>BUY ${mod.price}cr</button>
+          </div></div>`;
+      };
+      const rot = fh.shop.rotating.length
+        ? fh.shop.rotating.map(shopCard).join("")
+        : `<div class="fh-editor-empty">Sold out — restocks when you complete a chapter.</div>`;
+      const std = fh.shop.staticStock.map(shopCard).join("");
+      this._fhShop.innerHTML = `
+        <div class="fh-editor-backdrop" data-fh-closeshop="1"></div>
+        <div class="fh-editor-sheet">
+          <div class="fh-editor-head"><span>QUARTERMASTER · ${(fh.shop.credits || 0).toLocaleString()} cr</span>
+            <button class="fh-editor-close" data-fh-closeshop="1">✕</button></div>
+          <div class="fh-editor-list">
+            <div class="fh-section-title">ROTATING STOCK</div>${rot}
+            <div class="fh-section-title">STANDARD ISSUE</div>${std}
+          </div>
+        </div>`;
+      this._fhShop.style.display = "block";
+    } else {
+      this._fhShop.innerHTML = "";
+      this._fhShop.style.display = "none";
+    }
+
+    // --- Citations / decorations wall ---
+    if (fh.citations) {
+      const CAT_LABEL = { combat: "COMBAT", career: "CAREER", build: "BUILD MASTERY" };
+      const earnedCount = fh.citations.filter((a) => a.earned).length;
+      const byCat = {};
+      for (const a of fh.citations) { (byCat[a.category] = byCat[a.category] || []).push(a); }
+      const row = (a) => `
+        <div class="fh-cite${a.earned ? " earned" : ""}">
+          <span class="fh-cite-medal">✦</span>
+          <span class="fh-cite-text"><span class="fh-cite-name">${a.name}</span>
+          <span class="fh-cite-desc">${a.desc}${a.progress ? ` · ${a.progress}` : ""}</span></span>
+          ${a.earned ? `<span class="fh-cite-badge">AWARDED</span>` : ""}
+        </div>`;
+      const sections = Object.keys(CAT_LABEL).filter((c) => byCat[c]).map((c) =>
+        `<div class="fh-section-title">${CAT_LABEL[c]}</div>${byCat[c].map(row).join("")}`).join("");
+      this._fhCitations.innerHTML = `
+        <div class="fh-editor-backdrop" data-fh-closecitations="1"></div>
+        <div class="fh-editor-sheet">
+          <div class="fh-editor-head"><span>CITATIONS · ${earnedCount}/${fh.citations.length}</span>
+            <button class="fh-editor-close" data-fh-closecitations="1">✕</button></div>
+          <div class="fh-editor-list">${sections}</div>
+        </div>`;
+      this._fhCitations.style.display = "block";
+    } else {
+      this._fhCitations.innerHTML = "";
+      this._fhCitations.style.display = "none";
+    }
+
+    // --- Newsreel feed ---
+    if (fh.newsreel) {
+      const segs = fh.newsreel.unlocked || [];
+      const feed = segs.length
+        ? segs.map((s) => `
+            <div class="fh-news-item">
+              <div class="fh-news-head">▶ ${s.title}<span class="fh-news-who">${s.speaker}</span></div>
+              <div class="fh-news-body">${s.body}</div>
+            </div>`).join("")
+        : `<div class="fh-editor-empty">No broadcasts yet. Win missions to make the news.</div>`;
+      const locked = fh.newsreel.lockedCount
+        ? `<div class="fh-news-locked">+ ${fh.newsreel.lockedCount} classified broadcast${fh.newsreel.lockedCount > 1 ? "s" : ""} — earn them in the field</div>`
+        : "";
+      this._fhNewsreel.innerHTML = `
+        <div class="fh-editor-backdrop" data-fh-closenewsreel="1"></div>
+        <div class="fh-editor-sheet">
+          <div class="fh-editor-head"><span>REPUBLIC NEWSREEL</span>
+            <button class="fh-editor-close" data-fh-closenewsreel="1">✕</button></div>
+          <div class="fh-editor-list">${feed}${locked}</div>
+        </div>`;
+      this._fhNewsreel.style.display = "block";
+    } else {
+      this._fhNewsreel.innerHTML = "";
+      this._fhNewsreel.style.display = "none";
+    }
+
+    // --- Premium caches ---
+    if (fh.chests) {
+      const ch = fh.chests;
+      // Reveal banner for the just-opened cache.
+      let reveal = "";
+      const rw = ch.lastReward;
+      if (rw) {
+        const aff = (rw.affixes || []).map((a) =>
+          `<span class="fh-aff${a.applied ? "" : " fh-aff-future"}">+${Math.round(a.value * 100)}% ${a.label}</span>`).join("");
+        const uniq = rw.unique ? `<div class="fh-uniq">★ ${rw.unique}</div>` : "";
+        reveal = `<div class="fh-reveal">
+          <div class="fh-reveal-tag">${rw.pityHit ? "PITY GUARANTEE" : "ACQUIRED"}</div>
+          <div class="fh-reveal-name" style="color:${rw.color}">${rw.name}</div>
+          <div class="fh-cand-sub">${rw.klass} · ${rw.slotLabel}</div>
+          <div class="fh-cand-affixes">${aff}${uniq}</div>
+        </div>`;
+      }
+      const card = (t) => {
+        const odds = t.odds.map((o) =>
+          `<span class="fh-odd" style="color:${o.color}">${o.label} ${o.pct}%</span>`).join("");
+        return `<div class="fh-chest">
+          <div class="fh-chest-top"><span class="fh-chest-name">${t.name}</span>
+            <button class="fh-btn fh-btn-go" data-fh-openchest="${t.id}"${t.affordable ? "" : " disabled"}>OPEN ${t.price}cr</button></div>
+          <div class="fh-chest-odds">${odds}</div>
+        </div>`;
+      };
+      const pity = ch.pity.untilGuaranteed <= 0
+        ? `Rare-or-better guaranteed on your NEXT cache`
+        : `Rare-or-better guaranteed within ${ch.pity.untilGuaranteed} cache${ch.pity.untilGuaranteed > 1 ? "s" : ""}`;
+      this._fhChests.innerHTML = `
+        <div class="fh-editor-backdrop" data-fh-closechests="1"></div>
+        <div class="fh-editor-sheet">
+          <div class="fh-editor-head"><span>PREMIUM CACHES · ${(ch.credits || 0).toLocaleString()} cr</span>
+            <button class="fh-editor-close" data-fh-closechests="1">✕</button></div>
+          <div class="fh-editor-list">
+            ${reveal}
+            ${ch.tiers.map(card).join("")}
+            <div class="fh-chest-pity">⚖ ${pity}</div>
+            <div class="fh-chest-note">Disclosed odds shown above. Caches are optional — every module is also earnable through missions and the Quartermaster.</div>
+          </div>
+        </div>`;
+      this._fhChests.style.display = "block";
+    } else {
+      this._fhChests.innerHTML = "";
+      this._fhChests.style.display = "none";
+    }
+
+    // --- Launch button state ---
+    const ready = !!(fh.sel && fh.sel.missionId && (fh.sel.commandMode || fh.sel.pilotClass));
+    this._fhLaunch.disabled = !ready;
+    this._fhLaunchHint.textContent = !ready
+      ? "Select a mission"
+      : (fh.sel.commandMode
+          ? "Take fleet command"
+          : `Deploy as ${(CLASS_SHORT_LABELS[fh.sel.pilotClass] || fh.sel.pilotClass)}`);
+  }
+
   // ---- Resupply -----------------------------------------------------------
 
   _buildResupply(root) {
@@ -3809,6 +4245,7 @@ export class MenuSystem {
     this._syncBattleChoice(menuState);
     this._syncBattlePlan(menuState);
     this._syncFleetPlan(menuState);
+    this._syncFrontierHub(menuState);
 
     // --- Resupply ---
     this._syncResupply(menuState);

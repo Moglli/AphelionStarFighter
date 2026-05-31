@@ -1,5 +1,10 @@
 import { SIDES } from "./classes.js";
-import { resolveSpec, deepMerge } from "./races.js";
+import { resolveSpec, deepMerge, isProceduralHull } from "./races.js";
+// Procedural ship-generation CORE (shipgen.js) — reusable + faction-agnostic.
+// Only the hull-silhouette generator is used here; which ships get a
+// procedural hull is faction DATA (RACES[race].proceduralHulls), so the core
+// stays untouched when a fully-random faction is added later.
+import { generateHull, mulberry32 } from "./shipgen.js";
 import * as V from "./vec.js";
 import { createProjectile, createMissile } from "./projectile.js";
 import { getSprite, ENGINES, ENGINE_X, buildCells, killCellsForModule,
@@ -45,6 +50,22 @@ let nextId = 1;
 //   Reavers  — angular, asymmetric, predatory spikes.
 //   Hegemony — blocky, slabby, armored rectangles.
 //   Voidsworn — sleek crescents and swept-wing curves.
+// Build a y-symmetric hull polygon from a top-edge half-profile (nose→tail,
+// y>=0, nose on the axis, x strictly decreasing). Mirrors the lower edge
+// to match the HULLS winding convention (upper edge fore→aft, then lower
+// edge aft→fore). Guarantees symmetry + consistent winding, so new races
+// can't accidentally ship a self-intersecting or wrong-wound hull.
+function mk(top) {
+  // If the nose vertex is on the axis (y≈0) it's shared — exclude it from
+  // the mirror so it isn't duplicated. If it's off-axis (a blunt prow),
+  // mirror the whole edge so the nose closes as an edge. slice() copies
+  // first so reverse() never mutates the caller's array.
+  const noseOnAxis = Math.abs(top[0][1]) < 1e-9;
+  const src = (noseOnAxis ? top.slice(1) : top.slice()).reverse();
+  const bottom = src.map(([x, y]) => [x, -y]);
+  return top.concat(bottom);
+}
+
 const HULLS = {
   terran: {
     // Interceptor: needle prow, taut fuselage, hard-swept delta wings
@@ -337,6 +358,46 @@ const HULLS = {
                  [-0.35, 0.5], [-0.7, 0.5], [-1.0, 0.0], [-0.7, -0.5],
                  [-0.35, -0.5], [0.0, -1.0], [0.35, -0.5], [0.7, -0.5]],
   },
+
+  // Brood — organic, bulbous carapaces with swept wing-fins (manta /
+  // beetle). Smooth curves, no hard panels. Built from half-profiles via
+  // mk() so every hull is symmetric + correctly wound.
+  brood: {
+    fighter:    mk([[1, 0], [0.78, 0.10], [0.50, 0.20], [0.22, 0.30], [-0.05, 0.42],
+                    [-0.30, 0.46], [-0.50, 0.34], [-0.68, 0.16], [-0.90, 0.08]]),
+    bomber:     mk([[1, 0], [0.80, 0.14], [0.52, 0.26], [0.25, 0.40], [-0.02, 0.52],
+                    [-0.28, 0.52], [-0.48, 0.40], [-0.66, 0.22], [-0.92, 0.10]]),
+    frigate:    mk([[1, 0], [0.80, 0.12], [0.55, 0.22], [0.30, 0.34], [0.0, 0.40],
+                    [-0.30, 0.42], [-0.55, 0.34], [-0.75, 0.20], [-0.95, 0.10]]),
+    cruiser:    mk([[1, 0], [0.82, 0.14], [0.58, 0.20], [0.40, 0.34], [0.10, 0.40],
+                    [-0.18, 0.46], [-0.45, 0.42], [-0.68, 0.28], [-0.86, 0.14], [-1.0, 0.08]]),
+    battleship: mk([[1, 0], [0.84, 0.18], [0.60, 0.30], [0.36, 0.50], [0.06, 0.62],
+                    [-0.24, 0.66], [-0.52, 0.56], [-0.74, 0.36], [-0.92, 0.18], [-1.0, 0.10]]),
+    carrier:    mk([[1, 0.06], [0.82, 0.26], [0.50, 0.44], [0.18, 0.58], [-0.16, 0.62],
+                    [-0.48, 0.54], [-0.74, 0.36], [-0.92, 0.18], [-1.0, 0.10]]),
+  },
+
+  // Saurian (Var'sakh Dominion) — predatory, ornamented, sharply swept.
+  // Pointed/ram prows, hard-raked wings sweeping aft, elegant aggression.
+  saurian: {
+    fighter:    mk([[1, 0], [0.72, 0.05], [0.48, 0.09], [0.22, 0.13], [0.0, 0.16],
+                    [-0.14, 0.30], [-0.34, 0.52], [-0.50, 0.50], [-0.52, 0.28],
+                    [-0.72, 0.22], [-0.95, 0.12]]),
+    bomber:     mk([[1, 0], [0.78, 0.08], [0.54, 0.14], [0.30, 0.22], [0.05, 0.26],
+                    [-0.12, 0.44], [-0.34, 0.58], [-0.52, 0.54], [-0.54, 0.30],
+                    [-0.76, 0.26], [-0.96, 0.14]]),
+    frigate:    mk([[1, 0], [0.80, 0.08], [0.62, 0.12], [0.54, 0.26], [0.34, 0.30],
+                    [0.10, 0.34], [-0.16, 0.40], [-0.42, 0.54], [-0.66, 0.50],
+                    [-0.70, 0.26], [-0.95, 0.16]]),
+    cruiser:    mk([[1, 0], [0.82, 0.09], [0.66, 0.12], [0.58, 0.28], [0.40, 0.30],
+                    [0.18, 0.22], [-0.06, 0.34], [-0.30, 0.42], [-0.56, 0.56],
+                    [-0.78, 0.50], [-0.82, 0.24], [-1.0, 0.16]]),
+    battleship: mk([[1, 0], [0.86, 0.12], [0.72, 0.16], [0.66, 0.34], [0.48, 0.36],
+                    [0.30, 0.24], [0.06, 0.40], [-0.18, 0.56], [-0.46, 0.66],
+                    [-0.72, 0.58], [-0.86, 0.30], [-1.0, 0.20]]),
+    carrier:    mk([[1, 0.08], [0.92, 0.28], [0.56, 0.40], [0.30, 0.44], [-0.04, 0.50],
+                    [-0.40, 0.52], [-0.70, 0.42], [-0.90, 0.24], [-1.0, 0.14]]),
+  },
 };
 
 export function getHull(race, klass) {
@@ -421,10 +482,28 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
       spec.boost = { ...BOOST_DEFAULTS[klass] };
     }
   }
+  // Hull-polygon resolution (generic + reusable). Priority:
+  //   1. design.hullPoly — explicit override (future player ship-builder /
+  //      a pre-generated ship),
+  //   2. a per-race procedural roll for classes flagged in
+  //      RACES[race].proceduralHulls (e.g. Brood brood-ships),
+  //   3. the canonical hand-authored getHull(race, klass).
+  // generateHull self-validates against the hull contract and falls back to
+  // a guaranteed-valid shape, so a bad roll can't poison the geometry
+  // pipeline. Seeded by the ship id → each procedural ship gets a distinct
+  // but render-stable silhouette (no Date.now/Math.random — reproducibility).
+  const id = nextId++;
+  const hullPoly = (design && design.hullPoly)
+    ? design.hullPoly
+    : (isProceduralHull(race, klass)
+        ? generateHull(klass, { rng: mulberry32(((id * 2654435761) >>> 0) || 1) })
+        : null);
+  const poly = hullPoly || getHull(race, klass);
   const ship = {
-    id: nextId++,
+    id,
     klass,
     race,
+    hullPoly, // null for canonical hulls; the custom polygon when overridden
     side,
     spec,
     pos: { ...pos },
@@ -537,7 +616,7 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     // Capital subsystem modules: nullable list of destructible parts.
     // Populated for battleship / carrier / cruiser; other classes stay null
     // and route damage straight to hull as before.
-    modules: buildModules(klass, spec, getHull(race, klass),
+    modules: buildModules(klass, spec, poly,
                           (getCellStats(race, klass) || {}).armor || 0),
     moduleByName: null,
     pdTurretModules: null,
@@ -663,7 +742,7 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
   // damageCellsInRadius in sprites.js / applyDamage in game.js). Cells
   // are bound to the nearest module so a module kill tears out a
   // matching cluster of pixels along with it.
-  const grid = buildCells(klass, spec.radius, ship.race);
+  const grid = buildCells(klass, spec.radius, ship.race, poly);
   if (grid) {
     ship.cells      = grid.cells;
     ship.cellW      = grid.cellW;
@@ -1036,15 +1115,23 @@ function updateReplenishment(carrier, dt, world) {
   // A destroyed hangar freezes both production lines — the carrier's
   // strategic role ends without killing the ship.
   if (carrier.moduleByName && carrier.moduleByName.hangar && carrier.moduleByName.hangar.disabled) return;
-  carrier.fighterLaunchCd -= dt;
-  carrier.bomberLaunchCd -= dt;
-  if (carrier.fighterLaunchCd <= 0) {
-    launchReplacement(carrier, world, "fighter");
-    carrier.fighterLaunchCd = carrier.spec.replenish.fighter;
+  const rep = carrier.spec.replenish;
+  if (rep.fighter > 0) {
+    carrier.fighterLaunchCd -= dt;
+    if (carrier.fighterLaunchCd <= 0) {
+      launchReplacement(carrier, world, "fighter");
+      carrier.fighterLaunchCd = rep.fighter;
+    }
   }
-  if (carrier.bomberLaunchCd <= 0) {
-    launchReplacement(carrier, world, "bomber");
-    carrier.bomberLaunchCd = carrier.spec.replenish.bomber;
+  // Bomber line only runs when the carrier actually hatches bombers — a
+  // faction whose replenish omits `bomber` (e.g. the Brood, fighters
+  // only) never launches them.
+  if (rep.bomber > 0) {
+    carrier.bomberLaunchCd -= dt;
+    if (carrier.bomberLaunchCd <= 0) {
+      launchReplacement(carrier, world, "bomber");
+      carrier.bomberLaunchCd = rep.bomber;
+    }
   }
 }
 
@@ -2234,6 +2321,9 @@ const FACTION_SHIELD = {
   reavers:   [255,  85,  45],   // heat orange  (key is "reavers" — ship.race)
   voidsworn: [160,  75, 255],   // void violet
   thren:     [ 60, 220, 110],   // bioluminescent green
+  brood:     [180, 240,  90],   // toxic chartreuse glow
+  saurian:   [255, 205, 120],   // burnished bronze
+  synthetics:[170, 245, 255],   // icy machine cyan-white
 };
 
 // Per-faction module body base color (RGB) — healthy plate tint.
@@ -2243,6 +2333,9 @@ const FACTION_MODULE = {
   reavers:   [80,  25,  18],    // key is "reavers" (was "reaver" → fell back to terran blue)
   voidsworn: [28,  18,  85],
   thren:     [18,  78,  32],
+  brood:     [46,  70,  22],    // dark chitin-green
+  saurian:   [78,  58,  28],    // bronze-bark
+  synthetics:[55,  75, 105],    // cool steel-blue
 };
 
 function factionShieldRGB(race) {
@@ -2298,6 +2391,9 @@ const MODULE_STYLE = {
   reavers:   { shape: "round",   trim: [235, 130,  95], rivets: 5, flair: "scrap"  },
   voidsworn: { shape: "round",   trim: [200, 150, 255], rivets: 0, flair: "rune"   },
   thren:     { shape: "organic", trim: [130, 240, 160], rivets: 0, flair: "bio"    },
+  brood:     { shape: "organic", trim: [190, 245, 120], rivets: 0, flair: "bio"    },
+  saurian:   { shape: "octagon", trim: [255, 220, 150], rivets: 7, flair: "ornate" },
+  synthetics:{ shape: "octagon", trim: [190, 240, 255], rivets: 8, flair: "panel"  },
 };
 function moduleStyle(race) { return MODULE_STYLE[race] || MODULE_STYLE.terran; }
 
@@ -2855,7 +2951,7 @@ export function drawShip(ctx, ship, zoom = 1) {
       const half = sprite.halfExtent * scale;
       ctx.drawImage(sprite.canvas, -half, -half, half * 2, half * 2);
     } else {
-      const poly = getHull(ship.race, ship.klass);
+      const poly = ship.hullPoly || getHull(ship.race, ship.klass);
       ctx.beginPath();
       ctx.moveTo(poly[0][0] * s.radius, poly[0][1] * s.radius);
       for (let i = 1; i < poly.length; i++) {
@@ -2871,7 +2967,7 @@ export function drawShip(ctx, ship, zoom = 1) {
   // the block canvas; for sprite-hull ships it overlays the polygon.
   // Block ships: skip (color is baked into the block palette per faction).
   if (!ship.cells && ship.paint && (ship.paint.primary || ship.paint.trim)) {
-    const poly = getHull(ship.race, ship.klass);
+    const poly = ship.hullPoly || getHull(ship.race, ship.klass);
     if (poly) {
       ctx.save();
       ctx.beginPath();
