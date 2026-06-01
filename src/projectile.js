@@ -12,7 +12,7 @@ import { events } from "./events.js";
 
 export function createProjectile({
   pos, vel, damage, ttl, radius, color, side, ownerId, ownerKlass = null,
-  kind = "cannon", fromKlass = null,
+  kind = "cannon", fromKlass = null, race = null,
 }) {
   return {
     pos: { ...pos },
@@ -26,6 +26,7 @@ export function createProjectile({
     ownerKlass,
     kind,
     fromKlass,
+    race,           // firing faction — drives per-faction projectile art only
     dead: false,
     hp: 1,
   };
@@ -42,6 +43,7 @@ export function createMissile({
   bypassShield = false,
   blastRadius = null,
   antiCraftBonus = null,
+  race = null,
 }) {
   return {
     pos: { ...pos },
@@ -55,6 +57,7 @@ export function createMissile({
     ownerId,
     kind: "missile",
     fromKlass,
+    race,           // firing faction — drives per-faction missile art only
     dead: false,
     hp,
     speed,
@@ -278,6 +281,7 @@ function spawnClusterChildren(parent, target, world) {
       turnRate: childTurnRate,
       hp: childHp,
       fromKlass: parent.fromKlass,
+      race: parent.race,
       acquireRange: parent.acquireRange,
       initialTarget: target,
       bypassShield: parent.bypassShield,
@@ -346,32 +350,129 @@ export function drawProjectile(ctx, p) {
     drawCarrierShell(ctx, p);
     return;
   }
-  // Heavy non-BB cannon shells (cruiser, etc.) render as oriented streaks.
-  if (p.radius >= 6) {
-    const vx = p.vel ? p.vel.x : 0;
-    const vy = p.vel ? p.vel.y : 0;
-    const heading = (vx || vy) ? Math.atan2(vy, vx) : 0;
-    ctx.save();
-    ctx.translate(p.pos.x, p.pos.y);
-    ctx.rotate(heading);
-    ctx.fillStyle = p.color;
-    const len = p.radius * 2.6;
-    const halfH = p.radius * 0.78;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, len, halfH, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.globalAlpha = 0.55;
-    ctx.beginPath();
-    ctx.ellipse(len * 0.55, 0, len * 0.25, halfH * 0.55, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    return;
+  drawFactionRound(ctx, p);
+}
+
+// ---------------------------------------------------------------------------
+// Per-faction projectile + missile aesthetics. VISUAL ONLY — damage, speed,
+// radius, ttl, homing, PD-interception etc. are unchanged; this just picks a
+// colour + silhouette per firing faction (p.race / m.race, stamped at fire
+// time). Unknown race → terran-style fallback. `c` = core/body colour,
+// `g` = [r,g,b] glow, `shape` = silhouette renderer.
+// ---------------------------------------------------------------------------
+const PROJECTILE_STYLE = {
+  terran:    { c: "#bfe6ff", g: [150, 210, 255], shape: "tracer" },
+  reavers:   { c: "#ff7a3c", g: [255, 110,  55], shape: "shard"  },
+  hegemony:  { c: "#ffd86a", g: [255, 200,  90], shape: "slug"   },
+  voidsworn: { c: "#c59cff", g: [180, 120, 255], shape: "lance"  },
+  thren:     { c: "#9dff8a", g: [150, 255, 120], shape: "pellet" },
+  brood:     { c: "#caff5a", g: [180, 245,  80], shape: "spore"  },
+  saurian:   { c: "#ffb24a", g: [255, 170,  70], shape: "bolt"   },
+  synthetics:{ c: "#8ff4ff", g: [150, 240, 255], shape: "packet" },
+};
+function projStyle(p) { return PROJECTILE_STYLE[p.race] || PROJECTILE_STYLE.terran; }
+
+const MISSILE_STYLE = {
+  terran:    { body: "#cdd6e6", trail: [160, 210, 255], shape: "sleek"  },
+  reavers:   { body: "#5a2018", trail: [255, 110,  55], shape: "jagged" },
+  hegemony:  { body: "#5a431a", trail: [255, 200,  90], shape: "heavy"  },
+  voidsworn: { body: "#3a2a6a", trail: [180, 120, 255], shape: "lance"  },
+  thren:     { body: "#1f5a2a", trail: [150, 255, 120], shape: "organic"},
+  brood:     { body: "#2a4a16", trail: [180, 245,  80], shape: "organic"},
+  saurian:   { body: "#5a4020", trail: [255, 170,  70], shape: "finned" },
+  synthetics:{ body: "#284a5a", trail: [150, 240, 255], shape: "sleek"  },
+};
+function missileStyle(m) { return MISSILE_STYLE[m.race] || MISSILE_STYLE.terran; }
+
+function drawFactionRound(ctx, p) {
+  const st = projStyle(p);
+  const R = p.radius;
+  const vx = p.vel ? p.vel.x : 0, vy = p.vel ? p.vel.y : 0;
+  const heading = (vx || vy) ? Math.atan2(vy, vx) : 0;
+  const [gr, gg, gb] = st.g;
+  ctx.save();
+  ctx.translate(p.pos.x, p.pos.y);
+  ctx.rotate(heading);
+  switch (st.shape) {
+    case "tracer": {            // Terran — bright bolt + short white-hot head
+      ctx.fillStyle = st.c;
+      ctx.beginPath(); ctx.ellipse(0, 0, R * 1.8, R * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(R * 0.9, 0, R * 0.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "shard": {             // Reaver — jagged angular splinter
+      ctx.fillStyle = st.c;
+      ctx.beginPath();
+      ctx.moveTo(R * 2.0, 0); ctx.lineTo(-R * 0.6, R * 0.95);
+      ctx.lineTo(-R * 1.1, 0); ctx.lineTo(-R * 0.6, -R * 0.95);
+      ctx.closePath(); ctx.fill();
+      break;
+    }
+    case "slug": {              // Hegemony — heavy dark-cored gold slug
+      ctx.fillStyle = "rgba(30,20,8,0.9)";
+      ctx.beginPath(); ctx.ellipse(0, 0, R * 1.5, R * 0.95, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = st.c;
+      ctx.beginPath(); ctx.ellipse(R * 0.2, 0, R * 0.85, R * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "lance": {             // Voidsworn — long glowing energy lance
+      const grad = ctx.createLinearGradient(-R * 2.4, 0, R * 2.4, 0);
+      grad.addColorStop(0, `rgba(${gr},${gg},${gb},0)`);
+      grad.addColorStop(0.5, st.c);
+      grad.addColorStop(1, "#fff");
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.ellipse(0, 0, R * 2.4, R * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "pellet": {            // Thren — round bioluminescent blob
+      const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 2.0);
+      halo.addColorStop(0, st.c); halo.addColorStop(0.5, `rgba(${gr},${gg},${gb},0.5)`);
+      halo.addColorStop(1, `rgba(${gr},${gg},${gb},0)`);
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(0, 0, R * 2.0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#eaffe0";
+      ctx.beginPath(); ctx.arc(0, 0, R * 0.7, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "spore": {             // Brood — acid glob + faint pulsing halo
+      const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 2.2);
+      halo.addColorStop(0, `rgba(${gr},${gg},${gb},0.9)`);
+      halo.addColorStop(1, `rgba(${gr},${gg},${gb},0)`);
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(0, 0, R * 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = st.c;
+      ctx.beginPath(); ctx.arc(0, 0, R * 0.85, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(40,70,16,0.9)";  // dark organic fleck
+      ctx.beginPath(); ctx.arc(R * 0.2, -R * 0.15, R * 0.3, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "bolt": {              // Saurian — sharp bronze double-streak
+      ctx.fillStyle = st.c;
+      ctx.beginPath();
+      ctx.moveTo(R * 2.2, 0); ctx.lineTo(-R * 1.4, R * 0.45);
+      ctx.lineTo(-R * 1.4, -R * 0.45); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fff6e0";
+      ctx.beginPath(); ctx.arc(R * 1.2, 0, R * 0.4, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+    case "packet": {            // Synthetics — crisp digital diamond
+      ctx.fillStyle = `rgba(${gr},${gg},${gb},0.45)`;
+      ctx.beginPath(); ctx.arc(0, 0, R * 1.6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = st.c;
+      ctx.beginPath();
+      ctx.moveTo(R * 1.3, 0); ctx.lineTo(0, R * 0.9); ctx.lineTo(-R * 1.3, 0); ctx.lineTo(0, -R * 0.9);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(-R * 0.25, -R * 0.25, R * 0.5, R * 0.5);
+      break;
+    }
+    default: {
+      ctx.fillStyle = st.c;
+      ctx.beginPath(); ctx.arc(0, 0, R, 0, Math.PI * 2); ctx.fill();
+    }
   }
-  ctx.fillStyle = p.color;
-  ctx.beginPath();
-  ctx.arc(p.pos.x, p.pos.y, p.radius, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.restore();
 }
 
 // Battleship broadside round: a slim elongated naval artillery shell.
@@ -554,27 +655,71 @@ function drawCruiserShell(ctx, p) {
 }
 
 function drawMissile(ctx, m) {
-  // Smoke/flame trail.
+  const st = missileStyle(m);
+  const [tr, tg, tb] = st.trail;
+  const R = m.radius;
+  // Faction-tinted exhaust trail.
   if (m.trail.length > 1) {
-    ctx.strokeStyle = m.color;
-    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = `rgba(${tr},${tg},${tb},0.4)`;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(m.trail[0].x, m.trail[0].y);
-    for (let i = 1; i < m.trail.length; i++) {
-      ctx.lineTo(m.trail[i].x, m.trail[i].y);
-    }
+    for (let i = 1; i < m.trail.length; i++) ctx.lineTo(m.trail[i].x, m.trail[i].y);
     ctx.lineTo(m.pos.x, m.pos.y);
     ctx.stroke();
-    ctx.globalAlpha = 1;
   }
-  // Body — a narrow rectangle oriented to heading.
   ctx.save();
   ctx.translate(m.pos.x, m.pos.y);
   ctx.rotate(m.heading);
-  ctx.fillStyle = m.color;
-  ctx.fillRect(-m.radius, -m.radius * 0.45, m.radius * 2, m.radius * 0.9);
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(m.radius * 0.6, -m.radius * 0.25, m.radius * 0.4, m.radius * 0.5);
+  // Exhaust glow at the tail.
+  const ex = ctx.createRadialGradient(-R, 0, 0, -R, 0, R * 1.6);
+  ex.addColorStop(0, `rgba(${tr},${tg},${tb},0.85)`);
+  ex.addColorStop(1, `rgba(${tr},${tg},${tb},0)`);
+  ctx.fillStyle = ex;
+  ctx.beginPath(); ctx.arc(-R, 0, R * 1.6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = st.body;
+  switch (st.shape) {
+    case "organic":             // Thren / Brood — lumpy spore-pod
+      ctx.beginPath(); ctx.ellipse(0, 0, R * 1.3, R * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(${tr},${tg},${tb},0.95)`;   // glowing nose sac
+      ctx.beginPath(); ctx.arc(R * 0.9, 0, R * 0.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    case "jagged":              // Reaver — notched scrap warhead
+      ctx.beginPath();
+      ctx.moveTo(R * 1.2, 0); ctx.lineTo(R * 0.2, R * 0.5); ctx.lineTo(-R, R * 0.45);
+      ctx.lineTo(-R * 0.6, 0); ctx.lineTo(-R, -R * 0.45); ctx.lineTo(R * 0.2, -R * 0.5);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = `rgba(${tr},${tg},${tb},0.9)`;
+      ctx.fillRect(R * 0.7, -R * 0.2, R * 0.4, R * 0.4);
+      break;
+    case "heavy":               // Hegemony — fat banded torpedo
+      ctx.fillRect(-R * 1.1, -R * 0.55, R * 2.2, R * 1.1);
+      ctx.fillStyle = "rgba(20,14,4,0.7)";
+      ctx.fillRect(-R * 0.2, -R * 0.55, R * 0.18, R * 1.1);
+      ctx.fillRect(-R * 0.7, -R * 0.55, R * 0.18, R * 1.1);
+      ctx.fillStyle = `rgba(${tr},${tg},${tb},0.95)`;
+      ctx.beginPath(); ctx.arc(R * 0.95, 0, R * 0.4, 0, Math.PI * 2); ctx.fill();
+      break;
+    case "lance":               // Voidsworn — sleek glowing dart
+      ctx.beginPath();
+      ctx.moveTo(R * 1.4, 0); ctx.lineTo(-R, R * 0.4); ctx.lineTo(-R, -R * 0.4);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(R * 1.0, 0, R * 0.28, 0, Math.PI * 2); ctx.fill();
+      break;
+    case "finned":              // Saurian — swept-fin missile
+      ctx.fillRect(-R, -R * 0.4, R * 2, R * 0.8);
+      ctx.beginPath();          // swept fins
+      ctx.moveTo(-R * 0.6, -R * 0.4); ctx.lineTo(-R * 1.2, -R * 0.9); ctx.lineTo(-R * 0.5, -R * 0.4);
+      ctx.moveTo(-R * 0.6, R * 0.4); ctx.lineTo(-R * 1.2, R * 0.9); ctx.lineTo(-R * 0.5, R * 0.4);
+      ctx.fill();
+      ctx.fillStyle = `rgba(${tr},${tg},${tb},0.95)`;
+      ctx.fillRect(R * 0.6, -R * 0.22, R * 0.4, R * 0.44);
+      break;
+    default:                    // "sleek" — Terran / Synthetics
+      ctx.fillRect(-R, -R * 0.45, R * 2, R * 0.9);
+      ctx.fillStyle = `rgba(${tr},${tg},${tb},0.95)`;
+      ctx.fillRect(R * 0.6, -R * 0.25, R * 0.4, R * 0.5);
+  }
   ctx.restore();
 }

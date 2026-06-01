@@ -1256,6 +1256,7 @@ function fireForwardWeapon(ship, world, weaponState) {
       y: dir.y * w.projectileSpeed + ship.vel.y * 0.3,
     };
     world.projectiles.push(createProjectile({
+      race: ship.race,
       pos: origin,
       vel,
       damage: w.damage,
@@ -1592,6 +1593,7 @@ function emitBroadside(ship, world, sideVec, fwd, weaponSpec, liveModules, aimAn
       y: dir.y * w.projectileSpeed + ship.vel.y * 0.3,
     };
     world.projectiles.push(createProjectile({
+      race: ship.race,
       pos: origin,
       vel,
       damage: w.damage,
@@ -1751,6 +1753,7 @@ function updateRingFire(ship, world) {
     const ang = Math.atan2(py - origin.y, px - origin.x);
     const dir = V.fromAngle(ang);
     world.projectiles.push(createProjectile({
+      race: ship.race,
       pos: origin,
       vel: { x: dir.x * rc.projectileSpeed, y: dir.y * rc.projectileSpeed },
       damage: rc.damage,
@@ -1809,6 +1812,7 @@ function updatePDFire(ship, world) {
     if (ship.pdCooldowns[i] > 0) continue;
     const dir = V.fromAngle(ang);
     world.projectiles.push(createProjectile({
+      race: ship.race,
       pos: origin,
       vel: { x: dir.x * pd.projectileSpeed, y: dir.y * pd.projectileSpeed },
       damage: pd.damage,
@@ -1916,6 +1920,7 @@ function updateMissilePodFire(ship, world) {
       ? pickBomberAimModule(target)
       : null;
     world.projectiles.push(createMissile({
+      race: ship.race,
       pos: origin,
       heading: launchHeading,
       damage: pods.damage,
@@ -1972,6 +1977,7 @@ function updateTorpedoFire(ship, world, dt) {
     const heading = Math.atan2(target.pos.y - origin.y, target.pos.x - origin.x);
     const colors = t.colors || { blue: "#4ff", red: "#f84" };
     world.projectiles.push(createMissile({
+      race: ship.race,
       pos: origin,
       heading,
       damage: t.damage,
@@ -2025,6 +2031,7 @@ function fireFighterMissile(ship, world) {
     y: ship.pos.y + fwd.y * (ship.spec.radius + 6),
   };
   world.projectiles.push(createMissile({
+      race: ship.race,
     pos: origin,
     heading: ship.heading,
     damage: m.damage,
@@ -2391,9 +2398,9 @@ const MODULE_STYLE = {
   reavers:   { shape: "round",   trim: [235, 130,  95], rivets: 5, flair: "scrap"  },
   voidsworn: { shape: "round",   trim: [200, 150, 255], rivets: 0, flair: "rune"   },
   thren:     { shape: "organic", trim: [130, 240, 160], rivets: 0, flair: "bio"    },
-  brood:     { shape: "organic", trim: [190, 245, 120], rivets: 0, flair: "bio"    },
-  saurian:   { shape: "octagon", trim: [255, 220, 150], rivets: 7, flair: "ornate" },
-  synthetics:{ shape: "octagon", trim: [190, 240, 255], rivets: 8, flair: "panel"  },
+  brood:     { shape: "organic", trim: [190, 245, 120], rivets: 0, flair: "spore"  },
+  saurian:   { shape: "octagon", trim: [255, 220, 150], rivets: 7, flair: "heraldic" },
+  synthetics:{ shape: "octagon", trim: [190, 240, 255], rivets: 8, flair: "circuit" },
 };
 function moduleStyle(race) { return MODULE_STYLE[race] || MODULE_STYLE.terran; }
 
@@ -2517,6 +2524,46 @@ function drawFactionFlair(ctx, race, r, pulse) {
     ctx.moveTo(0, 0); ctx.quadraticCurveTo(r * 0.3, -r * 0.4, r * 0.62, -r * 0.22);
     ctx.moveTo(0, 0); ctx.quadraticCurveTo(-r * 0.3, r * 0.36, -r * 0.56, r * 0.16);
     ctx.stroke();
+  } else if (st.flair === "spore") {                 // Brood — glowing spore sacs
+    // A cluster of small luminous sacs ringing a darker pod — wet,
+    // alive, pulsing. Distinct from Thren's thin vein lines.
+    const sacs = 5;
+    for (let i = 0; i < sacs; i++) {
+      const a = (i / sacs) * Math.PI * 2 + pulse * 0.4;
+      const sx = Math.cos(a) * r * 0.52, sy = Math.sin(a) * r * 0.52;
+      const sr = r * (0.16 + 0.05 * Math.sin(pulse * Math.PI * 2 + i));
+      ctx.fillStyle = "rgba(20,40,12,0.55)";
+      ctx.beginPath(); ctx.arc(sx, sy, sr * 1.25, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(${tr},${tg},${tb},${(0.45 + 0.4 * pulse).toFixed(2)})`;
+      ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (st.flair === "heraldic") {              // Saurian — House crest chevrons
+    // Twin gilt chevrons + a central boss — reads as banner heraldry,
+    // not Hegemony's plain gilt ring.
+    ctx.strokeStyle = `rgba(${tr},${tg},${tb},0.7)`;
+    ctx.lineWidth = Math.max(0.9, r * 0.07);
+    for (let k = 0; k < 2; k++) {
+      const off = r * (0.18 + k * 0.30);
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.55, off * 0.5 - r * 0.1);
+      ctx.lineTo(0, -off);
+      ctx.lineTo(r * 0.55, off * 0.5 - r * 0.1);
+      ctx.stroke();
+    }
+    ctx.fillStyle = `rgba(${tr},${tg},${tb},0.6)`;
+    ctx.beginPath(); ctx.arc(0, r * 0.28, r * 0.14, 0, Math.PI * 2); ctx.fill();
+  } else if (st.flair === "circuit") {               // Synthetics — circuit traces
+    // Right-angle trace lines to glowing node dots — clean machine logic.
+    ctx.strokeStyle = `rgba(${tr},${tg},${tb},0.55)`;
+    ctx.lineWidth = Math.max(0.6, r * 0.05);
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.6, -r * 0.3); ctx.lineTo(-r * 0.15, -r * 0.3); ctx.lineTo(-r * 0.15, r * 0.45);
+    ctx.moveTo(r * 0.6, r * 0.1); ctx.lineTo(r * 0.2, r * 0.1); ctx.lineTo(r * 0.2, -r * 0.5);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(${tr},${tg},${tb},${(0.6 + 0.4 * pulse).toFixed(2)})`;
+    for (const [nx, ny] of [[-r * 0.15, r * 0.45], [r * 0.2, -r * 0.5]]) {
+      ctx.beginPath(); ctx.arc(nx, ny, r * 0.1, 0, Math.PI * 2); ctx.fill();
+    }
   } else {                                           // Terran — clean panel seam
     ctx.strokeStyle = "rgba(20,30,45,0.5)";
     ctx.lineWidth = Math.max(0.6, r * 0.04);

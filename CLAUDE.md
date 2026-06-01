@@ -172,6 +172,33 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-01 (per-faction VFX: modules, projectiles, missiles)
+- **Each faction now has visually + thematically distinct modules,
+  projectiles, and missiles. PURELY COSMETIC** — damage/radius/speed/ttl/
+  homing/PD-interception all unchanged.
+- **Modules** (ship.js): 3 new `drawFactionFlair` branches so all 8 are
+  distinct — brood `spore` (pulsing luminous sacs), saurian `heraldic`
+  (gilt House chevrons + boss), synthetics `circuit` (right-angle traces
+  to glowing nodes); existing terran/hegemony/reavers/voidsworn/thren
+  flairs kept. (Body colour/trim were already per-faction.)
+- **Projectiles + missiles** (projectile.js): added a `race` field to
+  createProjectile/createMissile, threaded `ship.race` at all 7 ship.js
+  fire sites + `parent.race` on cluster-bloom children. New
+  PROJECTILE_STYLE / MISSILE_STYLE tables + `drawFactionRound` /
+  rewritten `drawMissile` dispatch a per-faction silhouette+palette:
+  terran tracer, reaver shard, hegemony gold slug, voidsworn lance, thren
+  pellet, brood spore-glob, saurian bronze bolt, synth digital diamond;
+  missiles get matching bodies + faction-tinted exhaust trail/glow.
+  - GOTCHA: draws key on `p.race` (stamped at fire), since `drawProjectile`
+    only receives the projectile, not the world — can't look up the owner.
+  - SCOPE: capital shells (BB/cruiser/carrier) keep their existing
+    klass-specific art (rare on screen, already distinctive) — not
+    faction-tinted. Easy follow-up if wanted.
+  Verified: FX sheet renders 8 distinct projectiles + 8 distinct missiles
+  (close pairs brood/thren, saurian/hegemony, terran/synth deliberately
+  differentiated); live combat draw loop 0 errors; createProjectile/
+  Missile retain damage+homing fields.
+
 ### 2026-06-01 (Frontier balance pass — sim-driven)
 - **Battles now always resolve, bounded + fairly** (game.js). The 45s
   stall watchdog only trips on a NO-DAMAGE lull (its timer resets on
