@@ -172,6 +172,24 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-01 (fix: battles cut short mid-fight)
+- **The 90s hard battle cap (added in the balance pass) was firing during
+  live fights**, ending them by fleet-strength with ships still actively
+  on both sides — felt abrupt/wrong ("battles ending while there are
+  still ships on the map"). Root cause: my original "capital battles
+  never resolve" read was a SIM ARTIFACT (the harness only ran 60s). They
+  DO resolve by elimination on their own — sim-measured natural max ≈
+  280s for a huge AI fleet siege (far less with a player). Raised
+  MAX_BATTLE_SECONDS 90 → 420 so it's a true last-resort backstop well
+  above the natural max — battles now end by ELIMINATION, not a timer.
+  Verified in-UI: Saurian-capital + Brood-fleet both end with the loser
+  fully wiped (red 0), none hit the cap.
+  - Unchanged (intended, NOT this bug): a battle ends when one side has no
+    non-surrendered, non-player ships — so a win can leave SURRENDERED
+    enemy hulks drifting (the surrender/capture mechanic), and the
+    player's side loses if its whole AI fleet dies even while the player
+    lives. Flag for revisit only if that reads wrong in play.
+
 ### 2026-06-01 (dramatically distinct per-faction hull silhouettes)
 - **Every faction now has a fundamentally different hull SHAPE language**,
   not the same dart re-skinned. New parametric silhouette system in

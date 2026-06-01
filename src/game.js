@@ -1242,16 +1242,17 @@ export function update(game, dt) {
       game.endedByStall = true;
     }
   }
-  // Hard battle-length cap. The stall watchdog above only trips on a
-  // genuine NO-CONTACT lull (its timer resets on every hit), so a
-  // continuously-trading slugfest — common in capital/swarm fights where
-  // shields + the cell grid make hulls very tough — can grind for minutes
-  // and never resolve. This bounds EVERY battle: past MAX_BATTLE_SECONDS,
-  // resolve by remaining FLEET STRENGTH (total live, non-surrendered hull
-  // HP) so the side actually winning the attrition takes it. Not flagged
-  // as a stall (it's a real, earned attrition result → normal VICTORY/
-  // DEFEAT), and ties fall to red to match the anti-grief stall rule.
-  const MAX_BATTLE_SECONDS = 90;
+  // Last-resort battle-length BACKSTOP. Battles resolve on their own by
+  // elimination (sim-measured natural max ≈ 280s for a huge AI fleet
+  // siege; far less with a player piloting), and the no-contact stall
+  // above catches genuine lulls. So this cap is set well ABOVE the
+  // natural maximum and should never fire in normal play — it only
+  // bounds a pathological never-ending grind (e.g. a future stat change
+  // that makes a hull un-killable). Resolving by fleet strength here ends
+  // a fight with ships still alive, which reads as abrupt — so it must be
+  // rare. (An earlier 90s value fired mid-fight constantly and guillotined
+  // live battles — the bug this replaces.)
+  const MAX_BATTLE_SECONDS = 420;
   if (!game.matchOver) {
     game.matchClock = (game.matchClock || 0) + dt;
     if (game.matchClock >= MAX_BATTLE_SECONDS) {
