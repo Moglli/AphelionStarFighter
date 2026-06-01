@@ -172,6 +172,36 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-01 (Frontier balance pass — sim-driven)
+- **Battles now always resolve, bounded + fairly** (game.js). The 45s
+  stall watchdog only trips on a NO-DAMAGE lull (its timer resets on
+  every hit), so continuously-trading capital/swarm fights ground on for
+  100-150s+ with no upper bound. Added a **90s hard cap
+  (MAX_BATTLE_SECONDS) on a non-resetting `game.matchClock`** that
+  resolves by remaining FLEET STRENGTH (Σ live, non-surrendered hull HP)
+  — fairer than the stall's ship-count/tie→red, and NOT flagged as a
+  stall (reads as a normal earned VICTORY/DEFEAT). Benefits all modes.
+- **Frontier rosters rebalanced** (mission.js BASE_ROSTERS) per the doc's
+  "player wins missions to progress": the Republic is a favored SPEARHEAD
+  (blue gets the battleship + heavier line; red's extra cruiser/carrier
+  trimmed). Old rosters gave RED the heavier fleet → 0-18 AI wipes for
+  the player's side. Brood `FACTION_RED_MUL.fighter` 1.6→1.4 (VERY
+  sensitive: 1.3 = pushover, 1.5+ = unwinnable flood).
+- **Method**: built a headless AI-vs-AI sim harness (`/tmp/aphel-balance
+  .mjs`) using the REAL `rostersForBattle` — Terran(blue) vs each faction
+  × {sweep, capital-assault, fleet} × 18 sims, resolving via the new cap.
+  Iterated rosters until win rates landed in a healthy band (pure-AI,
+  before the player's piloting/command tips winnable fights):
+    Brood   — sweep 18-0 (drones can't dogfight), capital 9-9, fleet 5-13 (swarm siege)
+    Saurian — sweep 3-15 (elite duelists), capital 11-7, fleet 9-9
+    Synth   — sweep 9-9, capital 8-10, fleet 12-6
+  No more 0-18 wipes; strong per-faction character; competitive midfields.
+- Verified in-UI (fresh-page launches): Brood/Saurian sweep+capital+fleet
+  all resolve at the 90s cap, 0 page errors. NOTE: AI-vs-AI battles tend
+  to grind to the cap (passive fleets); a real player ends them sooner.
+  If playtest feel wants snappier capital fights, lower the cap or raise
+  DPS / cut shield-regen — left as a follow-up lever.
+
 ### 2026-05-31 (new faction: The Assembly — ALL ships procedural)
 - **New race `synthetics` ("The Assembly")** — a self-forging machine
   intelligence whose EVERY combat class gets a procedurally-generated

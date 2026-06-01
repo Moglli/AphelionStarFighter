@@ -30,36 +30,46 @@ import { checkNewsreel } from "./newsreel.js";
  * the blue side), so blue counts are the supporting fleet.
  * @type {Record<string,{blue:Object,red:Object}>}
  */
+// Balance intent (FRONTIER_FUTURE.md: "the player wins missions to
+// progress"): the Republic deploys a SPEARHEAD fleet, so blue is favored
+// in tonnage — the enemy stays threatening (and individually stronger,
+// per faction stats), but the player's fleet isn't out-shipped before
+// their own piloting/command even enters the equation. Earlier rosters
+// gave RED the heavier line (extra cruiser + carrier vs blue's lone
+// battleship), which produced 0-18 AI wipes for the player's side.
 const BASE_ROSTERS = {
   sweep: {
-    blue: { fighter: 4 },
+    blue: { fighter: 6 },
     red:  { fighter: 6 },
   },
   defense: {
-    blue: { fighter: 6, frigate: 1 },
+    blue: { fighter: 8, frigate: 1 },
     red:  { fighter: 10, bomber: 2 },
   },
   "capital-assault": {
-    blue: { fighter: 6, frigate: 2, cruiser: 1 },
+    blue: { fighter: 8, frigate: 2, cruiser: 1 },
     red:  { fighter: 6, frigate: 2, cruiser: 1 },
   },
   fleet: {
-    blue: { fighter: 8, frigate: 2, cruiser: 1, battleship: 1 },
-    red:  { fighter: 8, bomber: 3, frigate: 2, cruiser: 2, carrier: 1 },
+    blue: { fighter: 9, frigate: 2, cruiser: 1, battleship: 1 },
+    red:  { fighter: 9, bomber: 2, frigate: 2, cruiser: 1, carrier: 1 },
   },
   boss: {
-    blue: { fighter: 8, frigate: 2, cruiser: 1, battleship: 1 },
+    blue: { fighter: 9, frigate: 2, cruiser: 1, battleship: 1 },
     red:  { fighter: 8, frigate: 2, cruiser: 1, carrier: 1 },
   },
   surrender: {
-    blue: { fighter: 6, frigate: 2, cruiser: 1 },
+    blue: { fighter: 7, frigate: 2, cruiser: 1 },
     red:  { fighter: 5, frigate: 2, cruiser: 1, battleship: 1 },
   },
 };
 
-/** Per-faction roster flavor. Brood leans on swarming fighter mass. */
+/** Per-faction roster flavor. Brood leans on swarming fighter mass.
+ *  Tuned to 1.4× via AI-vs-AI sims: capital fights land ~even and fleet
+ *  sieges stay hard-but-winnable (a desperate swarm). VERY sensitive —
+ *  1.3× made Brood fleets a pushover, 1.5×+ an unwinnable flood. */
 const FACTION_RED_MUL = {
-  brood: { fighter: 1.6, bomber: 1.2 },
+  brood: { fighter: 1.4, bomber: 1.2 },
 };
 
 /**

@@ -179,6 +179,9 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   // the player has no way out short of a quit. Reset to 0 on every
   // applyDamage call.
   game.stallTimer = 0;
+  // Non-resetting hard battle clock (the stall timer resets on every hit;
+  // this one never does) — drives the MAX_BATTLE_SECONDS cap in update().
+  game.matchClock = 0;
   // Admiral focus-fire target. Set when the admiral taps an enemy
   // ship; the AI prefers it for every blue ship. Cleared on a fresh
   // match so stale focus doesn't leak across runs.
@@ -1237,6 +1240,29 @@ export function update(game, dt) {
       game.matchOver = true;
       game.winner = blueLive > redLive ? "blue" : "red";
       game.endedByStall = true;
+    }
+  }
+  // Hard battle-length cap. The stall watchdog above only trips on a
+  // genuine NO-CONTACT lull (its timer resets on every hit), so a
+  // continuously-trading slugfest — common in capital/swarm fights where
+  // shields + the cell grid make hulls very tough — can grind for minutes
+  // and never resolve. This bounds EVERY battle: past MAX_BATTLE_SECONDS,
+  // resolve by remaining FLEET STRENGTH (total live, non-surrendered hull
+  // HP) so the side actually winning the attrition takes it. Not flagged
+  // as a stall (it's a real, earned attrition result → normal VICTORY/
+  // DEFEAT), and ties fall to red to match the anti-grief stall rule.
+  const MAX_BATTLE_SECONDS = 90;
+  if (!game.matchOver) {
+    game.matchClock = (game.matchClock || 0) + dt;
+    if (game.matchClock >= MAX_BATTLE_SECONDS) {
+      let blueStr = 0, redStr = 0;
+      for (const s of game.ships) {
+        if (s.dead || s.surrendered) continue;
+        if (s.side === "blue") blueStr += s.hp;
+        else if (s.side === "red") redStr += s.hp;
+      }
+      game.matchOver = true;
+      game.winner = blueStr > redStr ? "blue" : "red";
     }
   }
   // Edge-detect: emit matchEnded exactly once, the frame matchOver
