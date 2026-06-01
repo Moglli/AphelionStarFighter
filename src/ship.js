@@ -400,6 +400,71 @@ const HULLS = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Per-faction hull SILHOUETTE language. Goal: every faction reads as a
+// fundamentally different shape, not the same dart re-skinned. Each faction
+// has a profile fn (half-height 0..1 along the body, nose→tail), a width
+// multiplier, and nose/edge flags; buildFactionTop samples it into a top-edge
+// half-profile that mk() mirrors into a valid (CCW, y-symmetric, origin-
+// containing, bounded) hull. This OVERRIDES the hand-authored fighter→carrier
+// hulls above for the 7 non-procedural races (Synthetics stays fully
+// procedural; station hulls are kept as authored — radial fortresses).
+// ---------------------------------------------------------------------------
+const _CLASS_HULL = {
+  fighter:    { n: 7,  maxY: 0.55, tailX: -0.92 },
+  bomber:     { n: 8,  maxY: 0.60, tailX: -0.94 },
+  frigate:    { n: 9,  maxY: 0.52, tailX: -0.95 },
+  cruiser:    { n: 11, maxY: 0.54, tailX: -1.00 },
+  battleship: { n: 13, maxY: 0.72, tailX: -1.00 },
+  carrier:    { n: 11, maxY: 0.66, tailX: -1.00 },
+};
+const _FACTION_SIL = {
+  // Terran — clean ARROWHEAD: sharp nose, single front-mid wing peak, slim tail.
+  terran:    { width: 0.95, blunt: false, jagged: false,
+    prof: (u) => (u < 0.34 ? 0.16 + (u / 0.34) * 0.84 : 1.0 - ((u - 0.34) / 0.66) * 0.90) },
+  // Reavers — BARBED SPIKE: lean body with aggressive sawtooth flanks.
+  reavers:   { width: 0.85, blunt: false, jagged: true,
+    prof: (u) => 0.26 + 0.66 * Math.sin(Math.PI * Math.min(0.98, u)) },
+  // Hegemony — SLAB BRICK: very wide, blunt-nosed, near-rectangular fortress.
+  hegemony:  { width: 1.55, blunt: true,  jagged: false,
+    prof: (u) => 0.86 + 0.12 * Math.sin(Math.PI * u) },
+  // Voidsworn — NEEDLE/CRESCENT: razor-thin front flaring to swept rear wings.
+  voidsworn: { width: 0.58, blunt: false, jagged: false,
+    prof: (u) => 0.06 + 0.94 * Math.pow(u, 2.1) },
+  // Thren — MANTA DISC: very wide, BLUNT, near-circular rounded body.
+  thren:     { width: 1.45, blunt: true,  jagged: false,
+    prof: (u) => Math.pow(Math.sin(Math.PI * Math.min(0.96, u + 0.06)), 0.45) },
+  // Brood — BEETLE: bulbous blunt-nosed carapace, full and segmented.
+  brood:     { width: 1.30, blunt: true,  jagged: false,
+    prof: (u) => Math.pow(Math.sin(Math.PI * Math.min(0.97, u + 0.05)), 0.42) },
+  // Saurian — RAPTOR: pointed prow, hard aft-swept wings (peak well back).
+  saurian:   { width: 1.05, blunt: false, jagged: false,
+    prof: (u) => (0.12 + 0.88 * Math.pow(u, 1.5)) * (1 + 0.22 * Math.sin(Math.PI * u)) },
+};
+function buildFactionTop(race, klass) {
+  const sig = _FACTION_SIL[race], cl = _CLASS_HULL[klass];
+  if (!sig || !cl) return null;
+  const cap = (v) => Math.max(0.05, Math.min(0.93, v));
+  const w = cl.maxY * sig.width;
+  const x0 = 0.90;
+  const top = [[1.0, sig.blunt ? cap(sig.prof(0) * w) : 0.0]];
+  for (let i = 1; i <= cl.n; i++) {
+    const f = (i - 1) / (cl.n - 1);            // 0 (just aft of nose) .. 1 (tail)
+    const x = x0 + (cl.tailX - x0) * f;        // strictly decreasing
+    let y = sig.prof(f) * w;
+    if (sig.jagged) y *= (i % 2 === 0 ? 1.24 : 0.80);
+    top.push([x, cap(y)]);
+  }
+  return top;
+}
+// Apply the silhouettes, overwriting the literal fighter→carrier hulls.
+for (const race of Object.keys(_FACTION_SIL)) {
+  if (!HULLS[race]) HULLS[race] = {};
+  for (const klass of Object.keys(_CLASS_HULL)) {
+    HULLS[race][klass] = mk(buildFactionTop(race, klass));
+  }
+}
+
 export function getHull(race, klass) {
   return (HULLS[race] && HULLS[race][klass]) || HULLS.terran[klass];
 }

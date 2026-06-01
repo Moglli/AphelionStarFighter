@@ -172,6 +172,30 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-01 (dramatically distinct per-faction hull silhouettes)
+- **Every faction now has a fundamentally different hull SHAPE language**,
+  not the same dart re-skinned. New parametric silhouette system in
+  ship.js (`_FACTION_SIL` profile fns + `_CLASS_HULL` sizes +
+  `buildFactionTop`), built through the existing `mk()` mirror so output
+  is always valid (CCW, y-symmetric, origin-contained, ≤0.96 bounds). A
+  post-`HULLS` loop OVERWRITES the hand-authored fighter→carrier hulls for
+  all 7 non-procedural races (Synthetics stays fully procedural; the
+  radial station hulls are kept as authored).
+  - Signatures: Terran ARROWHEAD · Reavers BARBED (sawtooth flanks) ·
+    Hegemony SLAB BRICK (width 1.55, blunt) · Voidsworn NEEDLE/CRESCENT
+    (width 0.58) · Thren MANTA DISC (width 1.45, blunt) · Brood BEETLE
+    (blunt, bulbous) · Saurian RAPTOR (aft-swept). Fighter half-height
+    spans 0.32 (Voidsworn) → 0.84 (Hegemony) — a 2.6× width range.
+  - GOTCHA: y is clamped to [0.05, 0.93] so wide factions (Hegemony/Thren
+    × capital maxY × 1.5 width) can't exceed validateHull's 0.96 ceiling —
+    they flat-top into a brick/disc instead, which is the intended read.
+  - Constraint honoured: hulls MUST stay y-symmetric (snapModulesSymmetric)
+    + contain the origin (pdSeat/cell raycast), so distinction comes from
+    profile/width/nose-bluntness, not asymmetry.
+  Verified: 42/42 generated hulls pass validateHull; combat smoke spawns
+  32 ships all with modules correctly seated on the new shapes, 0 render
+  errors; hull sheet confirms dramatic cross-faction distinction.
+
 ### 2026-06-01 (per-faction VFX: modules, projectiles, missiles)
 - **Each faction now has visually + thematically distinct modules,
   projectiles, and missiles. PURELY COSMETIC** — damage/radius/speed/ttl/
