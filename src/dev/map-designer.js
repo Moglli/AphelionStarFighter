@@ -121,11 +121,19 @@ export class MapDesigner {
     this._hValEl = el.querySelector("#md-h-val");
     this._spawnRowsEl = el.querySelector("#md-spawn-rows");
     this._decorListEl = el.querySelector("#md-decor-list");
+    this._platformListEl = el.querySelector("#md-platform-list");
     this._previewEl = el.querySelector("#md-preview");
     this._libraryListEl = el.querySelector("#md-library-list");
     this._toastEl = el.querySelector("#md-toast");
     this._decorREl = el.querySelector("#md-decor-r");
     this._decorRValEl = el.querySelector("#md-decor-r-val");
+    this._platTypeEl = el.querySelector("#md-plat-type");
+    this._platSideEl = el.querySelector("#md-plat-side");
+    for (const k of PLATFORM_TYPE_KEYS) {
+      const o = document.createElement("option");
+      o.value = k; o.textContent = PLATFORM_TYPES[k].name;
+      this._platTypeEl.appendChild(o);
+    }
 
     this._nameEl.addEventListener("input", () => { this._draft.name = this._nameEl.value; });
     const onResize = () => {
