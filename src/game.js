@@ -161,6 +161,7 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   setArenaSize(mapW, mapH);
   game.starfield = createStarfield();
   game.ships = [];
+  game.platforms = [];
   game.projectiles = [];
   game.beams = [];
   game.particles = [];
