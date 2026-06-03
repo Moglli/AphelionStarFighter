@@ -341,6 +341,54 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   if (fleetPlan) applyFleetPlan(game, fleetPlan);
 }
 
+// Scenario-row → wingCommand translation. Mirrors the format.js mapping
+// (kept inline so game.js doesn't import the scenario module — avoids a
+// cycle and lets non-scenario callers pass plain rows). Returns null if
+// no order axes are set on the row.
+function _rowToWingCommand(row) {
+  if (!row) return null;
+  const has = row.stance != null || row.priority != null || row.assignment != null;
+  if (!has) return null;
+  const STANCE = { ENGAGE: "engage", CHARGE: "charge", STANDOFF: "standoff", HOLD: "hold", FALLBACK: "fallback" };
+  const PRIORITY = { DEFAULT: "default", HUNT: "hunt", FOCUS: "focus" };
+  const ASSIGN = { FREE_ROAM: "free", ESCORT: "escort", GUARD_POINT: "guard" };
+  const cmd = {
+    stance: STANCE[row.stance] || "engage",
+    priority: PRIORITY[row.priority] || "default",
+    assignment: ASSIGN[row.assignment] || "free",
+  };
+  if (row.priorityClass) cmd.priorityClass = row.priorityClass;
+  return cmd;
+}
+
+// Build per-klass queues of "per-ship row metadata" entries from a
+// scenario team's `rows` array. Each row produces `row.count` queue
+// entries so per-ship spawn + orders apply 1:1. We pre-cache the
+// wingCommand so the hot spawn loop just reads `._wingCommand`.
+function buildRowQueues(rows) {
+  const queues = {};
+  for (const row of rows) {
+    if (!row || !row.klass || !row.count) continue;
+    const wingCommand = _rowToWingCommand(row);
+    const entry = {
+      _spawn: row.spawn || null,
+      _wingCommand: wingCommand,
+      _designId: row.designId || null,
+    };
+    if (!queues[row.klass]) queues[row.klass] = [];
+    for (let i = 0; i < row.count; i++) queues[row.klass].push(entry);
+  }
+  return queues;
+}
+
+// Random offset around a point — used for scenario-driven spawns where
+// the author dropped a ship-group at (x,y) with a spread radius.
+function jitterAround(cx, cy, spread) {
+  const a = Math.random() * Math.PI * 2;
+  const r = Math.random() * (spread || 0);
+  return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
+}
+
 function spawnRoster(game, rosterOverride = null) {
   // Roguelite capitals manifest: per-instance HP+id, popped in order
   // for blue capitals so a wounded battleship from the last battle
