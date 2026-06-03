@@ -254,11 +254,17 @@ if (typeof window !== "undefined") {
     quickSpawn: (opts) => quickSpawn(game, opts),
     designer: () => _ensureBattleDesigner(),
     shipDesigner: () => _ensureShipDesigner(),
+    mapDesigner: () => _ensureMapDesigner(),
   });
   // Blueprint probe surface — mirrors window.scenario.
   window.blueprint = {
     ...blueprintFormat,
     ...blueprintStore,
+  };
+  // Map probe surface.
+  window.map = {
+    ...mapFormat,
+    ...mapStore,
   };
   // Scenario probe surface (PR-1a). Mirrors window.dev / window.game
   // pattern — lets Playwright + console smoke-tests drive the format,
