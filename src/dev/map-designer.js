@@ -365,10 +365,31 @@ export class MapDesigner {
         r: this._defaultAsteroidR,
         rot: Math.random() * Math.PI * 2,
       });
+    } else if (this._tool === TOOL_PLATFORM) {
+      if (!Array.isArray(this._draft.platforms)) this._draft.platforms = [];
+      this._draft.platforms.push({
+        platformId: this._platTypeEl.value,
+        faction: this._platSideEl.value,
+        x: wx, y: wy,
+      });
     } else if (this._tool === TOOL_SELECT) {
-      // Remove the asteroid nearest the click within a generous radius
-      // (proportional to map size so it feels right on any zoom).
+      // Try platforms first (smaller pick radius), then decor.
       const pickR = Math.max(40, this._draft.mapW * 0.012);
+      if (this._draft.platforms && this._draft.platforms.length) {
+        let bestI = -1, bestD = pickR * pickR;
+        for (let i = 0; i < this._draft.platforms.length; i++) {
+          const pl = this._draft.platforms[i];
+          const dx = pl.x - wx, dy = pl.y - wy;
+          const dd = dx * dx + dy * dy;
+          if (dd < bestD) { bestD = dd; bestI = i; }
+        }
+        if (bestI >= 0) {
+          this._draft.platforms.splice(bestI, 1);
+          this._renderPlatformList();
+          this._renderPreview();
+          return;
+        }
+      }
       let bestI = -1, bestD = pickR * pickR;
       for (let i = 0; i < this._draft.decor.length; i++) {
         const d = this._draft.decor[i];
@@ -379,6 +400,7 @@ export class MapDesigner {
       if (bestI >= 0) this._draft.decor.splice(bestI, 1);
     }
     this._renderDecorList();
+    this._renderPlatformList();
     this._renderPreview();
   }
 
