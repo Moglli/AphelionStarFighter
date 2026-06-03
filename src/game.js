@@ -1769,7 +1769,7 @@ function applyDamage(ship, p, moduleTargets = null, particles = null, game = nul
   // `remaining` here is the post-multiplier incoming damage (shield+hull).
   if (game && p.side != null) {
     if (p.ownerId != null) { ship.lastDamagerId = p.ownerId; ship.lastDamagerSide = p.side; }
-    bstatRecordDamage(game, p, remaining);
+    bstatRecordDamage(game, p, remaining, ship);
   }
 
   // Step 1: Shield (unless missile, which bypasses).
