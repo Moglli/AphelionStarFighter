@@ -8,6 +8,12 @@ export const ARENA = {
     blue: { x: 700,  y: 2500, w: 900, h: 4200 },
     red:  { x: 6300, y: 2500, w: 900, h: 4200 },
   },
+  // Map decor (DEV_FEATURES_PLAN.md Phase 3). Populated by `applyMap()`
+  // when a scenario references a non-default mapId; cleared by
+  // `setArenaSize()` so vanilla skirmishes never inherit leftover decor.
+  // Visual-only this phase — main.js draws each entry between starfield
+  // and ships but no collision response is wired.
+  decor: [],
 };
 
 // Map size presets shown on the start menu.
