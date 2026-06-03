@@ -119,6 +119,15 @@ export class DevOverlay {
     klassSel.addEventListener("change", () => { this._spawnConfig.klass = klassSel.value; });
     this._sideSel.addEventListener("change", () => { this._spawnConfig.side = this._sideSel.value; });
     this._spawnBtn.addEventListener("click", () => this.toggleSpawnMode());
+    // Lazy-launch the Battle Designer via the deps hook so this module
+    // doesn't import the designer directly (keeps devoverlay's bundle
+    // share small + lets main.js own the designer lifecycle).
+    const designerBtn = el.querySelector("#dev-open-designer");
+    if (designerBtn) {
+      designerBtn.addEventListener("click", () => {
+        if (this.deps.openBattleDesigner) this.deps.openBattleDesigner();
+      });
+    }
   }
 
   isVisible() { return this._visible; }
