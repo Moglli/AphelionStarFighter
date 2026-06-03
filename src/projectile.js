@@ -86,16 +86,22 @@ export function updateProjectile(p, dt, world) {
 }
 
 function updateMissile(m, dt, world) {
-  // Find current target by id; reacquire if missing.
+  // Find current target by id; reacquire if missing. Combined enemy pool
+  // (ships + platforms) per PR-4 — missiles fired by either side can lock
+  // and re-lock onto either entity kind. Owner-find still uses world.ships
+  // only since the cluster-bloom owner-clearance check is ship-shaped.
+  const enemies = (world.platforms && world.platforms.length)
+    ? world.ships.concat(world.platforms)
+    : world.ships;
   let target = null;
   if (m.targetId != null) {
-    for (const s of world.ships) {
+    for (const s of enemies) {
       if (s.dead || s.side === m.side) continue;
       if (s.id === m.targetId) { target = s; break; }
     }
   }
   if (!target) {
-    target = acquireMissileTarget(m, world.ships);
+    target = acquireMissileTarget(m, enemies);
     m.targetId = target ? target.id : null;
   }
 
