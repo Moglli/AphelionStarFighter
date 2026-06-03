@@ -1947,6 +1947,19 @@ export class MenuSystem {
     wireSlider(this._settingsSfxSlider, this._settingsSfxVal,
       (v) => { if (this._callbacks.onSfxVolume) this._callbacks.onSfxVolume(v); });
 
+    // Dev Mode click-toggle. Reads its current state from the .off class
+    // (kept in sync with the saved flag by _syncSettings) so a tap flips
+    // the *visible* state with no menu round-trip and the apply callback
+    // persists it.
+    if (this._settingsDevToggle) {
+      this._addListener(this._settingsDevToggle, "click", () => {
+        const wasOn = !this._settingsDevToggle.classList.contains("off");
+        const nextOn = !wasOn;
+        this._syncToggle(this._settingsDevToggle, nextOn);
+        if (this._callbacks.onDevMode) this._callbacks.onDevMode(nextOn);
+      });
+    }
+
     this._addListener(screen.querySelector("#settings-close"), "click", () => {
       if (this._callbacks.onSettingsClose) this._callbacks.onSettingsClose();
     });
