@@ -392,7 +392,14 @@ function resolveOrders(ship, world) {
 }
 
 function applyShipOrders(ship, world, target) {
-  if (ship.side !== "blue") return;
+  // Scenario orders are stamped on `ship.wingCommand` for any side; the
+  // legacy admiral path stamps `game.directives` for blue only. resolveOrders
+  // returns null when no orders apply, so red ships without a wingCommand
+  // (vanilla skirmish opponents) early-out via the engage-default branch
+  // below without ever taking a side-specific code path. Symmetric
+  // sideCentroid("ship.side", …) makes fallback/escort math work for either
+  // side. (Pre-PR-1a this gated on blue only; scenarios need both sides to
+  // honour orders to choreograph encounters.)
   const orders = resolveOrders(ship, world);
   const stance = (orders && orders.stance) || "engage";
   if (stance === "engage") return; // no-op: per-class AI stands as-is
@@ -402,7 +409,7 @@ function applyShipOrders(ship, world, target) {
     // Full disengage: retreat to the fleet REAR (allied centroid pushed
     // away from the enemy centroid, so ships actually withdraw instead of
     // piling into the middle) and cease fire.
-    const ally = sideCentroid(world, "blue", ship);
+    const ally = sideCentroid(world, ship.side, ship);
     const foe = sideCentroid(world, "enemy", ship);
     if (ally) {
       let rx = ally.x, ry = ally.y;
