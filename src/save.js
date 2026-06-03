@@ -74,6 +74,10 @@ const DEFAULT_SAVE = Object.freeze({
     blue:  { fighter: 12, bomber: 3, frigate: 2, cruiser: 1, battleship: 1, carrier: 1 },
     red:   { fighter: 12, bomber: 3, frigate: 2, cruiser: 1, battleship: 1, carrier: 1 },
   },
+  // Designer-authored scenarios (DEV_FEATURES_PLAN.md Phase 1). Each
+  // entry conforms to src/scenario/format.js#validateScenario. Additive
+  // top-level array — rides mergeWithDefaults, no schema bump.
+  scenarios: [],
   settings: {
     musicVolume: 0.6,
     sfxVolume: 0.8,
