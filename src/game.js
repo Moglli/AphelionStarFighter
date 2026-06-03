@@ -432,11 +432,11 @@ function spawnRoster(game, rosterOverride = null) {
         }
       }
       // Build a per-klass row queue for Scenario-driven spawns. Each
-      // scenario row (klass + count + spawn + stance + …) becomes a
-      // queue entry per ship; spawn loops pop one entry per spawn so
-      // even multi-row rosters with the same klass land on the right
-      // per-ship metadata. Legacy rosters (rows === null) skip this and
-      // get vanilla zone spawns.
+      // scenario row (klass + count + spawn + stance + designId + …)
+      // becomes a queue entry per ship; spawn loops pop one entry per
+      // spawn so even multi-row rosters with the same klass land on the
+      // right per-ship metadata. Legacy rosters (rows === null) skip
+      // this and get vanilla zone spawns.
       const rowQueues = rows ? buildRowQueues(rows) : null;
       const popRow = (klass) => {
         if (!rowQueues) return null;
@@ -447,21 +447,38 @@ function spawnRoster(game, rosterOverride = null) {
         if (!row) return;
         if (row._wingCommand) ship.wingCommand = { ...row._wingCommand };
       };
+      // Blueprint resolution: peek at the head of a klass queue without
+      // popping so we can pass the design into the spawn helper that
+      // creates the ship at the right moment. The matching pop happens
+      // after the helper returns and stamps the wingCommand.
+      const peekDesign = (klass) => {
+        if (!rowQueues) return null;
+        const q = rowQueues[klass];
+        if (!q || !q.length) return null;
+        const id = q[0]._designId;
+        if (!id) return null;
+        return resolveBlueprintDesign(id);
+      };
 
       for (const [klass, count] of Object.entries(roster)) {
         if (count <= 0) continue;
         const scaled = Math.max(1, Math.round(count * mul));
         if (klass === "fighter") {
           // Fighter packs ignore per-row spawn hints (pack geometry is
-          // emergent) but each fighter still gets its row's orders.
+          // emergent) but each fighter still gets its row's orders. The
+          // design is taken from the first queued fighter row and applies
+          // uniformly across the call — multi-blueprint fighter rows
+          // would need per-ship design plumbing, which this PR defers.
+          const design = peekDesign("fighter");
           const before = game.ships.length;
-          spawnFighterPacks(game, side, race, zone, scaled + escortDemand, facing);
+          spawnFighterPacks(game, side, race, zone, scaled + escortDemand, facing, design);
           for (let i = before; i < game.ships.length; i++) {
             trackSpawn(game.ships[i], popRow("fighter"));
           }
         } else if (klass === "bomber") {
+          const design = peekDesign("bomber");
           const before = game.ships.length;
-          spawnBomberPairs(game, side, race, zone, scaled, facing);
+          spawnBomberPairs(game, side, race, zone, scaled, facing, design);
           for (let i = before; i < game.ships.length; i++) {
             trackSpawn(game.ships[i], popRow("bomber"));
           }
@@ -480,8 +497,9 @@ function spawnRoster(game, rosterOverride = null) {
                 manifest.splice(idx, 1);
               }
             }
+            const design = peekDesign(klass);
             const before = game.ships.length;
-            spawnCapital(game, klass, side, race, zone, facing, wounded);
+            spawnCapital(game, klass, side, race, zone, facing, wounded, design);
             for (let j = before; j < game.ships.length; j++) {
               trackSpawn(game.ships[j], popRow(klass));
             }
@@ -495,11 +513,13 @@ function spawnRoster(game, rosterOverride = null) {
               ? jitterAround(row._spawn.x, row._spawn.y, row._spawn.spread || 200)
               : randomSpawnPos(zone);
             const heading = facing + (Math.random() - 0.5) * 0.3;
+            const design = row && row._designId ? resolveBlueprintDesign(row._designId) : null;
             const ship = createShip({
               klass, race, side, pos, heading,
               controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
               boons: side === "blue" ? game.activeBoons : null,
               fleetTraits: side === "blue" ? game.activeFleetTraits : null,
+              design,
             });
             game.ships.push(ship);
             trackSpawn(ship, row);
