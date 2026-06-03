@@ -1428,6 +1428,12 @@ function draw() {
   // Persistent wrecks sit UNDER everything live so a fresh kill drops
   // into the background as the battle keeps going on top.
   if (game.wrecks) for (const w of game.wrecks) drawWreck(ctx, w);
+  // Defence platforms (PR-4 of DEV_FEATURES_PLAN.md). Drawn AFTER wrecks
+  // and decor but BEFORE ships so a fighter flying over the bastion's
+  // hex silhouettes against it, not the other way around.
+  if (game.platforms && game.platforms.length) {
+    for (const pl of game.platforms) if (!pl.dead) drawPlatform(ctx, pl);
+  }
   // Smoke particles render behind the hull layer so plumes look like
   // they're trailing from the ship rather than painted on top of it.
   if (game.particles) {
