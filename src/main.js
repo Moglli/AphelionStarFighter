@@ -122,18 +122,26 @@ function applySfxVolume(v) {
   audio.setSfxVolume(v);
   saveStore.update((d) => { d.settings.sfxVolume = audio.getSfxVolume(); });
 }
+function applyDevMode(on) {
+  // Cache flips first (so any draw that reads isDev() this frame sees the
+  // new value), then persist.
+  setDev(on);
+  saveStore.update((d) => { d.settings.devMode = !!on; });
+}
 input.startMenu.setSettings(
   () => ({
     musicVolume: audio.getMusicVolume(),
     sfxVolume: audio.getSfxVolume(),
     musicMuted: audio.isMuted(),
     sfxMuted: audio.isSfxMuted(),
+    devMode: isDev(),
   }),
   (patch) => {
     if (typeof patch.musicVolume === "number") applyMusicVolume(patch.musicVolume);
     if (typeof patch.sfxVolume === "number") applySfxVolume(patch.sfxVolume);
     if (typeof patch.musicMuted === "boolean") applyMuteChange(patch.musicMuted);
     if (typeof patch.sfxMuted === "boolean") applySfxMuteChange(patch.sfxMuted);
+    if (typeof patch.devMode === "boolean") applyDevMode(patch.devMode);
   },
 );
 
