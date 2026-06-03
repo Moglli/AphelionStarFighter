@@ -183,9 +183,30 @@ export class BattleDesigner {
     this._notesEl.value = this._draft.notes || "";
     this._playerTeamEl.value = this._draft.playerTeam || "blue";
     this._playerKlassEl.value = (this._draft.playerShip && this._draft.playerShip.klass) || "fighter";
+    this._renderMapDropdown();
     this._renderTeams("blue");
     this._renderTeams("red");
     this._renderLibrary();
+  }
+
+  _renderMapDropdown() {
+    const sel = this._mapIdEl;
+    sel.innerHTML = "";
+    const maps = listAllMaps();
+    for (const m of maps) {
+      const o = document.createElement("option");
+      o.value = m.id; o.textContent = m.name + (m._builtin ? "" : " (custom)");
+      sel.appendChild(o);
+    }
+    // Ensure the dropdown reflects the draft. If the draft references a
+    // map that no longer exists (deleted between save and load), fall
+    // back to the first option.
+    if (this._draft.mapId && maps.find((m) => m.id === this._draft.mapId)) {
+      sel.value = this._draft.mapId;
+    } else if (maps.length) {
+      sel.value = maps[0].id;
+      this._draft.mapId = maps[0].id;
+    }
   }
 
   _renderTeams(side) {
