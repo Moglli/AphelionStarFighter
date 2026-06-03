@@ -111,6 +111,15 @@ export function createGame() {
     // the AI fast-paths through the directive check.
     directives: null,
     admiralMode: false,
+    // Dev sim controls (Phase 0 of DEV_FEATURES_PLAN.md). `paused` freezes
+    // update(); `stepOnce` advances one fixed tick on the next frame even
+    // while paused. `simSpeed` scales the catch-up — at 0.25 the loop
+    // consumes accumulator a quarter as fast (slow-mo); at 4 it eats four
+    // ticks per accumulator window (fast-forward). All zero-cost when not
+    // touched — the loop reads the live values each frame.
+    paused: false,
+    stepOnce: false,
+    simSpeed: 1,
   };
   return game;
 }
