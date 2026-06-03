@@ -11998,3 +11998,70 @@ html, body {
   border-color: #fc8;
 }
 .fp-section-missile { margin-left: auto; }
+
+/* ---- Dev Overlay (PR-0b of DEV_FEATURES_PLAN.md) ----
+   Top-right panel; only visible when isDev() + the overlay is open. Click
+   pass-through is blocked inside the panel via pointer-events; the rest
+   of the canvas still routes to the game. */
+.dev-overlay {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 40; /* over BattleHUD chrome but under modal menus */
+  width: 320px;
+  padding: 10px 12px 12px;
+  background: rgba(10, 16, 28, 0.92);
+  border: 1px solid rgba(120, 200, 255, 0.55);
+  color: #cde;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  pointer-events: auto;
+  user-select: none;
+}
+.dev-overlay.hidden { display: none; }
+.dev-overlay-header {
+  display: flex; justify-content: space-between; align-items: center;
+  color: #9cf; letter-spacing: 1px; font-weight: bold;
+  margin-bottom: 6px;
+}
+.dev-overlay .dev-x {
+  background: none; border: none; color: #9cf; cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 6px;
+}
+.dev-overlay .dev-x:hover { color: #fff; }
+.dev-overlay .dev-row {
+  display: flex; gap: 6px; align-items: center; margin: 4px 0;
+}
+.dev-overlay .dev-btn {
+  background: rgba(30, 50, 80, 0.9);
+  border: 1px solid rgba(120, 180, 220, 0.4);
+  color: #cde; padding: 4px 8px; cursor: pointer;
+  font: inherit; letter-spacing: 0.5px;
+}
+.dev-overlay .dev-btn:hover:not(:disabled) { background: rgba(50, 80, 120, 0.95); }
+.dev-overlay .dev-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.dev-overlay .dev-btn.small { padding: 3px 6px; min-width: 22px; }
+.dev-overlay .dev-btn.active {
+  background: rgba(120, 90, 30, 0.95);
+  border-color: rgba(255, 200, 100, 0.7);
+  color: #fec;
+}
+.dev-overlay .dev-pill {
+  background: rgba(20, 32, 54, 0.95); padding: 3px 8px;
+  border: 1px solid rgba(120, 180, 220, 0.35);
+  min-width: 38px; text-align: center;
+}
+.dev-overlay .dev-select {
+  background: rgba(20, 32, 54, 0.95); color: #cde; padding: 3px 5px;
+  border: 1px solid rgba(120, 180, 220, 0.35);
+  font: inherit;
+}
+.dev-overlay .dev-label {
+  color: #9cf; letter-spacing: 1px; min-width: 30px;
+}
+.dev-overlay .dev-sel-text {
+  flex: 1; color: #cde; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dev-overlay .dev-hint {
+  margin-top: 6px; color: #6a8; opacity: 0.8;
+}
