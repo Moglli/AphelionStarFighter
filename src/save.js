@@ -84,6 +84,11 @@ const DEFAULT_SAVE = Object.freeze({
     // saves boot with the defaults.
     musicMuted: false,
     sfxMuted: false,
+    // Dev Mode: unlocks playtest + balance tooling (balance HUD now,
+    // designer overlays + sim controls later). Off by default; toggled
+    // from the Settings overlay. Read once at boot into dev/devmode.js'
+    // cached state so isDev() is a memory read, not a SaveStore hit.
+    devMode: false,
   },
   // Roguelite "Frontier" campaign — replaces the linear 100-mission
   // campaign that lived under the old aphelion.campaign.v1 key. `meta`
