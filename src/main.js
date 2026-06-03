@@ -214,11 +214,14 @@ if (typeof window !== "undefined") {
         return res;
       }
       game.scenario = res.value;
-      startGame(game, ARENA.width, ARENA.height, game.alliedRace, "open",
-        { mode: "custom" }, 1, null);
-      // The custom mode reads game.scenario inside its setup hook.
+      // The custom mode reads game.scenario inside its setup hook. The
+      // `mode: "custom"` arg routes startGame → MODES.custom.setup which
+      // will see game.scenario and call setupFromScenario.
+      const allied = (res.value.blueTeams[0] && res.value.blueTeams[0].race) || "terran";
+      startGame(game, ARENA.width, ARENA.height, allied, "custom", null, 1, null);
       return res;
     },
+    clear: () => { game.scenario = null; },
   };
 }
 input.startMenu.setSettings(
