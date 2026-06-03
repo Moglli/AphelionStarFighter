@@ -12065,3 +12065,208 @@ html, body {
 .dev-overlay .dev-hint {
   margin-top: 6px; color: #6a8; opacity: 0.8;
 }
+
+/* ---- Battle Designer (PR-1b of DEV_FEATURES_PLAN.md) ----
+   Fullscreen authoring overlay. z-index above the dev overlay (40) so
+   tapping BATTLE DESIGNER from there pops on top. Pointer events confined
+   to the panel; everything else is blocked while open. */
+.battle-designer {
+  position: fixed; inset: 0;
+  z-index: 50;
+  background: rgba(4, 8, 16, 0.92);
+  display: flex; align-items: center; justify-content: center;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cde;
+  overflow: auto;
+}
+.battle-designer.hidden { display: none; }
+.bd-panel {
+  width: min(96vw, 1100px);
+  max-height: 92vh;
+  background: rgba(8, 14, 26, 0.96);
+  border: 1px solid rgba(120, 200, 255, 0.55);
+  display: flex; flex-direction: column;
+  overflow: auto;
+}
+.bd-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.25);
+  background: rgba(20, 32, 54, 0.6);
+}
+.bd-title { color: #9cf; letter-spacing: 2px; font-weight: bold; font-size: 14px; }
+.bd-x {
+  background: none; border: none; color: #9cf;
+  font-size: 16px; cursor: pointer; padding: 2px 8px;
+}
+.bd-x:hover { color: #fff; }
+
+.bd-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr 100px 130px;
+  gap: 10px 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.18);
+}
+.bd-field { display: flex; flex-direction: column; gap: 4px; }
+.bd-field span {
+  color: #9cf; letter-spacing: 1px; font-size: 10px;
+}
+.bd-field input, .bd-field select {
+  background: rgba(20, 32, 54, 0.95);
+  border: 1px solid rgba(120, 180, 220, 0.35);
+  color: #cde;
+  padding: 5px 7px;
+  font: inherit;
+}
+.bd-field-tight { min-width: 80px; }
+
+.bd-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.18);
+}
+.bd-side h3 {
+  margin: 0 0 8px 0;
+  color: #9cf; letter-spacing: 2px; font-size: 11px;
+}
+.bd-side[data-side="blue"] h3 { color: #7af; }
+.bd-side[data-side="red"] h3 { color: #f97; }
+.bd-teams-list {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 8px;
+}
+.bd-team-card {
+  background: rgba(20, 32, 54, 0.6);
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  padding: 8px;
+}
+.bd-team-header {
+  display: flex; gap: 6px; align-items: center;
+  margin-bottom: 6px;
+}
+.bd-team-header select { flex: 1; }
+.bd-ships {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 6px;
+}
+.bd-ship-row {
+  display: grid;
+  grid-template-columns: 1fr 50px 1fr 1fr 1fr 24px;
+  gap: 4px;
+  align-items: center;
+}
+.bd-ship-row select, .bd-ship-row input {
+  background: rgba(15, 24, 40, 0.95);
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  color: #cde;
+  padding: 3px 5px;
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+.bd-count { text-align: center; }
+
+.bd-btn {
+  background: rgba(30, 50, 80, 0.9);
+  border: 1px solid rgba(120, 180, 220, 0.4);
+  color: #cde; padding: 5px 10px; cursor: pointer;
+  font: inherit; letter-spacing: 0.5px;
+}
+.bd-btn:hover { background: rgba(50, 80, 120, 0.95); }
+.bd-btn-primary {
+  background: rgba(30, 110, 70, 0.95);
+  border-color: rgba(140, 220, 170, 0.7);
+  color: #efe;
+}
+.bd-btn-primary:hover { background: rgba(40, 140, 90, 1); }
+.bd-team-remove, .bd-ship-remove, .bd-library-del {
+  padding: 3px 6px; min-width: 24px;
+  background: rgba(80, 30, 30, 0.85);
+  border-color: rgba(220, 120, 100, 0.5);
+  color: #fcc;
+}
+.bd-team-remove:hover, .bd-ship-remove:hover, .bd-library-del:hover {
+  background: rgba(120, 40, 40, 0.95);
+}
+
+.bd-library {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.18);
+}
+.bd-library h3 {
+  margin: 0 0 6px 0;
+  color: #9cf; letter-spacing: 2px; font-size: 11px;
+}
+.bd-library-list {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 160px; overflow-y: auto;
+}
+.bd-library-row {
+  display: grid;
+  grid-template-columns: 1fr 130px 64px 56px 32px;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 6px;
+  background: rgba(20, 32, 54, 0.5);
+  border: 1px solid rgba(120, 180, 220, 0.2);
+}
+.bd-library-name { color: #cde; }
+.bd-library-meta { color: #9ab; font-size: 11px; }
+.bd-library-empty {
+  color: #678; padding: 8px 4px; font-style: italic;
+}
+
+.bd-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 10px 14px;
+  background: rgba(20, 32, 54, 0.6);
+}
+
+.bd-toast {
+  position: absolute;
+  bottom: 16px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: rgba(20, 60, 40, 0.95);
+  border: 1px solid rgba(140, 220, 170, 0.7);
+  color: #efe;
+  padding: 6px 14px;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+  letter-spacing: 0.5px;
+}
+.bd-toast.show {
+  opacity: 1; transform: translateX(-50%) translateY(0);
+}
+.bd-toast.error {
+  background: rgba(60, 20, 20, 0.95);
+  border-color: rgba(220, 120, 100, 0.7);
+  color: #fcc;
+}
+
+.bd-fallback-export {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 5;
+}
+.bd-fallback-panel {
+  width: min(90%, 700px);
+  background: rgba(8, 14, 26, 0.98);
+  border: 1px solid rgba(120, 200, 255, 0.55);
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.bd-fallback-title {
+  color: #9cf; letter-spacing: 1px; font-weight: bold;
+}
+.bd-fallback-text {
+  width: 100%; height: 280px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  color: #cde;
+  font: inherit;
+  padding: 8px;
+  resize: vertical;
+}

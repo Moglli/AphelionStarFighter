@@ -72,6 +72,9 @@ export class DevOverlay {
         </select>
         <button class="dev-btn" id="dev-spawn">SPAWN…</button>
       </div>
+      <div class="dev-row">
+        <button class="dev-btn" id="dev-open-designer">BATTLE DESIGNER ▸</button>
+      </div>
       <div class="dev-hint" id="dev-hint">~ toggles · \\ steps · [ ] speed</div>
     `;
     host.appendChild(el);
