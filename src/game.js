@@ -569,7 +569,7 @@ function spawnStation(game, side, race, zone, facing) {
   }
 }
 
-function spawnFighterPacks(game, side, race, zone, count, facing) {
+function spawnFighterPacks(game, side, race, zone, count, facing, design = null) {
   let remaining = count;
   while (remaining > 0) {
     const packSize = Math.min(FIGHTER_PACK_SIZE, remaining);
