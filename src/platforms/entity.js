@@ -124,8 +124,10 @@ export function updatePlatform(p, dt, world) {
     world.projectiles.push(m);
     events.emit("missileLaunched", { x: p.pos.x, y: p.pos.y, isPlayer: false });
   } else {
-    // Cannon / beam — both fire as straight-line projectiles for v1.
-    const c = createCannon({
+    // Cannon / beam — both fire as straight-line projectiles for v1
+    // (true beam logic lives in updateShip; reusing it from a stationary
+    // entity needs more plumbing, deferred to a follow-up).
+    const c = createProjectile({
       pos: { x: p.pos.x + Math.cos(p.turretHeading) * p.spec.radius * 0.8,
              y: p.pos.y + Math.sin(p.turretHeading) * p.spec.radius * 0.8 },
       vel: { x: Math.cos(heading) * speed, y: Math.sin(heading) * speed },
@@ -136,7 +138,7 @@ export function updatePlatform(p, dt, world) {
       side: p.side,
       ownerId: p.id,
       ownerKlass: "platform",
-      kind: w.kind === "beam" ? "cannon" : "cannon",
+      kind: "cannon",
       fromKlass: "platform",
     });
     world.projectiles.push(c);
