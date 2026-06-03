@@ -1165,7 +1165,11 @@ export function update(game, dt) {
       if (interceptedMissile) continue;
     }
 
-    // Hit a ship.
+    // Hit a ship — or a platform. Platforms (PR-4) duck-type the ship
+    // damage interface, so applyDamage handles both. We scan ships first
+    // (most common case) then platforms; either kind dead-ends the
+    // projectile on hit.
+    let hitTarget = false;
     for (const ship of game.ships) {
       if (ship.dead || ship.side === p.side) continue;
       const dx = ship.pos.x - p.pos.x;
