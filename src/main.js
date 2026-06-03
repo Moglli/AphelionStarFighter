@@ -1415,10 +1415,7 @@ function draw() {
   // cost when Dev Mode is off — single boolean check.
   if (isDev()) {
     drawBalanceHUD(ctx, game, viewW, viewH);
-    if (_devOverlay) {
-      _devOverlay.deps.cameraCache = { x: camera.x, y: camera.y };
-      _devOverlay.sync();
-    }
+    if (_devOverlay) _devOverlay.sync();
   }
 
   // Virtual stick DOM updates
