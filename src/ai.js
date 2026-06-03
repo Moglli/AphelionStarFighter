@@ -111,6 +111,14 @@ export function updateAI(ship, world, dt) {
 
   const c = ship.controller;
 
+  // Combined enemy pool — ships + platforms (PR-4 of DEV_FEATURES_PLAN.md).
+  // Used ONLY by the target pickers below; escort lookups, ally avoidance,
+  // and id-only finds keep using `world.ships` so platforms never get
+  // treated as crewmen for escort assignment or surrender counts.
+  const enemies = (world.platforms && world.platforms.length)
+    ? [...world.ships, ...world.platforms]
+    : world.ships;
+
   // Resolve this ship's standing orders once (stance handled later in
   // applyShipOrders; the TARGET PRIORITY axis is applied here).
   const orders = resolveOrders(ship, world);
@@ -137,7 +145,7 @@ export function updateAI(ship, world, dt) {
   // per-class default. Falls through to the normal pickers when no live
   // enemy of that klass is on the field.
   if (!target && priority === "hunt" && orders && orders.priorityClass) {
-    const preferred = nearestEnemyOfClass(ship, world.ships, orders.priorityClass);
+    const preferred = nearestEnemyOfClass(ship, enemies, orders.priorityClass);
     if (preferred) target = preferred;
   }
 
@@ -146,18 +154,18 @@ export function updateAI(ship, world, dt) {
   // the largest enemy with missile-pod weight in mind. Bombers hunt
   // capitals.
   if (!target && ship.klass === "battleship") {
-    target = pickBattleshipTarget(ship, world.ships);
+    target = pickBattleshipTarget(ship, enemies);
   } else if (!target && ship.klass === "cruiser") {
-    target = pickCruiserTarget(ship, world.ships);
+    target = pickCruiserTarget(ship, enemies);
   } else if (!target && ship.klass === "bomber") {
-    target = pickBomberTarget(ship, world.ships);
+    target = pickBomberTarget(ship, enemies);
   }
 
   // Fighters peel off everything else when a bomber is on the field —
   // checked before pack target so even role-locked packs divert to
   // intercept the bigger threat.
   if (!target && ship.klass === "fighter") {
-    const bomber = nearestEnemyOfClass(ship, world.ships, "bomber");
+    const bomber = nearestEnemyOfClass(ship, enemies, "bomber");
     if (bomber) target = bomber;
   }
 
@@ -167,7 +175,7 @@ export function updateAI(ship, world, dt) {
     const pack = world.packs.get(ship.packId);
     if (pack && pack.target && !pack.target.dead) target = pack.target;
   }
-  if (!target) target = nearestEnemy(ship, world.ships);
+  if (!target) target = nearestEnemy(ship, enemies);
 
   // Escort leash: fighters stamped with `escortOf` (set at spawn time
   // by spawnEscorts) only engage targets within ESCORT_ENGAGE_RANGE of
