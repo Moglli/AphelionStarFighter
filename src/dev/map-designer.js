@@ -21,9 +21,11 @@ import {
 import {
   listUserMaps, listAllMaps, saveMap, deleteMap,
 } from "../maps/store.js";
+import { PLATFORM_TYPE_KEYS, PLATFORM_TYPES } from "../platforms/registry.js";
 
 const TOOL_SELECT = "select";
 const TOOL_ASTEROID = "asteroid";
+const TOOL_PLATFORM = "platform";
 
 export class MapDesigner {
   constructor(host, deps) {
