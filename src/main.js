@@ -83,6 +83,9 @@ let musicWasPlaying = false; // tracks state for start/stop edge detection
   // Mute flags layer over volume (the P-key quick-mute persists too).
   audio.setMuted(!!st.musicMuted);
   audio.setSfxMuted(!!st.sfxMuted);
+  // Cache the Dev Mode flag once at boot so isDev() in per-frame draws
+  // is a memory read. Settings-overlay toggle updates re-cache via setDev.
+  setDev(!!st.devMode);
 }
 
 // Global UI tap audio. Plays a short procedural click whenever the
