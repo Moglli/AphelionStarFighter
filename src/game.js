@@ -347,6 +347,33 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   // so this is a no-op there and leaves that path untouched.
   const fleetPlan = game.modeConfig && game.modeConfig.fleetPlan;
   if (fleetPlan) applyFleetPlan(game, fleetPlan);
+
+  // Static platforms from the scenario's map (DEV_FEATURES_PLAN.md Phase 4).
+  // Spawned AFTER ships so any AI escort assignment has run; before the
+  // first projectile tick so platforms are valid targets immediately.
+  spawnMapPlatforms(game);
+}
+
+function spawnMapPlatforms(game) {
+  const scenario = game.scenario;
+  // Inline map wins over mapId lookup — same precedence as modes/custom.js.
+  const map = (scenario && scenario.map) || null;
+  const platforms = (map && Array.isArray(map.platforms)) ? map.platforms
+    : (game.arena && Array.isArray(game.arena.platforms)) ? game.arena.platforms
+    : [];
+  if (!platforms.length) return;
+  for (const placement of platforms) {
+    if (!placement || !placement.platformId) continue;
+    const side = placement.faction === "blue" ? "blue" : "red";
+    const plat = createPlatform({
+      platformId: placement.platformId,
+      side,
+      x: placement.x,
+      y: placement.y,
+      faction: placement.faction || null,
+    });
+    game.platforms.push(plat);
+  }
 }
 
 // Blueprint resolver — looks up a saved blueprint by id and returns the
