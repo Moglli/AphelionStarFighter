@@ -1345,7 +1345,13 @@ function draw() {
   // Dev-only balance HUD (Phase 0 of DEV_FEATURES_PLAN.md). Drawn LAST
   // so it overlays everything; reads game.battleStats directly. Zero
   // cost when Dev Mode is off — single boolean check.
-  if (isDev()) drawBalanceHUD(ctx, game, viewW, viewH);
+  if (isDev()) {
+    drawBalanceHUD(ctx, game, viewW, viewH);
+    if (_devOverlay) {
+      _devOverlay.deps.cameraCache = { x: camera.x, y: camera.y };
+      _devOverlay.sync();
+    }
+  }
 
   // Virtual stick DOM updates
   input.drawSticks(ctx);
