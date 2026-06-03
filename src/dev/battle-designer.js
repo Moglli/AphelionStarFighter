@@ -226,7 +226,17 @@ export class BattleDesigner {
   _shipRow(team, row, ri, onRemove) {
     const wrap = document.createElement("div");
     wrap.className = "bd-ship-row";
-    wrap.appendChild(this._select("bd-klass", KLASSES, row.klass, (v) => { row.klass = v; }));
+    const klassSel = this._select("bd-klass", KLASSES, row.klass, (v) => {
+      row.klass = v;
+      // Klass change invalidates the blueprint if it was klass-specific —
+      // re-render the row so the designId dropdown re-filters.
+      const blueprintSelEl = wrap.querySelector(".bd-designid");
+      if (blueprintSelEl) {
+        const fresh = this._designIdSelect(row);
+        blueprintSelEl.replaceWith(fresh);
+      }
+    });
+    wrap.appendChild(klassSel);
 
     const count = document.createElement("input");
     count.type = "number"; count.min = "1"; count.max = "99"; count.value = String(row.count || 1);
@@ -241,8 +251,30 @@ export class BattleDesigner {
     wrap.appendChild(this._select("bd-assignment", ["—", ...ASSIGNMENTS], row.assignment || "—",
       (v) => { row.assignment = v === "—" ? null : v; }));
 
+    wrap.appendChild(this._designIdSelect(row));
     wrap.appendChild(this._btn("✕", "bd-ship-remove", onRemove));
     return wrap;
+  }
+
+  // Blueprint picker for a ship row. Filters by klass — a frigate row
+  // only sees frigate blueprints. Unset = stock spec (no design applied).
+  _designIdSelect(row) {
+    const sel = document.createElement("select");
+    sel.className = "bd-designid";
+    const none = document.createElement("option");
+    none.value = ""; none.textContent = "— stock —";
+    sel.appendChild(none);
+    const items = listBlueprints().filter((bp) => bp.klass === row.klass);
+    for (const bp of items) {
+      const o = document.createElement("option");
+      o.value = bp.id; o.textContent = bp.name;
+      sel.appendChild(o);
+    }
+    sel.value = row.designId || "";
+    sel.addEventListener("change", () => {
+      row.designId = sel.value || null;
+    });
+    return sel;
   }
 
   _renderLibrary() {
