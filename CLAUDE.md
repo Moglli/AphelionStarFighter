@@ -172,6 +172,35 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Map Designer — PR-3 of DEV_FEATURES_PLAN.md)
+- **`applyMap(map)` is the single seam** that gets called before every
+  scenario spawn. Sets `ARENA.width / height / bounds / spawn.{blue,red}`
+  and stamps `ARENA.decor`. The legacy `setArenaSize(w, h)` path stays
+  intact + now also **clears `ARENA.decor`** — otherwise a vanilla
+  skirmish run after a custom scenario would inherit asteroids from
+  the previous match.
+- **Built-in map presets union with user maps** at the registry layer
+  (`maps/store.js#listAllMaps`). `default-small` / `default-medium`
+  / `default-large` are read-only — `saveMap` refuses any id with the
+  `default-` prefix. The Battle Designer's MAP dropdown is therefore
+  never empty even on a fresh save.
+- **Spawn rects are clamped, not rejected.** `validateMap` flags
+  out-of-bounds spawn rectangles as errors *and* clamps them so the
+  scenario is still playable — refusing to load a 99%-correct map
+  because one rect is 50u outside the bounds would be a worse UX than
+  the auto-repair. The Map Designer's preview canvas reflects the
+  clamped values immediately.
+- **Decor is visual-only this phase.** `drawDecor` paints irregular
+  polygons (seeded from `(x, y, r)` so they don't shimmer) between
+  arena bounds and wrecks. No collision wiring — flagged in the
+  changelog so the Phase-4 platform integration knows to skip decor
+  in line-of-sight + collision passes.
+- **Mini-arena drag-place uses inverse transform.** Click-to-place
+  on the preview canvas inverts the same `scale + offset` the renderer
+  used so the spawned asteroid lands at the world point under the
+  cursor. The SELECT tool reverses that for click-to-remove with a
+  generous pick radius (map width × 1.2%).
+
 ### 2026-06-03 (Ship Designer + Blueprints — PR-2 of DEV_FEATURES_PLAN.md)
 - **Blueprints reuse the persistent-design pipeline** — `bp.design` is
   the same shape as `DEFAULT_PLAYER_DESIGN`, so spawn-side resolution is
