@@ -30,8 +30,11 @@ import { isDev, setDev } from "./dev/devmode.js";
 import { drawBalanceHUD } from "./dev/balancehud.js";
 import { DevOverlay, quickSpawn } from "./dev/devoverlay.js";
 import { BattleDesigner } from "./dev/battle-designer.js";
+import { ShipDesigner } from "./dev/ship-designer.js";
 import * as scenarioFormat from "./scenario/format.js";
 import * as scenarioStore from "./scenario/store.js";
+import * as blueprintFormat from "./blueprints/format.js";
+import * as blueprintStore from "./blueprints/store.js";
 import {
   recordKill, computeRunPayout, bankRunPayout,
   buyHull, setHull, buyComponent, equipComponent, renameShip, setPaint,
