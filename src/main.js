@@ -151,6 +151,7 @@ function _ensureDevOverlay() {
     getZoom: () => zoom,
     getView: () => ({ w: viewW, h: viewH }),
     openBattleDesigner: () => _ensureBattleDesigner().show(),
+    openShipDesigner: () => _ensureShipDesigner().show(),
   });
   return _devOverlay;
 }
