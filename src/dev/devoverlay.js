@@ -78,6 +78,7 @@ export class DevOverlay {
       </div>
       <div class="dev-row">
         <button class="dev-btn" id="dev-open-map-designer">MAP DESIGNER ▸</button>
+        <button class="dev-btn" id="dev-open-platform-designer">PLATFORMS ▸</button>
       </div>
       <div class="dev-hint" id="dev-hint">~ toggles · \\ steps · [ ] speed</div>
     `;
