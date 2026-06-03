@@ -156,6 +156,7 @@ function _ensureDevOverlay() {
     getView: () => ({ w: viewW, h: viewH }),
     openBattleDesigner: () => _ensureBattleDesigner().show(),
     openShipDesigner: () => _ensureShipDesigner().show(),
+    openMapDesigner: () => _ensureMapDesigner().show(),
   });
   return _devOverlay;
 }
