@@ -208,6 +208,14 @@ function _ensureMapDesigner() {
   return _mapDesigner;
 }
 
+// Platform Designer — read-only inspector for the built-in PLATFORM_TYPES.
+let _platformDesigner = null;
+function _ensurePlatformDesigner() {
+  if (_platformDesigner) return _platformDesigner;
+  _platformDesigner = new PlatformDesigner(document.body, { onClose: () => {} });
+  return _platformDesigner;
+}
+
 // Dev hotkeys. Bound at the window level so they fire even when the
 // canvas isn't focused, and ALL gated on isDev() so a non-dev player
 // can't trip them. The ~/` key toggles the overlay (lazy-mounts it on
