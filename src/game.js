@@ -1593,13 +1593,20 @@ function bstatRecordShot(game, p) {
 // non-PD cannon rounds) count it as an accuracy hit. `amount` is the
 // post-multiplier incoming damage (shield + hull), so the figure reflects
 // total damage inflicted regardless of which layer absorbed it.
-function bstatRecordDamage(game, p, amount) {
+function bstatRecordDamage(game, p, amount, victim = null) {
   const bs = game.battleStats;
   if (!bs || p.side == null) return;
   const side = bs[p.side];
   if (side) side.damageDealt += amount;
   const rec = (p.ownerId != null) ? bs.ships[p.ownerId] : null;
   if (rec) rec.damageDealt += amount;
+  // Mirror to the victim so the balance HUD can show damage-taken (TTK
+  // by class, "tankiest hull" leaderboards). Lazy-ensures the victim's
+  // record — handles reinforcements that take a hit before being seen.
+  if (victim) {
+    const vrec = bstatShip(game, victim);
+    if (vrec) vrec.damageTaken += amount;
+  }
   if (p.kind === "cannon" && p.fromKlass !== "pd" && !p._statHit) {
     p._statHit = true;
     if (side) side.shotsHit++;
