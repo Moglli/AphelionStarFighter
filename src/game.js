@@ -1724,6 +1724,10 @@ function finalizeBattleStats(game) {
 }
 
 function applyDamage(ship, p, moduleTargets = null, particles = null, game = null) {
+  // Dev invincibility (PR-0b). `_devGod` is set from the dev overlay's
+  // "Invincible" toggle. Cheap branch — when the flag is absent (the
+  // overwhelming common case) this is one truthy check.
+  if (ship._devGod) return;
   // Surrendered ships still take damage from ordnance already in flight:
   // you can't un-launch the 10 missiles that locked on before the white
   // flag went up. They're untargetable for NEW shots (every target/aim
