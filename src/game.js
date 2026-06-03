@@ -642,7 +642,7 @@ function spawnBomberPairs(game, side, race, zone, count, facing, design = null) 
 // happens later via `assignEscortPacks` once every ship is on the
 // board — fighter packs spawned by `spawnFighterPacks` get their
 // `escortOf` stamped to the nearest unclaimed capital.
-function spawnCapital(game, klass, side, race, zone, facing, wounded = null) {
+function spawnCapital(game, klass, side, race, zone, facing, wounded = null, design = null) {
   const pos = randomSpawnPos(zone);
   const capital = createShip({
     klass, race, side, pos, heading: facing,
@@ -652,6 +652,7 @@ function spawnCapital(game, klass, side, race, zone, facing, wounded = null) {
     initialHpFrac: wounded ? wounded.hpFrac : 1,
     boons: side === "blue" ? game.activeBoons : null,
     fleetTraits: side === "blue" ? game.activeFleetTraits : null,
+    design,
   });
   // Stamp the run-state instanceId so captureBattleOutcome can match
   // this live ship back to its slot in run.capitals when the match ends.
