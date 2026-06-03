@@ -172,6 +172,30 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Battle Designer overlay — PR-1b of DEV_FEATURES_PLAN.md)
+- **Fullscreen DOM authoring overlay** that wraps the PR-1a primitives:
+  meta + two-column blue/red team builders + scenario library + Save /
+  Test Play / Export / Import. Editor state lives in `this._draft` — a
+  **defensive clone** of validated scenarios; SaveStore writes go through
+  `saveScenario(this._draft)` which re-validates so a malformed draft
+  can't escape the panel. `loadDraft` and `show()` re-clone to prevent
+  the editor and the saved record from sharing references.
+- **Clipboard has a textarea fallback** (`execCommand("copy")`). iOS
+  Capacitor webviews + non-secure-context browsers block
+  `navigator.clipboard.writeText`; the textarea-select path covers
+  them. On read failure (most webviews block `readText` entirely) the
+  importer falls back to `window.prompt` so users can paste a fenced
+  block by hand.
+- **Designer launches from the dev overlay** via an `openBattleDesigner`
+  deps callback, not a direct import — keeps `devoverlay.js` decoupled
+  from `battle-designer.js` and lets `main.js` own the lifecycle. Probe
+  surface: `window.dev.designer()` lazy-creates + returns the instance.
+- **Stance/priority/assignment chips emit `null`** (rendered as "—") when
+  unset so validate() leaves the row's wingCommand at vanilla defaults
+  instead of stamping an `engage/default/free` override that would mask
+  a per-class admiral directive. Authoring a row with all axes left at
+  "—" plays exactly like an un-commanded ship.
+
 ### 2026-06-03 (Scenario format + Custom-mode extension — PR-1a of DEV_FEATURES_PLAN.md)
 - **Canonical Scenario JSON (`src/scenario/format.js`)** is the contract
   every later designer + the chat round-trip share. `kind: "scenario",
