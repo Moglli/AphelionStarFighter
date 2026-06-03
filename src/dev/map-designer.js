@@ -336,6 +336,29 @@ export class MapDesigner {
       ctx.stroke();
     }
 
+    // Platforms.
+    const platforms = this._draft.platforms || [];
+    for (const pl of platforms) {
+      const px = ox + pl.x * scale;
+      const py = oy + pl.y * scale;
+      const r = 6;
+      ctx.beginPath();
+      // Hex marker so platforms read distinctly from circular asteroids.
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const hx = px + Math.cos(a) * r;
+        const hy = py + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(hx, hy);
+        else ctx.lineTo(hx, hy);
+      }
+      ctx.closePath();
+      ctx.fillStyle = pl.faction === "blue" ? "rgba(80,160,240,0.7)" : "rgba(240,120,90,0.7)";
+      ctx.fill();
+      ctx.strokeStyle = pl.faction === "blue" ? "#7af" : "#f97";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
     // Center crosshair so the editor reads at a glance.
     ctx.strokeStyle = "rgba(120,180,220,0.18)";
     ctx.lineWidth = 1;
