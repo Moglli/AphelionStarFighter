@@ -159,6 +159,7 @@ function _ensureDevOverlay() {
     openBattleDesigner: () => _ensureBattleDesigner().show(),
     openShipDesigner: () => _ensureShipDesigner().show(),
     openMapDesigner: () => _ensureMapDesigner().show(),
+    openPlatformDesigner: () => _ensurePlatformDesigner().show(),
   });
   return _devOverlay;
 }
