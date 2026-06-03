@@ -131,6 +131,7 @@ export class BattleDesigner {
     // Top-level field wire-ups. Each change writes through to this._draft.
     this._nameEl.addEventListener("input", () => { this._draft.name = this._nameEl.value; });
     this._notesEl.addEventListener("input", () => { this._draft.notes = this._notesEl.value; });
+    this._mapIdEl.addEventListener("change", () => { this._draft.mapId = this._mapIdEl.value; });
     this._playerTeamEl.addEventListener("change", () => { this._draft.playerTeam = this._playerTeamEl.value; });
     this._playerKlassEl.addEventListener("change", () => {
       this._draft.playerShip = { ...this._draft.playerShip, klass: this._playerKlassEl.value };
