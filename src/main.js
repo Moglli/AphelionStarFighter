@@ -218,6 +218,7 @@ if (typeof window !== "undefined") {
   Object.assign(window.dev || (window.dev = {}), {
     overlay: () => _ensureDevOverlay(),
     quickSpawn: (opts) => quickSpawn(game, opts),
+    designer: () => _ensureBattleDesigner(),
   });
   // Scenario probe surface (PR-1a). Mirrors window.dev / window.game
   // pattern — lets Playwright + console smoke-tests drive the format,
