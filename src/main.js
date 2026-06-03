@@ -266,6 +266,7 @@ if (typeof window !== "undefined") {
     designer: () => _ensureBattleDesigner(),
     shipDesigner: () => _ensureShipDesigner(),
     mapDesigner: () => _ensureMapDesigner(),
+    platformDesigner: () => _ensurePlatformDesigner(),
   });
   // Blueprint probe surface — mirrors window.scenario.
   window.blueprint = {
