@@ -138,6 +138,12 @@ export class DevOverlay {
         if (this.deps.openShipDesigner) this.deps.openShipDesigner();
       });
     }
+    const mapDesignerBtn = el.querySelector("#dev-open-map-designer");
+    if (mapDesignerBtn) {
+      mapDesignerBtn.addEventListener("click", () => {
+        if (this.deps.openMapDesigner) this.deps.openMapDesigner();
+      });
+    }
   }
 
   isVisible() { return this._visible; }
