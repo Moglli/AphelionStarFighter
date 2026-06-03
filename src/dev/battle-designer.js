@@ -113,6 +113,7 @@ export class BattleDesigner {
     this._el = el;
     this._nameEl = el.querySelector("#bd-name");
     this._notesEl = el.querySelector("#bd-notes");
+    this._mapIdEl = el.querySelector("#bd-map-id");
     this._playerTeamEl = el.querySelector("#bd-player-team");
     this._playerKlassEl = el.querySelector("#bd-player-klass");
     this._blueListEl = el.querySelector("#bd-blue-teams");
