@@ -78,6 +78,11 @@ const DEFAULT_SAVE = Object.freeze({
   // entry conforms to src/scenario/format.js#validateScenario. Additive
   // top-level array — rides mergeWithDefaults, no schema bump.
   scenarios: [],
+  // Designer-authored ship blueprints (DEV_FEATURES_PLAN.md Phase 2).
+  // Each entry conforms to src/blueprints/format.js#validateBlueprint.
+  // Scenario ship-rows reference these by `designId`; spawnRoster looks
+  // them up and routes the design through createShip's existing path.
+  blueprints: [],
   settings: {
     musicVolume: 0.6,
     sfxVolume: 0.8,
