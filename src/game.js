@@ -69,6 +69,11 @@ export function createGame() {
   setArenaSize(7000, 5000);
   const game = {
     ships: [],
+    // Static defence platforms (DEV_FEATURES_PLAN.md Phase 4). Separate
+    // from `ships` so escort/AAR/surrender loops never accidentally treat
+    // a platform as a ship; targeting/projectile-hit-test scan both via
+    // the `combatTargets` helper.
+    platforms: [],
     projectiles: [],
     beams: [],
     // Particle VFX (sparks, smoke, fire, debris, shockwaves) live in
