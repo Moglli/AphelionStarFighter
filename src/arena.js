@@ -27,6 +27,35 @@ export function setArenaSize(w, h) {
   ARENA.bounds = { minX: 0, maxX: w, minY: 0, maxY: h };
   ARENA.spawn.blue = { x: w * 0.10, y: h / 2, w: w * 0.13, h: h * 0.84 };
   ARENA.spawn.red  = { x: w * 0.90, y: h / 2, w: w * 0.13, h: h * 0.84 };
+  // Map decor (PR-3) is reset on every size change — `applyMap` re-stamps
+  // it after this if the new size came from a Map record. Without this
+  // line, asteroids from the prior map persist into a vanilla skirmish.
+  ARENA.decor = [];
+}
+
+/**
+ * Apply a full Map record (DEV_FEATURES_PLAN.md Phase 3). Sets size + spawn
+ * zones + decor. Spawn zones override the proportional defaults that
+ * setArenaSize would compute. The decor list is cached on ARENA.decor so
+ * main.js's draw loop can iterate it; visual-only this phase, no
+ * collision.
+ *
+ * Calling shape: `applyMap({ mapW, mapH, spawn: { blue, red }, decor })`
+ * — accepts any object with those fields, not just validated Map records,
+ * so legacy `setArenaSize`+default spawn callers still work.
+ */
+export function applyMap(map) {
+  if (!map) return;
+  const w = map.mapW || ARENA.width;
+  const h = map.mapH || ARENA.height;
+  ARENA.width = w;
+  ARENA.height = h;
+  ARENA.bounds = { minX: 0, maxX: w, minY: 0, maxY: h };
+  if (map.spawn && map.spawn.blue) ARENA.spawn.blue = { ...map.spawn.blue };
+  else ARENA.spawn.blue = { x: w * 0.10, y: h / 2, w: w * 0.13, h: h * 0.84 };
+  if (map.spawn && map.spawn.red) ARENA.spawn.red = { ...map.spawn.red };
+  else ARENA.spawn.red = { x: w * 0.90, y: h / 2, w: w * 0.13, h: h * 0.84 };
+  ARENA.decor = Array.isArray(map.decor) ? map.decor.map((d) => ({ ...d })) : [];
 }
 
 // Build a starfield: a few parallax layers of points sprinkled across the arena.
