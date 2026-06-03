@@ -12154,7 +12154,7 @@ html, body {
 }
 .bd-ship-row {
   display: grid;
-  grid-template-columns: 1fr 50px 1fr 1fr 1fr 24px;
+  grid-template-columns: 1fr 50px 1fr 1fr 1fr 1fr 24px;
   gap: 4px;
   align-items: center;
 }
