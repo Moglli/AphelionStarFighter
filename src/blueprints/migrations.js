@@ -2,9 +2,8 @@
  * @file Blueprint migrations — versioned shape upgrades.
  *
  * Stub for now; v1 is the first shipped version. Adding v2 mirrors the
- * scenario migration pattern:
- *
- *   const MIGRATIONS = { 1: (b) => ({ ...b, version: 2, /* shape change */ }) };
+ * scenario migration pattern: a MIGRATIONS map keyed on the source
+ * version returns the next-version shape (see src/scenario/migrations.js).
  */
 
 import { LATEST_VERSION } from "./format.js";
