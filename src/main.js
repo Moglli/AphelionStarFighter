@@ -4,6 +4,7 @@ import {
 } from "./game.js";
 import { drawArena, drawArenaBounds, ARENA, applyMap } from "./arena.js";
 import { drawDecor } from "./maps/decor.js";
+import { drawPlatform } from "./platforms/entity.js";
 import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
 import { drawHUD, drawBeams, BattleHUD } from "./hud.js";
