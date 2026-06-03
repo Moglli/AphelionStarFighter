@@ -1442,6 +1442,7 @@ export function update(game, dt) {
 // startGame spawns a fresh match.
 export function restart(game) {
   game.ships = [];
+  game.platforms = [];
   game.projectiles = [];
   game.beams = [];
   game.particles = [];
