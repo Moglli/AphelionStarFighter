@@ -40,13 +40,17 @@ export function createPlatform({ platformId, side, x, y, faction = null }) {
     side,                       // "blue" | "red"
     faction,                    // race-flavour tag for paint (optional)
     pos: { x, y },
+    vel: { x: 0, y: 0 },        // duck-type ship.vel for createDebrisBurst
     heading: 0,                 // gun bearing; mutated by updatePlatform
     turretHeading: 0,
+    klass: "station",           // closest existing klass; DEBRIS_SIZE_BY_KLASS keys on this
     spec,
     hp: hpMax, hpMax,
     shield: shieldMax, shieldMax,
     shieldFlash: 0,
     shieldHitTimer: 999,
+    shieldHits: [],             // recordShieldHit lazy-inits but we pre-set for clarity
+    scars: [],                  // addImpactScar iterates this — must exist
     dead: false,
     surrendered: false,
     cells: null,
@@ -55,6 +59,7 @@ export function createPlatform({ platformId, side, x, y, faction = null }) {
     // Weapon state — single-mount only this PR.
     fireCooldown: 0,
     pdCooldown: 0,
+    isPlayer: false,
   };
 }
 
