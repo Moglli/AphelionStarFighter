@@ -880,7 +880,11 @@ function frame(now) {
   let delta = t - last;
   last = t;
   if (delta > MAX_ACCUM) delta = MAX_ACCUM;
-  accum += delta;
+  // Dev sim-speed (PR-0b): scale the accumulator inflow so a simSpeed
+  // of 0.5 produces half the ticks per wall-clock second (slow-mo) and
+  // 2.0 produces twice (fast-forward). simSpeed=1 is exactly the
+  // pre-PR-0b behaviour.
+  accum += delta * (game.simSpeed || 1);
 
   // Let the input layer know whether the start menu is up so it can
   // intercept clicks before forwarding them to gameplay controls.
