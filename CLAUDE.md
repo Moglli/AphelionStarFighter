@@ -172,6 +172,43 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Ship Designer + Blueprints — PR-2 of DEV_FEATURES_PLAN.md)
+- **Blueprints reuse the persistent-design pipeline** — `bp.design` is
+  the same shape as `DEFAULT_PLAYER_DESIGN`, so spawn-side resolution is
+  `getBlueprint(id) → {design, paint}` → `createShip({design, ...})`.
+  No new AI/physics/render paths. `resolveBlueprintDesign` in game.js
+  defensive-clones the design's modules map before handing it to
+  createShip — the existing `applyDesign` inside createShip already
+  clones-on-descent, so the chain doesn't poison the shared race+class
+  spec (verified at PR-2 land with a smoke test that reads
+  `baseSpec.ringCannons.damage` before/after applying a Heavy Ring
+  Array design — value unchanged).
+- **Per-row designId flows through spawnRoster.** `spawnFighterPacks`,
+  `spawnBomberPairs`, `spawnCapital` now take an optional `design`
+  arg. For fighter/bomber the design is taken from the FIRST queued
+  row of that klass (multi-blueprint fighter rows in one team would
+  need per-ship plumbing — deferred); for capitals, each spawnCapital
+  call gets its own row → design, which is the primary use case for
+  blueprints anyway.
+- **Designer compares against stock**, not slot-by-slot deltas.
+  `computeBlueprintComparison(baseSpec, design, stockDesign)` and
+  `stockDesignForKlass(klass)` are the new components.js exports the
+  three-column UI reads from. The "vs stock" panel shows current value
+  + delta per field with better/worse tint — pure read-only on the
+  resolved spec; no side effects.
+- **Live preview is the game's pipeline.** Canvas reads
+  `resolveSpec(race, klass)` → `applyDesign(spec, design)` →
+  `buildModules(klass, spec, poly)` and renders the same module dots
+  the engine produces. Shield/armor (abstract slots without a physical
+  module) are drawn from `SLOT_VISUALS` so every slot the player
+  picked is visible in the preview.
+- **Battle Designer ship rows gained a blueprint dropdown** filtered
+  by klass — frigate rows only see frigate blueprints. Klass change
+  re-renders just the dropdown (the rest of the row's state holds).
+- **No save schema bump.** `blueprints: []` rides
+  `mergeWithDefaults` like every other Phase-1+ additive top-level
+  array.
+
 ### 2026-06-03 (Battle Designer overlay — PR-1b of DEV_FEATURES_PLAN.md)
 - **Fullscreen DOM authoring overlay** that wraps the PR-1a primitives:
   meta + two-column blue/red team builders + scenario library + Save /
