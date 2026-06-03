@@ -198,9 +198,37 @@ export class MapDesigner {
     this._hValEl.textContent = String(this._draft.mapH);
     this._renderSpawnRows();
     this._renderDecorList();
+    this._renderPlatformList();
     this._renderLibrary();
     this._setTool(this._tool);
     this._renderPreview();
+  }
+
+  _renderPlatformList() {
+    if (!this._platformListEl) return;
+    const list = this._platformListEl;
+    list.innerHTML = "";
+    if (!this._draft.platforms || !this._draft.platforms.length) {
+      const empty = document.createElement("div");
+      empty.className = "md-decor-empty";
+      empty.textContent = "no platforms — pick PLATFORM tool and click to place";
+      list.appendChild(empty);
+      return;
+    }
+    this._draft.platforms.forEach((pl, i) => {
+      const row = document.createElement("div");
+      row.className = "md-decor-row";
+      row.innerHTML = `
+        <span class="md-decor-meta">${pl.faction === "blue" ? "B" : "R"} · ${pl.platformId} · (${Math.round(pl.x)}, ${Math.round(pl.y)})</span>
+        <button class="md-btn md-decor-del">✕</button>
+      `;
+      row.querySelector(".md-decor-del").addEventListener("click", () => {
+        this._draft.platforms.splice(i, 1);
+        this._renderPlatformList();
+        this._renderPreview();
+      });
+      list.appendChild(row);
+    });
   }
 
   _setTool(tool) {
