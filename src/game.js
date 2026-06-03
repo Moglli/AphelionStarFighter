@@ -593,6 +593,7 @@ function spawnFighterPacks(game, side, race, zone, count, facing, design = null)
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
         boons: side === "blue" ? game.activeBoons : null,
         fleetTraits: side === "blue" ? game.activeFleetTraits : null,
+        design,
       });
       ship.packId = packId;
       ship.packRole = packRole;
