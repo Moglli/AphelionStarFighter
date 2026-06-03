@@ -172,6 +172,45 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Scenario format + Custom-mode extension — PR-1a of DEV_FEATURES_PLAN.md)
+- **Canonical Scenario JSON (`src/scenario/format.js`)** is the contract
+  every later designer + the chat round-trip share. `kind: "scenario",
+  version: 1` is mandatory so the importer can route + reject; bump
+  version only on incompatible *shape* changes (additive fields ride
+  the validator's defaults). `serializeScenario` emits a fenced
+  \`\`\`json block; `parseScenario` accepts raw JSON, just-the-block, OR
+  a chat message that contains the block — strip-on-import means
+  scenarios paste cleanly out of and back into chat. Stance aliases
+  (`STAND OFF` / `STANDOFF` / `STAND_OFF`) all normalize to one
+  canonical form so hand-edited JSON keeps round-tripping.
+- **Migrations stub up front (`src/scenario/migrations.js`).** Empty
+  switch today but the function exists so `validateScenario` already
+  funnels through it; adding a v2 is one MIGRATIONS entry, no
+  refactor.
+- **`customMode` now reads `game.scenario` first**, legacy
+  `customRoster` second. Scenario teams → `blueTeams`/`redTeams`
+  shape with a sidecar `rows` array carrying per-row spawn hints +
+  orders + designId. spawnRoster's helper queue (`buildRowQueues`)
+  pops one entry per spawn so per-ship metadata lands 1:1 even on
+  multi-row rosters that share a klass.
+- **`applyShipOrders` is no longer blue-only.** Pre-PR-1a the
+  early-return at the top of the function dropped every red-side
+  order — fine when only the admiral commanded the fleet, but
+  scenario authoring needs both sides to honour CHARGE / STANDOFF /
+  HOLD / FALLBACK to choreograph encounters. The body is symmetric
+  apart from one `sideCentroid(world, "blue", ship)` call which is
+  now `sideCentroid(world, ship.side, ship)`. FOCUS priority stays
+  blue-only (it's by design tied to the admiral's tap).
+- **No save schema bump.** `scenarios: []` is additive at the top of
+  `DEFAULT_SAVE`; rides `mergeWithDefaults` like every other additive
+  field per the existing "Save schema" convention.
+- **`window.scenario` probe.** Mirrors `window.dev` / `window.game`
+  hooks: `format`, `store`, plus `play(input)` that takes a JSON
+  object / raw string / fenced block, validates, sets `game.scenario`,
+  and kicks `startGame(…, "custom", …)`. Tests + console smoke can
+  drive the format with zero DOM work — the Battle Designer overlay
+  (PR-1b) wraps the same primitives.
+
 ### 2026-06-03 (Dev overlay — PR-0b of DEV_FEATURES_PLAN.md)
 - **Pause/step/speed/heal/kill/invuln/surrender/spawn — all from a single
   DOM panel.** `game.paused` / `game.stepOnce` / `game.simSpeed` are read
