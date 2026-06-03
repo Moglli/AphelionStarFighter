@@ -69,6 +69,7 @@ export class MapDesigner {
             <h3 class="md-decor-h">DECOR (visual only)</h3>
             <div class="md-tool-row">
               <button class="md-btn md-tool" id="md-tool-asteroid" data-tool="asteroid">＋ ASTEROID</button>
+              <button class="md-btn md-tool" id="md-tool-platform" data-tool="platform">＋ PLATFORM</button>
               <button class="md-btn md-tool" id="md-tool-select" data-tool="select">SELECT</button>
               <label class="md-field md-field-tight">
                 <span>SIZE</span>
@@ -76,7 +77,21 @@ export class MapDesigner {
                 <span id="md-decor-r-val">180</span>
               </label>
             </div>
+            <div class="md-tool-row">
+              <label class="md-field md-field-tight">
+                <span>PLATFORM TYPE</span>
+                <select id="md-plat-type"></select>
+              </label>
+              <label class="md-field md-field-tight">
+                <span>FACTION</span>
+                <select id="md-plat-side">
+                  <option value="red" selected>RED</option>
+                  <option value="blue">BLUE</option>
+                </select>
+              </label>
+            </div>
             <div class="md-decor-list" id="md-decor-list"></div>
+            <div class="md-decor-list" id="md-platform-list"></div>
           </div>
           <div class="md-col md-preview-col">
             <h3>PREVIEW</h3>
