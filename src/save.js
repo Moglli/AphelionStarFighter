@@ -83,6 +83,12 @@ const DEFAULT_SAVE = Object.freeze({
   // Scenario ship-rows reference these by `designId`; spawnRoster looks
   // them up and routes the design through createShip's existing path.
   blueprints: [],
+  // Designer-authored maps (DEV_FEATURES_PLAN.md Phase 3). Each entry
+  // conforms to src/maps/format.js#validateMap. Scenarios reference
+  // these by `mapId`; built-in presets live in src/maps/presets.js
+  // and union into the registry. Decor is visual-only this phase
+  // (collidable asteroids + hazards land in later PRs).
+  maps: [],
   settings: {
     musicVolume: 0.6,
     sfxVolume: 0.8,
