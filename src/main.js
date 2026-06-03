@@ -1396,6 +1396,12 @@ function draw() {
   ctx.translate(-camera.x, -camera.y);
 
   drawArenaBounds(ctx);
+  // Map decor (PR-3 of DEV_FEATURES_PLAN.md). Drawn AFTER bounds + BEFORE
+  // wrecks so a fresh wreck still chips off in front of an asteroid,
+  // and BEFORE ships so a fighter brushing past silhouettes against the
+  // rock rather than getting eclipsed by it. Visual-only — no collision
+  // wiring this phase.
+  if (ARENA.decor && ARENA.decor.length) drawDecor(ctx, ARENA.decor, zoom);
   // Persistent wrecks sit UNDER everything live so a fresh kill drops
   // into the background as the battle keeps going on top.
   if (game.wrecks) for (const w of game.wrecks) drawWreck(ctx, w);
