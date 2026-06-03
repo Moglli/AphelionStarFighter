@@ -172,6 +172,29 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Dev overlay — PR-0b of DEV_FEATURES_PLAN.md)
+- **Pause/step/speed/heal/kill/invuln/surrender/spawn — all from a single
+  DOM panel.** `game.paused` / `game.stepOnce` / `game.simSpeed` are read
+  by main.js's catch-up loop. Pause drains the accumulator without
+  ticking so the wall clock doesn't snap forward on resume; stepOnce
+  fires exactly one fixed tick (paused → tick → paused). `simSpeed`
+  scales `accum += delta * simSpeed` at the source instead of fiddling
+  the loop budget — keeps the fixed-step contract intact for sim
+  determinism. Hotkeys are window-level + gated on `isDev()`; pointer
+  selection runs at capture phase on the canvas listener and
+  stopPropagation's only if the overlay actually consumed the click, so
+  the gameplay input layer keeps every non-dev click.
+- **`_devGod` early-return at the top of `applyDamage`** so an invincible
+  ship pays one truthy check per hit (the flag is absent on every other
+  ship in the world). HEAL clears modules, cells, surrendered, and
+  resets hp/shield to max. KILL hardkills via `s.hp = 0` plus
+  `coreCell.dead = true` for cell-based hulls.
+- **Spawn coord transform** mirrors main.js#draw exactly:
+  `world = (screen - viewCenter) / zoom + camera`. The overlay reads
+  camera/zoom/view via getter callbacks from main.js — no globals.
+  Spawned ships face the enemy centroid and are clamped 50u inside the
+  arena bounds.
+
 ### 2026-06-03 (Dev Mode + balance HUD — PR-0a of DEV_FEATURES_PLAN.md)
 - **Settings toggle gates a per-frame balance HUD.** New
   `src/dev/devmode.js` owns an `_devCached` boolean exposed via
