@@ -368,7 +368,7 @@ function spawnRoster(game, rosterOverride = null) {
     const facing = side === "blue" ? 0 : Math.PI;
     const mul = rosterOverride ? 1 : (game.fleetMul || 1);
 
-    const spawnOne = (race, roster) => {
+    const spawnOne = (race, roster, rows = null) => {
       // Compute total escort *demand* from the capitals in this roster.
       // Capitals no longer spawn with escorts attached — those fighters
       // are now part of the open fighter pool — so for the default
@@ -383,13 +383,40 @@ function spawnRoster(game, rosterOverride = null) {
           if (ESCORT_SIZE[k] && c > 0) escortDemand += ESCORT_SIZE[k] * c;
         }
       }
+      // Build a per-klass row queue for Scenario-driven spawns. Each
+      // scenario row (klass + count + spawn + stance + …) becomes a
+      // queue entry per ship; spawn loops pop one entry per spawn so
+      // even multi-row rosters with the same klass land on the right
+      // per-ship metadata. Legacy rosters (rows === null) skip this and
+      // get vanilla zone spawns.
+      const rowQueues = rows ? buildRowQueues(rows) : null;
+      const popRow = (klass) => {
+        if (!rowQueues) return null;
+        const q = rowQueues[klass];
+        return q && q.length ? q.shift() : null;
+      };
+      const trackSpawn = (ship, row) => {
+        if (!row) return;
+        if (row._wingCommand) ship.wingCommand = { ...row._wingCommand };
+      };
+
       for (const [klass, count] of Object.entries(roster)) {
         if (count <= 0) continue;
         const scaled = Math.max(1, Math.round(count * mul));
         if (klass === "fighter") {
+          // Fighter packs ignore per-row spawn hints (pack geometry is
+          // emergent) but each fighter still gets its row's orders.
+          const before = game.ships.length;
           spawnFighterPacks(game, side, race, zone, scaled + escortDemand, facing);
+          for (let i = before; i < game.ships.length; i++) {
+            trackSpawn(game.ships[i], popRow("fighter"));
+          }
         } else if (klass === "bomber") {
+          const before = game.ships.length;
           spawnBomberPairs(game, side, race, zone, scaled, facing);
+          for (let i = before; i < game.ships.length; i++) {
+            trackSpawn(game.ships[i], popRow("bomber"));
+          }
         } else if (ESCORT_SIZE[klass]) {
           for (let i = 0; i < scaled; i++) {
             let wounded = null;
@@ -405,11 +432,20 @@ function spawnRoster(game, rosterOverride = null) {
                 manifest.splice(idx, 1);
               }
             }
+            const before = game.ships.length;
             spawnCapital(game, klass, side, race, zone, facing, wounded);
+            for (let j = before; j < game.ships.length; j++) {
+              trackSpawn(game.ships[j], popRow(klass));
+            }
           }
         } else {
           for (let i = 0; i < scaled; i++) {
-            const pos = randomSpawnPos(zone);
+            const row = popRow(klass);
+            // Per-row spawn override: row._spawn is { x, y, spread? }.
+            // Falls back to the side's spawn zone if absent.
+            const pos = row && row._spawn
+              ? jitterAround(row._spawn.x, row._spawn.y, row._spawn.spread || 200)
+              : randomSpawnPos(zone);
             const heading = facing + (Math.random() - 0.5) * 0.3;
             const ship = createShip({
               klass, race, side, pos, heading,
@@ -418,6 +454,7 @@ function spawnRoster(game, rosterOverride = null) {
               fleetTraits: side === "blue" ? game.activeFleetTraits : null,
             });
             game.ships.push(ship);
+            trackSpawn(ship, row);
           }
         }
       }
@@ -426,7 +463,7 @@ function spawnRoster(game, rosterOverride = null) {
     if (teams) {
       for (const t of teams) {
         if (!t || !t.race || !t.counts) continue;
-        spawnOne(t.race, t.counts);
+        spawnOne(t.race, t.counts, t.rows || null);
       }
     } else {
       const race = side === "blue" ? game.alliedRace : game.hostileRace;
