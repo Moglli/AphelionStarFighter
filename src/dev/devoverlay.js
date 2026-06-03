@@ -145,6 +145,12 @@ export class DevOverlay {
         if (this.deps.openMapDesigner) this.deps.openMapDesigner();
       });
     }
+    const platformDesignerBtn = el.querySelector("#dev-open-platform-designer");
+    if (platformDesignerBtn) {
+      platformDesignerBtn.addEventListener("click", () => {
+        if (this.deps.openPlatformDesigner) this.deps.openPlatformDesigner();
+      });
+    }
   }
 
   isVisible() { return this._visible; }
