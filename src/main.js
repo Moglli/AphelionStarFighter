@@ -1187,9 +1187,30 @@ function frame(now) {
   else if (!shouldPlay && musicWasPlaying) audio.stop();
   musicWasPlaying = shouldPlay;
 
-  while (accum >= FIXED_DT) {
-    update(game, FIXED_DT);
-    accum -= FIXED_DT;
+  // Dev sim-control hook (PR-0b). When paused, drain the accumulator
+  // without ticking — keeps the clock from snapping forward when we
+  // unpause. `stepOnce` lets the dev overlay advance one fixed tick at
+  // a time even while paused. `simSpeed` scales how many ticks the
+  // catch-up loop is allowed to do per frame: <1 slows, >1 speeds up.
+  // All branches are no-ops when the defaults (paused=false, stepOnce=
+  // false, simSpeed=1) haven't been touched.
+  if (game.paused) {
+    if (game.stepOnce) {
+      update(game, FIXED_DT);
+      game.stepOnce = false;
+    }
+    accum = 0;
+  } else {
+    let budget = Math.max(1, Math.round(game.simSpeed || 1));
+    while (accum >= FIXED_DT && budget-- > 0) {
+      update(game, FIXED_DT);
+      accum -= FIXED_DT;
+    }
+    // Slow-mo: skip every other tick by replaying half the accumulator.
+    // Keeps the fixed-step contract intact while halving the rate.
+    if ((game.simSpeed || 1) < 1) {
+      accum *= (game.simSpeed || 1);
+    }
   }
 
   draw();
