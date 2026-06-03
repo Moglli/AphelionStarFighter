@@ -69,6 +69,7 @@ export function applyMap(map) {
   if (map.spawn && map.spawn.red) ARENA.spawn.red = { ...map.spawn.red };
   else ARENA.spawn.red = { x: w * 0.90, y: h / 2, w: w * 0.13, h: h * 0.84 };
   ARENA.decor = Array.isArray(map.decor) ? map.decor.map((d) => ({ ...d })) : [];
+  ARENA.platforms = Array.isArray(map.platforms) ? map.platforms.map((p) => ({ ...p })) : [];
 }
 
 // Build a starfield: a few parallax layers of points sprinkled across the arena.
