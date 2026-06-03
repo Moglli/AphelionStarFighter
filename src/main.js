@@ -175,6 +175,19 @@ function _ensureBattleDesigner() {
   return _battleDesigner;
 }
 
+// Ship Designer — lazy mounted from the dev overlay button. Pure
+// authoring surface — no game-state side effects beyond saveStore
+// updates.
+let _shipDesigner = null;
+function _ensureShipDesigner() {
+  if (_shipDesigner) return _shipDesigner;
+  _shipDesigner = new ShipDesigner(document.body, {
+    game,
+    onClose: () => {},
+  });
+  return _shipDesigner;
+}
+
 // Dev hotkeys. Bound at the window level so they fire even when the
 // canvas isn't focused, and ALL gated on isDev() so a non-dev player
 // can't trip them. The ~/` key toggles the overlay (lazy-mounts it on
