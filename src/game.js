@@ -1124,6 +1124,13 @@ export function update(game, dt) {
     updateShip(ship, dt, game);
   }
 
+  // Platform tick — stationary, fires at nearest enemy ship in range.
+  // Runs after the ship update so platforms aim at this-frame ship
+  // positions, not last-frame stale ones.
+  if (game.platforms.length) {
+    for (const p of game.platforms) updatePlatform(p, dt, game);
+  }
+
   resolveHeavyOverlap(game.ships, game.arena.bounds);
 
   // Projectiles: movement + ship collisions + PD-vs-missile collisions.
