@@ -608,7 +608,7 @@ function spawnFighterPacks(game, side, race, zone, count, facing, design = null)
 // threat that pulls fighter attention. They spawn solo (no escorts) —
 // fighter packs are assigned to *capital* charges post-spawn by
 // `assignEscortPacks`; bombers fend for themselves.
-function spawnBomberPairs(game, side, race, zone, count, facing) {
+function spawnBomberPairs(game, side, race, zone, count, facing, design = null) {
   let remaining = count;
   while (remaining > 0) {
     const pairSize = Math.min(BOMBER_PACK_SIZE, remaining);
@@ -630,6 +630,7 @@ function spawnBomberPairs(game, side, race, zone, count, facing) {
         controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
         boons: side === "blue" ? game.activeBoons : null,
         fleetTraits: side === "blue" ? game.activeFleetTraits : null,
+        design,
       });
       game.ships.push(bomber);
     }
