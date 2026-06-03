@@ -12730,3 +12730,56 @@ html, body {
   padding: 8px;
   resize: vertical;
 }
+
+/* ---- Platform Designer (PR-4 of DEV_FEATURES_PLAN.md) ----
+   Read-only spec inspector for the built-in PLATFORM_TYPES. Pure grid of
+   stat cards; sits on the same z-stack tier as the other designers. */
+.platform-designer {
+  position: fixed; inset: 0;
+  z-index: 50;
+  background: rgba(4, 8, 16, 0.92);
+  display: flex; align-items: center; justify-content: center;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #cde;
+}
+.platform-designer.hidden { display: none; }
+.pd-panel {
+  width: min(96vw, 900px);
+  max-height: 92vh;
+  background: rgba(8, 14, 26, 0.96);
+  border: 1px solid rgba(120, 200, 255, 0.55);
+  display: flex; flex-direction: column;
+  overflow: auto;
+}
+.pd-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(120, 200, 255, 0.25);
+  background: rgba(20, 32, 54, 0.6);
+}
+.pd-title { color: #9cf; letter-spacing: 2px; font-weight: bold; font-size: 14px; }
+.pd-x { background: none; border: none; color: #9cf; font-size: 16px; cursor: pointer; padding: 2px 8px; }
+.pd-x:hover { color: #fff; }
+.pd-body { padding: 14px; }
+.pd-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.pd-card {
+  background: rgba(20, 32, 54, 0.6);
+  border: 1px solid rgba(120, 180, 220, 0.3);
+  padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pd-card-header { display: flex; justify-content: space-between; align-items: baseline; }
+.pd-card-name { color: #9cf; font-weight: bold; letter-spacing: 1px; }
+.pd-card-id { color: #678; font-size: 10px; }
+.pd-card-blurb { color: #ace; margin: 0; font-size: 11px; }
+.pd-card-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.pd-stat { display: flex; justify-content: space-between; gap: 4px; padding: 2px 4px;
+  background: rgba(15, 24, 40, 0.5); }
+.pd-stat-label { color: #9ab; font-size: 10px; }
+.pd-stat-value { color: #cde; }
+.pd-hint {
+  margin: 12px 0 0; color: #678; font-size: 11px; font-style: italic;
+}

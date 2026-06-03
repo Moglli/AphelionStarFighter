@@ -172,6 +172,43 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Defence platforms — PR-4 of DEV_FEATURES_PLAN.md)
+- **`game.platforms[]` is a separate array from `game.ships`** —
+  ships' escort/AAR/surrender/pack loops never see platforms, so a
+  Brood capital's escort assignment can't accidentally try to leash
+  a turret bastion, and an enemy fleet's surrender count isn't
+  diluted by a platform that "never strikes colors."
+- **Platforms duck-type the ship damage interface.** A platform
+  carries `pos / vel / heading / side / spec.radius / hp / hpMax /
+  shield / shieldMax / shieldFlash / shieldHitTimer / shieldHits /
+  scars / dead / surrendered / cells=null / modules=null / klass=
+  "station"`. `applyDamage` (game.js:1710) walks the shield → cell →
+  module → hull cascade unchanged — the cell + module branches
+  short-circuit on `cells===null`/`modules===null`, falling through
+  to direct `hp -= remaining`. Saves a damage-extraction refactor
+  that would have touched every projectile + beam path.
+- **Targeting uses a `enemies = ships + platforms` snapshot** built
+  once per `updateAI` invocation. ALL other `world.ships` reads
+  (escort id lookups, ally avoidance, FOCUS resolve, pack target
+  cache) keep using `world.ships` directly — platforms never appear
+  in those passes. `acquireMissileTarget` + the missile-by-id
+  re-lookup in `projectile.js#updateMissile` use the same combined
+  snapshot so missiles can lock and re-acquire onto platforms.
+- **Projectile hit-test added a platform pass** after the ship pass.
+  Cannon and missile rounds prefer the first ship they overlap; a
+  miss falls through to scan platforms. Both kinds dead-end the
+  projectile.
+- **Platform IDs start at 100000** so `bs.ships[platform.id]` in
+  battle telemetry can't collide with ship ids. AAR roster snapshot
+  (`tickBattleStats`) still iterates `game.ships`, so platforms only
+  appear in stats when they're hit (lazy `bstatShip` ensure path).
+- **Map → platform spawn**: `applyMap` caches `map.platforms[]` on
+  `ARENA.platforms`; `spawnMapPlatforms` runs at the end of
+  `startGame` after the roster + fleet plan, instantiating each
+  via `createPlatform({ platformId, side, x, y, faction })`. Vanilla
+  skirmishes drop `ARENA.platforms = []` in `setArenaSize`, same
+  cleanup the decor list rides on.
+
 ### 2026-06-03 (Map Designer — PR-3 of DEV_FEATURES_PLAN.md)
 - **`applyMap(map)` is the single seam** that gets called before every
   scenario spawn. Sets `ARENA.width / height / bounds / spawn.{blue,red}`
