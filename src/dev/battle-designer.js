@@ -65,6 +65,10 @@ export class BattleDesigner {
             <input id="bd-notes" type="text" maxlength="200" placeholder="Optional — surfaced when re-loading"/>
           </label>
           <label class="bd-field bd-field-tight">
+            <span>MAP</span>
+            <select id="bd-map-id"></select>
+          </label>
+          <label class="bd-field bd-field-tight">
             <span>PLAYER</span>
             <select id="bd-player-team">
               <option value="blue">BLUE</option>
