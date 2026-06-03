@@ -172,6 +172,28 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-03 (Dev Mode + balance HUD — PR-0a of DEV_FEATURES_PLAN.md)
+- **Settings toggle gates a per-frame balance HUD.** New
+  `src/dev/devmode.js` owns an `_devCached` boolean exposed via
+  `isDev()` / `setDev(on)` and a `window.dev` probe. Critical: `isDev()`
+  is read from per-frame draw paths — it must NOT touch saveStore.
+  `main.js` does the SaveStore read ONCE at boot (`setDev(!!st.devMode)`)
+  and re-caches via `applyDevMode` whenever the toggle fires; persistence
+  rides the same path as the music/SFX `applyMute*` helpers. The Settings
+  patch shape gained `devMode: boolean`; `_buildSettingsOverlay`
+  (menus.js) adds a `.settings-toggle` row reusing existing CSS;
+  `_syncSettings` mirrors `st.devMode` onto the toggle via the existing
+  `_syncToggle` helper. Save schema is unchanged — `settings.devMode:
+  false` rides `mergeWithDefaults` (additive field, no version bump).
+- **Balance HUD piggybacks on `game.battleStats`** rather than adding
+  parallel instrumentation. The per-ship rec gained `damageTaken`;
+  `bstatRecordDamage` now takes the victim ship so the lazy ensure path
+  also runs for hulls that take damage before they're seen by
+  `tickBattleStats` (reinforcements / carrier replenishment). One-line
+  change to the existing `applyDamage` telemetry block, drawn LAST in
+  main.js#draw so it overlays the HUD; off-path early-returns when
+  `isDev()` is false.
+
 ### 2026-06-01 (fix: battles cut short mid-fight)
 - **The 90s hard battle cap (added in the balance pass) was firing during
   live fights**, ending them by fleet-strength with ships still actively
