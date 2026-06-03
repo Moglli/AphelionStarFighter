@@ -38,10 +38,12 @@ export function setArenaSize(w, h) {
   ARENA.bounds = { minX: 0, maxX: w, minY: 0, maxY: h };
   ARENA.spawn.blue = { x: w * 0.10, y: h / 2, w: w * 0.13, h: h * 0.84 };
   ARENA.spawn.red  = { x: w * 0.90, y: h / 2, w: w * 0.13, h: h * 0.84 };
-  // Map decor (PR-3) is reset on every size change — `applyMap` re-stamps
-  // it after this if the new size came from a Map record. Without this
-  // line, asteroids from the prior map persist into a vanilla skirmish.
+  // Map decor (PR-3) + platforms (PR-4) are reset on every size change —
+  // `applyMap` re-stamps them after this if the new size came from a Map
+  // record. Without this line, leftover entities from the prior map
+  // persist into a vanilla skirmish.
   ARENA.decor = [];
+  ARENA.platforms = [];
 }
 
 /**
