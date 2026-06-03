@@ -26,6 +26,7 @@ import {
   listScenarios, getScenario, saveScenario, deleteScenario,
 } from "../scenario/store.js";
 import { listBlueprints } from "../blueprints/store.js";
+import { listAllMaps } from "../maps/store.js";
 
 const RACES = ["terran", "reavers", "hegemony", "voidsworn", "thren", "brood", "vanguard", "saurian", "synthetic"];
 const KLASSES = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier"];
