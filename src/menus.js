@@ -1910,6 +1910,13 @@ export class MenuSystem {
             <input type="range" class="settings-slider" id="settings-sfx-vol" min="0" max="100" step="1" value="80" aria-label="SFX volume">
             <span class="settings-vol-value" id="settings-sfx-val">80%</span>
           </div>
+          <button class="settings-toggle off" id="settings-dev-toggle" data-setting="dev" aria-pressed="false">
+            <span class="toggle-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M9 3 L4 12 L9 21 M15 3 L20 12 L15 21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <span class="toggle-label">DEV MODE</span>
+            <span class="toggle-value">OFF</span>
+          </button>
         </div>
         <p class="settings-hint">Drag to set volume &middot; P mutes music mid-match</p>
         <button class="overlay-close-btn" id="settings-close">CLOSE</button>
