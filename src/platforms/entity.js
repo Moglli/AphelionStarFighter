@@ -16,7 +16,7 @@
  *     platforms in surrender counts, AAR, escort assignment, etc.
  */
 
-import { createCannon, createMissile } from "../projectile.js";
+import { createProjectile, createMissile } from "../projectile.js";
 import { events } from "../events.js";
 import { PLATFORM_TYPES, DEFAULT_PLATFORM_TYPE } from "./registry.js";
 
