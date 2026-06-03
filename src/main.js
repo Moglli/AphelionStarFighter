@@ -2,7 +2,8 @@ import {
   createGame, update, restart, startGame,
   enterSpectate, exitSpectate, cycleSpectate, getSpectateTarget,
 } from "./game.js";
-import { drawArena, drawArenaBounds, ARENA } from "./arena.js";
+import { drawArena, drawArenaBounds, ARENA, applyMap } from "./arena.js";
+import { drawDecor } from "./maps/decor.js";
 import { drawShip } from "./ship.js";
 import { drawProjectile } from "./projectile.js";
 import { drawHUD, drawBeams, BattleHUD } from "./hud.js";
