@@ -1549,7 +1549,7 @@ function bstatShip(game, ship) {
     rec = {
       id: ship.id, name: ship.commShipName || null, klass: ship.klass,
       side: ship.side, isPlayer: !!ship.isPlayer,
-      kills: 0, damageDealt: 0, shotsFired: 0, shotsHit: 0, fate: "alive",
+      kills: 0, damageDealt: 0, damageTaken: 0, shotsFired: 0, shotsHit: 0, fate: "alive",
     };
     bs.ships[ship.id] = rec;
   } else if (!rec.name && ship.commShipName) {
