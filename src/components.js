@@ -977,3 +977,70 @@ export function computeDeltas(baseSpec, currentDesign, slotId, candidateId) {
   }
   return out;
 }
+
+/**
+ * Walk DELTA_FIELDS for one resolved design — returns the absolute
+ * stat values (not deltas) keyed by label. Used by the Ship Designer's
+ * stat panel: render the current blueprint's stats in one column and
+ * the stock klass's stats in the other so the player can eyeball the
+ * tradeoffs. Skips null/undefined fields entirely.
+ */
+export function computeAbsoluteStats(baseSpec, design) {
+  if (!baseSpec || !design) return [];
+  const spec = applyDesign(baseSpec, design);
+  const out = [];
+  for (const field of DELTA_FIELDS) {
+    const v = field.pick(spec);
+    if (v == null) continue;
+    out.push({ key: field.key, label: field.label, value: v, better: field.better });
+  }
+  return out;
+}
+
+/**
+ * Side-by-side spec comparison between the blueprint's design and the
+ * stock design for the same klass. Returns one row per stat field with
+ * `{ label, current, stock, delta, direction }`. Renders as the stat
+ * panel in src/dev/ship-designer.js.
+ */
+export function computeBlueprintComparison(baseSpec, blueprintDesign, stockDesign) {
+  if (!baseSpec || !blueprintDesign) return [];
+  const blueSpec = applyDesign(baseSpec, blueprintDesign);
+  const stockSpec = stockDesign ? applyDesign(baseSpec, stockDesign) : baseSpec;
+  const out = [];
+  for (const field of DELTA_FIELDS) {
+    const cur = field.pick(blueSpec);
+    const stock = field.pick(stockSpec);
+    if (cur == null && stock == null) continue;
+    const a = typeof stock === "number" ? stock : 0;
+    const b = typeof cur === "number" ? cur : 0;
+    const delta = b - a;
+    const direction = delta === 0 ? "same"
+      : (field.better === "higher" && delta > 0) || (field.better === "lower" && delta < 0)
+        ? "better" : "worse";
+    out.push({
+      key: field.key,
+      label: field.label,
+      current: cur,
+      stock,
+      delta,
+      direction,
+    });
+  }
+  return out;
+}
+
+/**
+ * Cheap "stock design" for a given klass — every slot filled with its
+ * default component. Mirrors the SHIPYARD initial state. The designer
+ * compares the working blueprint against this.
+ */
+export function stockDesignForKlass(klass) {
+  const hull = HULLS[klass] || HULLS.fighter;
+  const modules = {};
+  for (const slot of hull.slots) {
+    const d = defaultForSlot(slot);
+    if (d) modules[slot] = d;
+  }
+  return { hull: klass, modules, name: "", paintPrimary: null, paintTrim: null };
+}
