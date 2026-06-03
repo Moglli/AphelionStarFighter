@@ -193,6 +193,18 @@ function _ensureShipDesigner() {
   return _shipDesigner;
 }
 
+// Map Designer — same lazy pattern. Authoring only; mapId resolution
+// happens later in modes/custom.js#setupFromScenario.
+let _mapDesigner = null;
+function _ensureMapDesigner() {
+  if (_mapDesigner) return _mapDesigner;
+  _mapDesigner = new MapDesigner(document.body, {
+    game,
+    onClose: () => {},
+  });
+  return _mapDesigner;
+}
+
 // Dev hotkeys. Bound at the window level so they fire even when the
 // canvas isn't focused, and ALL gated on isDev() so a non-dev player
 // can't trip them. The ~/` key toggles the overlay (lazy-mounts it on
