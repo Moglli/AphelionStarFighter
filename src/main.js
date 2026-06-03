@@ -198,6 +198,28 @@ if (typeof window !== "undefined") {
     overlay: () => _ensureDevOverlay(),
     quickSpawn: (opts) => quickSpawn(game, opts),
   });
+  // Scenario probe surface (PR-1a). Mirrors window.dev / window.game
+  // pattern — lets Playwright + console smoke-tests drive the format,
+  // store, and the game.scenario hand-off without driving DOM yet (UI
+  // lands in PR-1b).
+  window.scenario = {
+    ...scenarioFormat,
+    ...scenarioStore,
+    // Set the live game.scenario then start a custom match. Doesn't
+    // touch the SaveStore — for one-shot "load this and play" use.
+    play: (input) => {
+      const res = scenarioFormat.parseScenario(input);
+      if (!res.ok) {
+        console.warn("[scenario] invalid:", res.errors);
+        return res;
+      }
+      game.scenario = res.value;
+      startGame(game, ARENA.width, ARENA.height, game.alliedRace, "open",
+        { mode: "custom" }, 1, null);
+      // The custom mode reads game.scenario inside its setup hook.
+      return res;
+    },
+  };
 }
 input.startMenu.setSettings(
   () => ({
