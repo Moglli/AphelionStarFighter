@@ -129,6 +129,12 @@ export class DevOverlay {
         if (this.deps.openBattleDesigner) this.deps.openBattleDesigner();
       });
     }
+    const shipDesignerBtn = el.querySelector("#dev-open-ship-designer");
+    if (shipDesignerBtn) {
+      shipDesignerBtn.addEventListener("click", () => {
+        if (this.deps.openShipDesigner) this.deps.openShipDesigner();
+      });
+    }
   }
 
   isVisible() { return this._visible; }
