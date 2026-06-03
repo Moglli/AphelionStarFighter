@@ -14,6 +14,11 @@ export const ARENA = {
   // Visual-only this phase — main.js draws each entry between starfield
   // and ships but no collision response is wired.
   decor: [],
+  // Map-placed platforms (DEV_FEATURES_PLAN.md Phase 4). Populated by
+  // applyMap; consumed by game.js#spawnMapPlatforms after the roster
+  // spawn so platforms are on the field for the first projectile tick.
+  // Cleared by setArenaSize for the same vanilla-skirmish reason as decor.
+  platforms: [],
 };
 
 // Map size presets shown on the start menu.
