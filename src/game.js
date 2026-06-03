@@ -1219,7 +1219,27 @@ export function update(game, dt) {
       // Missiles always die on hit; cannons die on hit.
       p.dead = true;
       if (isShipDestroyed(ship)) ship.dead = true;
+      hitTarget = true;
       break;
+    }
+    if (hitTarget) continue;
+
+    // Platform hit-test (PR-4). Broad-phase circle only — platforms
+    // have no `cells` array, so the cascade falls straight through to
+    // shield then hull inside applyDamage. surrendered is always false
+    // on platforms, so the in-flight ordnance rules still apply.
+    if (game.platforms.length) {
+      for (const plat of game.platforms) {
+        if (plat.dead || plat.side === p.side) continue;
+        const dx = plat.pos.x - p.pos.x;
+        const dy = plat.pos.y - p.pos.y;
+        const r = plat.spec.radius + p.radius;
+        if (dx * dx + dy * dy > r * r) continue;
+        applyDamage(plat, p, null, game.particles, game);
+        p.dead = true;
+        if (plat.hp <= 0) plat.dead = true;
+        break;
+      }
     }
   }
 
