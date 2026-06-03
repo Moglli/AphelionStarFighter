@@ -2396,6 +2396,7 @@ export class StartMenu {
       // re-sync would fight the drag.
       onMusicVolume: (v) => { this._settingsApply({ musicVolume: v }); },
       onSfxVolume: (v) => { this._settingsApply({ sfxVolume: v }); },
+      onDevMode: (on) => { this._settingsApply({ devMode: !!on }); },
       onCustomClose: () => { this.showCustom = false; this._customDrag = null; },
       onCustomStart: () => {
         this._customDrag = null;
