@@ -70,6 +70,15 @@ function setupFromScenario(game, { spawnRoster, promotePlayer }) {
   const sc = game.scenario;
   const playerTeam = sc.playerTeam === "red" ? "red" : "blue";
 
+  // Resolve the map BEFORE spawn so spawnRoster reads the right zones
+  // and ARENA.decor is populated for the first frame. Inline `sc.map`
+  // wins over `sc.mapId` (future-proofing for self-contained scenarios
+  // exported with their map inlined). Falling through both ids and
+  // inline records keeps the legacy `default-*` skirmish behaviour.
+  const inlineMap = sc.map && typeof sc.map === "object" ? sc.map : null;
+  const resolved = inlineMap || (sc.mapId ? getMap(sc.mapId) : null);
+  if (resolved) applyMap(resolved);
+
   // Pick a primary race per side for game.alliedRace / hostileRace (used
   // by station spawns, captain comms, paint defaults). First team wins;
   // empty side → terran fallback.
