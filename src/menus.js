@@ -8,6 +8,7 @@
  */
 
 import { classIconSvg, CLASS_SHORT_LABELS } from "./ship-icons.js";
+import { events } from "./events.js";
 
 // Rank insignia — inline SVG per Frontier rank. Drawn with thin
 // strokes so they overlay cleanly on the memorial card chrome.
@@ -2940,10 +2941,14 @@ export class MenuSystem {
     const warEl = t.closest("[data-fh-war]");
     if (warEl) { if (cb.onFrontierHubSelectWar) cb.onFrontierHubSelectWar(warEl.dataset.fhWar); return; }
     const missionEl = t.closest("[data-fh-mission]");
-    if (missionEl && !missionEl.classList.contains("fh-locked")) {
-      if (cb.onFrontierHubSelectMission) {
-        cb.onFrontierHubSelectMission(missionEl.dataset.fhMtype, missionEl.dataset.fhMission);
-      }
+    if (missionEl && !missionEl.hasAttribute("disabled")) {
+      // Node selection is routed through the event bus (per the redesign
+      // contract) to keep the overlay decoupled — input.js subscribes and
+      // updates the selection; the next sync re-renders the map.
+      events.emit("frontier:nodeSelected", {
+        missionType: missionEl.dataset.fhMtype,
+        missionId: missionEl.dataset.fhMission,
+      });
       return;
     }
     if (t.closest("[data-fh-command]")) { if (cb.onFrontierHubSelectCommand) cb.onFrontierHubSelectCommand(); return; }
@@ -2953,6 +2958,74 @@ export class MenuSystem {
 
   _fhFactionName(faction) {
     return ({ brood: "THE BROOD", saurian: "VAR'SAKH DOMINION" })[faction] || (faction || "").toUpperCase();
+  }
+
+  /**
+   * Build the campaign progression as a vertical "warp-route" map: large
+   * thumb-friendly chapter nodes alternating left/right off a central
+   * charged warp-lane, plus side-sortie spurs. Pure DOM/CSS (no canvas, no
+   * layout measurement) so it survives the wholesale innerHTML rebuild and
+   * stays responsive. Node states come straight from the data-derived
+   * `status` (done/next/locked) — no new save field.
+   *
+   * Motion is CSS-keyframe based (auto-plays on render), since the sync
+   * swaps innerHTML and a `transition` between old/new DOM can't fire. The
+   * one-shot CLEAR celebration is gated on a per-War "last-seen completed
+   * count" diff (`_fhProgSeen`) so it plays once when a chapter newly
+   * flips to done and never replays on subsequent re-renders.
+   */
+  _fhWarpMap(sw, sel) {
+    const chapters = sw.chapters || [];
+    const total = chapters.length || 1;
+    const done = chapters.filter((c) => c.status === "done").length;
+    if (!this._fhProgSeen) this._fhProgSeen = {};
+    const prev = this._fhProgSeen[sw.id];
+    // Celebrate only a genuine increase vs the last render (undefined on
+    // first sight → no celebration, just seed the baseline).
+    const justClearedIdx = (prev != null && done > prev) ? done - 1 : -1;
+    this._fhProgSeen[sw.id] = done;
+    // Charge the central lane up to the cleared fraction, nudged half a
+    // segment into the active node so the route visibly reaches "deploy".
+    const chargePct = Math.min(100, (done / total) * 100 + (done < total ? (100 / total) * 0.5 : 0));
+
+    const nodes = chapters.map((c, i) => {
+      const boss = i === chapters.length - 1;
+      const side = i % 2 === 0 ? "left" : "right";
+      const seld = sel && sel.missionType === "chapter" && sel.missionId === c.id;
+      const locked = c.status === "locked";
+      const badge = c.status === "done" ? "✓" : (c.status === "next" ? "▶" : (boss ? "☠" : "🔒"));
+      const cls = ["fh-node", `fh-node-${c.status}`];
+      if (boss) cls.push("fh-node-boss");
+      if (seld) cls.push("selected");
+      if (i === justClearedIdx) cls.push("fh-just-cleared");
+      return `<div class="fh-node-slot fh-side-${side}">
+        <button class="${cls.join(" ")}" data-fh-mission="${c.id}" data-fh-mtype="chapter"${locked ? " disabled" : ""}
+          aria-label="Chapter ${i + 1}: ${c.title}${locked ? " (locked)" : ""}">
+          <span class="fh-node-disc"><span class="fh-node-badge">${badge}</span></span>
+          <span class="fh-node-cap">
+            <span class="fh-node-no">${boss ? "BOSS" : "CH" + (i + 1)}</span>
+            <span class="fh-node-title">${c.title}</span>
+            <span class="fh-node-sum">${c.summary}</span>
+          </span>
+        </button>
+      </div>`;
+    }).join("");
+
+    const sorties = (sw.sorties || []).map((so) => {
+      const seld = sel && sel.missionType === "sortie" && sel.missionId === so.id;
+      return `<button class="fh-spur${seld ? " selected" : ""}" data-fh-mission="${so.id}" data-fh-mtype="sortie"
+        title="${so.summary}"><span class="fh-spur-badge">◆</span><span class="fh-spur-name">${so.name}</span></button>`;
+    }).join("");
+
+    return `
+      <div class="fh-warpmap" style="--fh-charge:${chargePct.toFixed(1)}%">
+        <div class="fh-warpmap-lane"><div class="fh-warpmap-charge${justClearedIdx >= 0 ? " fh-link-charging" : ""}"></div></div>
+        ${nodes}
+      </div>
+      <div class="fh-rib-stat">${sw.warCompleted ? "WAR WON · " : ""}${sw.completionPct}% · ${sw.killCount} down</div>
+      <div class="fh-section-title">SIDE SORTIES</div>
+      <div class="fh-spur-row">${sorties}</div>
+    `;
   }
 
   _syncFrontierHub(s) {
@@ -2990,47 +3063,14 @@ export class MenuSystem {
       </button>`;
     }).join("");
 
-    // --- Selected War detail ---
+    // --- Selected War detail (visual warp-route progression map) ---
     let detail = "";
     const sw = fh.selectedWar;
     if (sw) {
-      const chapters = sw.chapters.map((c, i) => {
-        const locked = c.status === "locked";
-        const sel = fh.sel && fh.sel.missionType === "chapter" && fh.sel.missionId === c.id;
-        const badge = c.status === "done" ? "✓" : (c.status === "next" ? "▶" : "🔒");
-        return `<button class="fh-mission fh-status-${c.status}${sel ? " selected" : ""}${locked ? " fh-locked" : ""}"
-          data-fh-mission="${c.id}" data-fh-mtype="chapter"${locked ? " disabled" : ""}>
-          <span class="fh-mission-badge">${badge}</span>
-          <span class="fh-mission-no">CH${i + 1}</span>
-          <span class="fh-mission-text"><span class="fh-mission-title">${c.title}</span>
-          <span class="fh-mission-sum">${c.summary}</span></span>
-        </button>`;
-      }).join("");
-      const sorties = sw.sorties.map((so) => {
-        const sel = fh.sel && fh.sel.missionType === "sortie" && fh.sel.missionId === so.id;
-        return `<button class="fh-mission fh-sortie${sel ? " selected" : ""}" data-fh-mission="${so.id}" data-fh-mtype="sortie">
-          <span class="fh-mission-badge">◆</span>
-          <span class="fh-mission-text"><span class="fh-mission-title">${so.name}</span>
-          <span class="fh-mission-sum">${so.summary}</span></span>
-        </button>`;
-      }).join("");
-      // War-state ribbon (§10.3): chapter spine nodes + completion% + kills.
-      const ribbonNodes = sw.chapters.map((c, i) =>
-        `<span class="fh-rib-node fh-rib-${c.status}" title="${c.title}">${i + 1}</span>`)
-        .join('<span class="fh-rib-link"></span>');
-      const ribbon = `
-        <div class="fh-ribbon">
-          <div class="fh-rib-spine">${ribbonNodes}</div>
-          <div class="fh-rib-stat">${sw.warCompleted ? "WAR WON · " : ""}${sw.completionPct}% · ${sw.killCount} down</div>
-        </div>`;
       detail = `
         <div class="fh-war-pitch">${sw.pitch}</div>
         <div class="fh-war-geo">Staging: ${sw.staging} · Final target: ${sw.finalTarget}</div>
-        ${ribbon}
-        <div class="fh-section-title">CAMPAIGN — STORY SPINE</div>
-        <div class="fh-mission-list">${chapters}</div>
-        <div class="fh-section-title">SIDE SORTIES</div>
-        <div class="fh-mission-list">${sorties}</div>
+        ${this._fhWarpMap(sw, fh.sel)}
       `;
     }
 

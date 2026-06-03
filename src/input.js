@@ -3,6 +3,7 @@
 // center because the camera follows the player unit, so center == player.
 
 import { MAP_SIZES } from "./arena.js";
+import { events } from "./events.js";
 import { RACES, RACE_KEYS, resolveSpec } from "./races.js";
 import { SIDES } from "./classes.js";
 import {
@@ -621,6 +622,15 @@ export class StartMenu {
     this.showFrontierHub = false;
     this._frontierSel = { warId: null, missionType: null, missionId: null, pilotClass: null, commandMode: false, editSlot: null, shopOpen: false, citationsOpen: false, newsreelOpen: false, chestsOpen: false, lastChest: null };
     this._pendingFrontierLaunch = null;
+    // Warp-route map node selection is decoupled via the event bus: the
+    // hub overlay (menus.js) emits "frontier:nodeSelected" on a node tap;
+    // we update the selection here and the next menu sync re-renders it.
+    // (warId comes from the active selection — the map only shows the
+    // selected War's nodes.)
+    events.on("frontier:nodeSelected", ({ missionType, missionId }) => {
+      this._frontierSel.missionType = missionType;
+      this._frontierSel.missionId = missionId;
+    });
     // Shipyard overlay — design-your-own-ship meta-progression store.
     // Opens from the home screen card; closes back to home on save.
     this.showShipyard = false;
