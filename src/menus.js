@@ -4620,6 +4620,7 @@ export class MenuSystem {
     const st = s.settings || {};
     this._syncSlider(this._settingsMusicSlider, this._settingsMusicVal, st.musicVolume, st.musicMuted);
     this._syncSlider(this._settingsSfxSlider, this._settingsSfxVal, st.sfxVolume, st.sfxMuted);
+    this._syncToggle(this._settingsDevToggle, !!st.devMode);
   }
 
   // Reflect persisted volume on the slider, but DON'T stomp the value
