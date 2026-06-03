@@ -128,6 +128,74 @@ function applyDevMode(on) {
   // new value), then persist.
   setDev(on);
   saveStore.update((d) => { d.settings.devMode = !!on; });
+  // Turning Dev Mode OFF also closes the dev overlay so a stale panel
+  // doesn't keep intercepting clicks.
+  if (!on && _devOverlay) _devOverlay.hide();
+}
+
+// Dev overlay — lazy mounted on first toggle. Mounting is gated on
+// isDev(); the overlay's own visibility is independent so the user can
+// hide it without flipping Dev Mode off.
+let _devOverlay = null;
+function _ensureDevOverlay() {
+  if (_devOverlay) return _devOverlay;
+  _devOverlay = new DevOverlay(document.body, {
+    game,
+    getCamera: () => _lastCamera,
+    getZoom: () => zoom,
+    getView: () => ({ w: viewW, h: viewH }),
+  });
+  return _devOverlay;
+}
+
+// Dev hotkeys. Bound at the window level so they fire even when the
+// canvas isn't focused, and ALL gated on isDev() so a non-dev player
+// can't trip them. The ~/` key toggles the overlay (lazy-mounts it on
+// first press); \ steps one fixed tick while paused; [/] cycle simSpeed.
+window.addEventListener("keydown", (e) => {
+  if (!isDev()) return;
+  // Ignore when typing in a form control (search box, future settings).
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (e.key === "`" || e.key === "~") {
+    e.preventDefault();
+    _ensureDevOverlay().toggle();
+  } else if (e.key === "\\") {
+    if (!_devOverlay) return;
+    e.preventDefault();
+    _devOverlay.step();
+  } else if (e.key === "[") {
+    e.preventDefault();
+    _ensureDevOverlay().bumpSpeed(-1);
+  } else if (e.key === "]") {
+    e.preventDefault();
+    _ensureDevOverlay().bumpSpeed(1);
+  }
+});
+
+// Capture-phase pointerdown router. When the dev overlay is visible and
+// the click landed on the canvas (not the overlay panel itself), let the
+// overlay handle it first; if it consumes the click (selection or
+// spawn), stop propagation so the gameplay input layer doesn't see it.
+canvas.addEventListener("pointerdown", (e) => {
+  if (!isDev() || !_devOverlay || !_devOverlay.isVisible()) return;
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left;
+  const sy = e.clientY - rect.top;
+  if (_devOverlay.handlePointer(sx, sy)) {
+    e.stopPropagation();
+    e.preventDefault();
+  }
+}, true);
+
+// Dev probe surface. Mirrors the window.game / window.input / window.saveStore
+// hooks so Playwright + console smoke-tests can drive the overlay without
+// keyboard input.
+if (typeof window !== "undefined") {
+  Object.assign(window.dev || (window.dev = {}), {
+    overlay: () => _ensureDevOverlay(),
+    quickSpawn: (opts) => quickSpawn(game, opts),
+  });
 }
 input.startMenu.setSettings(
   () => ({
