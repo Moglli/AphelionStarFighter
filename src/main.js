@@ -1324,6 +1324,11 @@ function draw() {
     input.startMenu.hide();
   }
 
+  // Dev-only balance HUD (Phase 0 of DEV_FEATURES_PLAN.md). Drawn LAST
+  // so it overlays everything; reads game.battleStats directly. Zero
+  // cost when Dev Mode is off — single boolean check.
+  if (isDev()) drawBalanceHUD(ctx, game, viewW, viewH);
+
   // Virtual stick DOM updates
   input.drawSticks(ctx);
 }
