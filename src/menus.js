@@ -1927,6 +1927,7 @@ export class MenuSystem {
     this._settingsMusicVal = screen.querySelector("#settings-music-val");
     this._settingsSfxSlider = screen.querySelector("#settings-sfx-vol");
     this._settingsSfxVal = screen.querySelector("#settings-sfx-val");
+    this._settingsDevToggle = screen.querySelector("#settings-dev-toggle");
 
     // Live volume on every input event; the % readout + muted styling
     // update locally so the row reacts instantly without waiting on sync.
