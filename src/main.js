@@ -26,6 +26,8 @@ import {
 } from "./energy.js";
 import { saveStore } from "./save.js";
 import { events } from "./events.js";
+import { isDev, setDev } from "./dev/devmode.js";
+import { drawBalanceHUD } from "./dev/balancehud.js";
 import {
   recordKill, computeRunPayout, bankRunPayout,
   buyHull, setHull, buyComponent, equipComponent, renameShip, setPaint,
