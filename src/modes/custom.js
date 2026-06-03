@@ -25,6 +25,8 @@
  */
 
 import { RACES, randomRaceKey } from "../races.js";
+import { applyMap } from "../arena.js";
+import { getMap } from "../maps/store.js";
 
 export const customMode = {
   key: "custom",
