@@ -147,8 +147,28 @@ function _ensureDevOverlay() {
     getCamera: () => _lastCamera,
     getZoom: () => zoom,
     getView: () => ({ w: viewW, h: viewH }),
+    openBattleDesigner: () => _ensureBattleDesigner().show(),
   });
   return _devOverlay;
+}
+
+// Battle Designer — lazy mounted from the dev overlay's button or from
+// the window.dev.designer probe. TEST PLAY hands the validated draft to
+// the existing scenario.play() probe so the playback path is shared with
+// console smoke-tests.
+let _battleDesigner = null;
+function _ensureBattleDesigner() {
+  if (_battleDesigner) return _battleDesigner;
+  _battleDesigner = new BattleDesigner(document.body, {
+    game,
+    onTestPlay: (scenario) => {
+      game.scenario = scenario;
+      const allied = (scenario.blueTeams[0] && scenario.blueTeams[0].race) || "terran";
+      startGame(game, ARENA.width, ARENA.height, allied, "custom", null, 1, null);
+    },
+    onClose: () => {},
+  });
+  return _battleDesigner;
 }
 
 // Dev hotkeys. Bound at the window level so they fire even when the
