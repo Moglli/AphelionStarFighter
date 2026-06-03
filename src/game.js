@@ -342,6 +342,27 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   if (fleetPlan) applyFleetPlan(game, fleetPlan);
 }
 
+// Blueprint resolver — looks up a saved blueprint by id and returns the
+// design+paint hash createShip consumes. Returns null when the id is
+// missing or the blueprint has been deleted between scenario save and
+// playback. The hot loop calls this once per scenario row, never per
+// frame, so a saveStore read is fine.
+function resolveBlueprintDesign(designId) {
+  if (!designId) return null;
+  const bp = getBlueprint(designId);
+  if (!bp || !bp.design) return null;
+  // Defensive clone — `bp.design` lives in saveStore and ride along the
+  // applyDesign hot path; any per-ship mutation downstream (perks,
+  // boons) must not bleed back into the saved blueprint.
+  return {
+    hull: bp.design.hull,
+    modules: { ...(bp.design.modules || {}) },
+    name: bp.design.name || "",
+    paintPrimary: bp.paint && bp.paint.primary != null ? bp.paint.primary : bp.design.paintPrimary,
+    paintTrim: bp.paint && bp.paint.accent != null ? bp.paint.accent : bp.design.paintTrim,
+  };
+}
+
 // Scenario-row → wingCommand translation. Mirrors the format.js mapping
 // (kept inline so game.js doesn't import the scenario module — avoids a
 // cycle and lets non-scenario callers pass plain rows). Returns null if
