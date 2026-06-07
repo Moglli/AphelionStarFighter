@@ -508,7 +508,7 @@ export class ShipEditor {
     panel.className = "se-modpanel";
     panel.innerHTML = `
       <header class="se-modpanel-head">
-        <span class="se-modpanel-title">${MODULE_LABELS[m.type] || m.type}</span>
+        <span class="se-modpanel-title" id="se-modpanel-title">${m.name || MODULE_LABELS[m.type] || m.type}</span>
         <button class="se-modpanel-x" title="close">✕</button>
       </header>
       <div class="se-modpanel-body" id="se-modpanel-body"></div>
@@ -527,10 +527,15 @@ export class ShipEditor {
       this._selectedModule = -1; this._closeModulePanel(); this._renderCanvas(); this._autosave();
     });
     panel.querySelector("#se-mod-save-lib").addEventListener("click", () => {
-      const rec = blankCustomModule({ type: m.type, name: `${MODULE_LABELS[m.type]} ${Date.now().toString(36).slice(-3)}` });
+      // Prompt for the library name, prefilled with the module's own name (or
+      // type label). Empty/cancel aborts so a stray module can't land unnamed.
+      const suggested = m.name || `${MODULE_LABELS[m.type]} ${Date.now().toString(36).slice(-3)}`;
+      const name = (window.prompt("Name this library module:", suggested) || "").trim();
+      if (!name) return;
+      const rec = blankCustomModule({ type: m.type, name });
       rec.hp = m.hp; rec.hullPenalty = m.hullPenalty; rec.armor = m.armor; rec.arc = m.arc;
       rec.stats = JSON.parse(JSON.stringify(m.stats)); rec.projectile = m.projectile ? JSON.parse(JSON.stringify(m.projectile)) : null;
-      try { saveLibModule(rec); this._buildPalette(); this._toast("saved to library"); } catch (e) { this._toast("save failed: " + e.message, true); }
+      try { saveLibModule(rec); this._buildPalette(); this._toast(`saved "${name}" to library`); } catch (e) { this._toast("save failed: " + e.message, true); }
     });
     makeDraggable(panel, panel.querySelector(".se-modpanel-head"), (x, y) => { this._panelPos = { x, y }; });
     this._renderModulePanelBody();
@@ -549,6 +554,22 @@ export class ShipEditor {
       inp.addEventListener("input", () => { set(Number(inp.value)); this._renderCanvas(); this._autosave(); });
       row.appendChild(inp); body.appendChild(row);
     };
+    // Name (optional, per-module). Drives the panel title + the save-to-library
+    // default; preserved through validateCustomShip (format.js#cleanModule).
+    {
+      const row = document.createElement("label"); row.className = "se-modrow";
+      row.innerHTML = `<span>name</span>`;
+      const inp = document.createElement("input"); inp.type = "text"; inp.maxLength = 40;
+      inp.placeholder = MODULE_LABELS[m.type] || m.type;
+      inp.value = m.name || "";
+      inp.addEventListener("input", () => {
+        m.name = inp.value.trim() || null;
+        const title = this._modPanel && this._modPanel.querySelector("#se-modpanel-title");
+        if (title) title.textContent = m.name || MODULE_LABELS[m.type] || m.type;
+        this._autosave();
+      });
+      row.appendChild(inp); body.appendChild(row);
+    }
     addNum("module HP", () => m.hp, (v) => m.hp = Math.max(1, v), 5);
     addNum("hull penalty", () => m.hullPenalty, (v) => m.hullPenalty = Math.max(0, v), 1);
     // armor 0..0.95

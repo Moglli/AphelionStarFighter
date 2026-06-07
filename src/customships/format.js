@@ -145,6 +145,9 @@ function cleanModule(m) {
   else if (typeof m.arc === "number" && isFinite(m.arc)) arc = clamp(m.arc, 0.02, Math.PI);
   return {
     refId: typeof m.refId === "string" ? m.refId : null,
+    // Optional author-given label (preserved across save/validate). null = use
+    // the type label. Trimmed + length-capped so a pasted doc can't carry junk.
+    name: typeof m.name === "string" && m.name.trim() ? m.name.trim().slice(0, 40) : null,
     type: m.type,
     offset: { x: ox, y: oy },
     hp: clamp(num(m.hp, def.hp), 1, 100000),

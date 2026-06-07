@@ -207,6 +207,16 @@ Newest first. Date + headline + load-bearing gotcha only.
   menu start handler injects the armed ship's player params into the next
   match's modeConfig and clears the arm; a disarm guard drops it if the player
   closes the configurator without starting (no leak into a later normal match).
+  NOTE the configurator is a multi-step wizard (roster → NEXT → DEPLOY → Fleet
+  Plan → LAUNCH); showCustom stays true the whole way, so the guard only fires on
+  a real cancel. `window.dev.isTestFlyArmed()` exposes the armed state for probes.
+- **Custom modules can be NAMED.** Each placed module carries an optional `name`
+  (format.js#cleanModule preserves it, ≤40 chars) shown in its stat-panel title;
+  SAVE TO LIBRARY prompts for the library name (prefilled from the module name).
+- **Hosting reminder (recurring "my change isn't live"):** the public URL serves
+  RAW un-hashed source from `/root/aphelionstarfighter/`, so after any push a
+  HARD REFRESH is required — the browser's ES-module cache otherwise mixes old +
+  new modules (e.g. an editor change appears dead). Not a code bug.
   Editor opens from a dev-gated MORE-panel row via the event bus
   (`events.emit("dev:openShipEditor")`); probe surface `window.dev.editor()` +
   `window.customShip`. Forward-gun `spec.arc` gate in fireForwardWeapon is the

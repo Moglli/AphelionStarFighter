@@ -351,6 +351,7 @@ if (typeof window !== "undefined") {
     mapDesigner: () => _ensureMapDesigner(),
     platformDesigner: () => _ensurePlatformDesigner(),
     editor: () => _ensureShipEditor(),
+    isTestFlyArmed: () => _pendingTestFly != null,
   });
   // Custom-ship probe surface — mirrors window.blueprint. Exposes the format,
   // store, and the compiler so Playwright + console smoke-tests can round-trip
