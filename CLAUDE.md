@@ -201,6 +201,12 @@ Newest first. Date + headline + load-bearing gotcha only.
 - **Test-fly** threads `playerModuleList`/`playerCellOverride` through
   modeConfig → startGame → promotePlayer → createShip. Both reset to null on
   every match start, so a test-flown custom ship never leaks into campaign play.
+  TEST FLY does NOT start a match directly — it ARMS the compiled ship
+  (`main.js#_pendingTestFly`) and opens the real custom-battle configurator
+  (`input.startMenu.showCustom`), so the player picks opponents/roster/map. The
+  menu start handler injects the armed ship's player params into the next
+  match's modeConfig and clears the arm; a disarm guard drops it if the player
+  closes the configurator without starting (no leak into a later normal match).
   Editor opens from a dev-gated MORE-panel row via the event bus
   (`events.emit("dev:openShipEditor")`); probe surface `window.dev.editor()` +
   `window.customShip`. Forward-gun `spec.arc` gate in fireForwardWeapon is the

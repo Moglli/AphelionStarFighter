@@ -254,8 +254,14 @@ function _ensurePlatformDesigner() {
 // Ship Editor — free-form custom-ship authoring (Free-Form Custom Ship Editor).
 // Lazy-mounted on first open (from the dev-gated MORE-panel entry via the event
 // bus, or the window.dev.editor() probe). TEST FLY compiles the authored doc and
-// hands it to startGame as the player ship in a sandbox skirmish.
+// ARMS it as the player ship, then opens the real custom-battle configurator so
+// the player chooses the opponents / roster / map. The menu start handler swaps
+// the armed ship into the next match's modeConfig (see `_pendingTestFly`).
 let _shipEditor = null;
+// Compiled custom ship awaiting a test-fly battle. Set by TEST FLY, consumed by
+// the menu start handler on the next match, and disarmed if the player backs out
+// of the configurator — so a custom test-fly can never leak into a normal match.
+let _pendingTestFly = null;
 function _ensureShipEditor() {
   if (_shipEditor) return _shipEditor;
   _shipEditor = new ShipEditor(document.body, {
@@ -263,42 +269,35 @@ function _ensureShipEditor() {
       let c;
       try { c = compileCustomShip(doc); }
       catch (e) { console.warn("[shipEditor] compile failed:", e); return; }
-      // Sandbox skirmish: clear any stale scenario, then give the custom ship a
-      // small, focused SPARRING roster (a default roster spawns ~280 ships —
-      // overwhelming for a test-fly and slow). Player flies solo on blue (no
-      // allied ships) against a mixed handful of reds. The compiled ship routes
-      // through the SAME player spawn path the Shipyard uses; modeConfig carries
-      // the two new opt-in params (playerModuleList/playerCellOverride) which
-      // startGame + promotePlayer thread into createShip — both reset to null on
-      // any normal match start, so a test-fly never leaks into campaign play.
-      game.scenario = null;
-      game.customRoster = {
-        hostileRace: "terran",
-        blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0 },
-        red:  { fighter: 4, bomber: 1, frigate: 1, cruiser: 1, battleship: 0, carrier: 0 },
-      };
-      const modeConfig = {
-        playerDesign: {
+      // Arm the compiled ship; the player will pick the battle in the custom
+      // configurator (same UI as the home "Custom" tile). race is carried so the
+      // player ship + allies spawn as the authored faction.
+      _pendingTestFly = {
+        race: c.race,
+        design: {
           hull: c.klass,
           hullPoly: c.design.hullPoly,
           paintPrimary: c.design.paintPrimary,
           paintTrim: c.design.paintTrim,
         },
-        playerSpecOverride: c.specOverride,
-        playerModuleList: c.moduleList,
-        playerCellOverride: c.cellOverride,
+        specOverride: c.specOverride,
+        moduleList: c.moduleList,
+        cellOverride: c.cellOverride,
       };
-      const W = Math.max(ARENA.width || 0, 4000);
-      const H = Math.max(ARENA.height || 0, 2800);
-      startGame(game, W, H, c.race, "custom", modeConfig, 1, null);
-      if (audio) audio.start();
+      // Hand off to the custom-match configurator (the editor already hid
+      // itself, so the menu is showing underneath).
+      if (input && input.startMenu) {
+        input.startMenu.selectedMode = "custom";
+        input.startMenu.showCustom = true;
+      }
     },
     onClose: () => {},
   });
   return _shipEditor;
 }
 // Open from the dev-gated MORE-panel SHIP EDITOR entry (menus.js emits this).
-events.on("dev:openShipEditor", () => { _ensureShipEditor().show(); });
+// Clear any stale armed test-fly so re-entering the editor starts clean.
+events.on("dev:openShipEditor", () => { _pendingTestFly = null; _ensureShipEditor().show(); });
 
 // Dev hotkeys. Bound at the window level so they fire even when the
 // canvas isn't focused, and ALL gated on isDev() so a non-dev player
@@ -1222,7 +1221,22 @@ function frame(now) {
         playerDesign: saveStore.get().playerShip || null,
         fleetPlan: choice.fleetPlan || null,
       };
-      startGame(game, choice.mapW, choice.mapH, choice.race, choice.mode, legacyCfg,
+      let alliedRace = choice.race;
+      if (_pendingTestFly) {
+        // Free-Form Custom Ship Editor test-fly: the player flies their compiled
+        // custom ship instead of the Shipyard design. The custom-battle config
+        // chose the opponents/roster/map; we just swap the player ship in. These
+        // four params thread through startGame → promotePlayer → createShip and
+        // reset to null next match, so the custom ship never leaks into campaign.
+        legacyCfg.playerDesign = _pendingTestFly.design;
+        legacyCfg.playerSpecOverride = _pendingTestFly.specOverride;
+        legacyCfg.playerModuleList = _pendingTestFly.moduleList;
+        legacyCfg.playerCellOverride = _pendingTestFly.cellOverride;
+        alliedRace = _pendingTestFly.race;
+        game.scenario = null;   // ensure custom mode reads the configured roster
+        _pendingTestFly = null;
+      }
+      startGame(game, choice.mapW, choice.mapH, alliedRace, choice.mode, legacyCfg,
                 choice.fleetMul, choice.customRoster || null);
       input.resetForNewMatch();
       // `zoom` is a main.js module-level var (not on game), so startGame can't
@@ -1232,6 +1246,12 @@ function frame(now) {
       input.admiralActive = !!game.admiralMode;
       // The "Play" click is the user-gesture that unlocks Web Audio.
       audio.start();
+    }
+    // Test-fly disarm: if the custom ship is armed but the player closed the
+    // configurator without starting (no choice this frame, configurator gone),
+    // drop it so it can't slip into a later normal match.
+    if (!choice && _pendingTestFly && (!input.startMenu || !input.startMenu.showCustom)) {
+      _pendingTestFly = null;
     }
   } else {
     // Player input → controller.
