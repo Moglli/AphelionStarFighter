@@ -172,6 +172,58 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-07 (Free-Form Custom Ship Editor — dev-gated authoring + test-fly)
+- **A free-form `customShip` doc (src/customships/format.js) is lowered by a
+  pure `compileCustomShip` (compile.js) into createShip's existing shape
+  (specOverride + design.hullPoly + moduleList + cellOverride), so the whole
+  fire/render/AI/damage pipeline is reused unchanged.** Engine edits are all
+  additive + opt-in: createShip gained `moduleList`/`cellOverride` params,
+  `modules: moduleList ?? buildModules(...)`, and a new `mothership` tier in
+  sprites.js CELL_GRID/CELL_HULL_COST. New save arrays `customShips` /
+  `customModules` ride mergeWithDefaults' `...loaded` spread — no schema bump.
+- **GOTCHA — snapModulesSymmetric is SKIPPED for custom layouts** (`if
+  (!moduleList) snap…`). The author's exact module offsets must survive to
+  test-fly; the symmetry snap would pair/move them. The cell-binding loop below
+  it still runs (it only tags `moduleName`, never moves a module), so module
+  kills still tear out the right block cluster. This was the #1 risk.
+- **GOTCHA — `resolveSpec(race,"mothership")` returns `{}`** (no base CLASSES
+  entry), so the compiler's specOverride must be a COMPLETE self-contained spec.
+  It also sets EVERY weapon system explicitly — authored object or `null` — and
+  fills weapon sub-fields (salvo/capacity/cluster) so a tier base class can't
+  leak a phantom weapon through deepMerge onto a ship that didn't place it.
+- **GOTCHA — weapon FIRING is spec-driven; modules are destructible gates.**
+  An ABSENT module doesn't suppress fire (`!mod || !mod.disabled`) — EXCEPT
+  broadside, which needs live `broadside-{port,stbd}-N` modules for muzzle
+  origins. So all broadside modules compile to ONE weapon entry fed by N
+  position modules; one-weapon-per-module would loose the whole battery N×/tick.
+  Forward guns are independent mounts → one weapon each. Per-weapon
+  `projectileColors:{blue,red}` is mandatory (createProjectile indexes by side).
+- **Test-fly** threads `playerModuleList`/`playerCellOverride` through
+  modeConfig → startGame → promotePlayer → createShip. Both reset to null on
+  every match start, so a test-flown custom ship never leaks into campaign play.
+  Editor opens from a dev-gated MORE-panel row via the event bus
+  (`events.emit("dev:openShipEditor")`); probe surface `window.dev.editor()` +
+  `window.customShip`. Forward-gun `spec.arc` gate in fireForwardWeapon is the
+  only behavioural change to an existing fire path (no-op unless arc set).
+
+### 2026-06-03 (fix: Dev Mode tools were unreachable — no on-screen route + broken overlay mount)
+- **Two bugs left every Dev Mode feature (Battle/Ship/Map/Platform designers +
+  sim controls) inaccessible.** (1) The DevOverlay only opened via the `~`
+  KEYBOARD key — but the game is touch-first (Capacitor, no keyboard), so
+  flipping Dev Mode in Settings surfaced nothing. (2) `DevOverlay._mount()`
+  called bare `host.appendChild(el)` instead of `this.host` (`host` is a
+  constructor param, out of method scope) → ReferenceError on construction, so
+  the overlay never mounted even via `~`. Both had to be fixed; the FAB alone
+  would still have hit the mount crash.
+- **Fix**: `devoverlay.js` `host`→`this.host`. `main.js` adds a touch `#dev-fab`
+  launcher (`_ensureDevFab`/`_updateDevFab`) shown whenever `isDev()`;
+  `applyDevMode(on)` now shows the overlay immediately + toggles the FAB, and a
+  boot `_updateDevFab()` restores it for a persisted flag. New `.dev-fab` style
+  (z 41, above the overlay's z 40 so it stays tappable). GOTCHA: the FAB is the
+  ONLY access path on mobile — the `~`/`\`/`[` `]` hotkeys don't exist on touch.
+  Verified touch-emulated, served like prod: enable → DEV ▸ → overlay with all
+  4 designer routes → SHIP DESIGNER opens; 0 page errors.
+
 ### 2026-06-03 (Defence platforms — PR-4 of DEV_FEATURES_PLAN.md)
 - **`game.platforms[]` is a separate array from `game.ships`** —
   ships' escort/AAR/surrender/pack loops never see platforms, so a

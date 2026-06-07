@@ -82,7 +82,7 @@ export class DevOverlay {
       </div>
       <div class="dev-hint" id="dev-hint">~ toggles · \\ steps · [ ] speed</div>
     `;
-    host.appendChild(el);
+    this.host.appendChild(el);
 
     // Populate race + klass dropdowns.
     const raceSel = el.querySelector("#dev-spawn-race");

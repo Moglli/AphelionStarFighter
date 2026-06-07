@@ -471,7 +471,7 @@ export function getHull(race, klass) {
 
 export { HULLS };
 
-export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null, initialHpFrac = 1, boons = null, fleetTraits = null, design = null }) {
+export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null, initialHpFrac = 1, boons = null, fleetTraits = null, design = null, moduleList = null, cellOverride = null }) {
   let spec = resolveSpec(race, klass);
   if (specOverride) spec = deepMerge(spec, specOverride);
   // Boon patches — declarative per-class spec mutations defined in
@@ -681,7 +681,12 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     // Capital subsystem modules: nullable list of destructible parts.
     // Populated for battleship / carrier / cruiser; other classes stay null
     // and route damage straight to hull as before.
-    modules: buildModules(klass, spec, poly,
+    // Free-Form Custom Ship Editor: a compiled customShip passes a pre-built
+    // `moduleList` (modules.js#buildCustomModules) carrying the author's exact
+    // placements + names. When present it REPLACES the per-class LAYOUTS pass
+    // wholesale (the fire paths gate on the same engine module names, so the
+    // pipeline is unchanged). Canonical hulls pass null → build as before.
+    modules: moduleList ?? buildModules(klass, spec, poly,
                           (getCellStats(race, klass) || {}).armor || 0),
     moduleByName: null,
     pdTurretModules: null,
@@ -825,6 +830,34 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     ship.deadCells = [];
     // Snapshot live cell count at spawn for block-loss % calculations.
     ship.totalLiveCells = grid.cells.filter(c => !c.culled).length;
+    // Free-Form Custom Ship Editor: a compiled customShip passes a
+    // `cellOverride` carrying the author's block toughness — a uniform hp/armor
+    // default plus a sparse "r,c" → {hp,armor} patch map for hand-painted
+    // tougher/weaker zones. Applied here so it overwrites the FACTION_CELL_STATS
+    // defaults buildCells baked in (custom ships have no faction cell table).
+    if (cellOverride) {
+      if (typeof cellOverride.cellHp === "number") {
+        ship.cellHpMax = cellOverride.cellHp;
+        for (const cell of ship.cells) { cell.hpMax = cellOverride.cellHp; cell.hp = cellOverride.cellHp; }
+      }
+      if (typeof cellOverride.cellArmor === "number") {
+        ship.cellArmor = cellOverride.cellArmor;
+        for (const cell of ship.cells) cell.armor = cellOverride.cellArmor;
+      }
+      if (cellOverride.overrides) {
+        for (const key of Object.keys(cellOverride.overrides)) {
+          const m = /^(\d+),(\d+)$/.exec(key);
+          if (!m) continue;
+          const r = +m[1], c = +m[2];
+          if (r < 0 || r >= ship.rows || c < 0 || c >= ship.cols) continue;
+          const cell = ship.cells[r * ship.cols + c];
+          if (!cell) continue;
+          const patch = cellOverride.overrides[key];
+          if (typeof patch.hp === "number") { cell.hpMax = patch.hp; cell.hp = patch.hp; }
+          if (typeof patch.armor === "number") cell.armor = patch.armor;
+        }
+      }
+    }
     if (ship.modules) {
       // Snap every module onto a live block, ENFORCING port↔starboard mirror
       // symmetry (weapons + PD read symmetric). Module offsets are fixed
@@ -836,7 +869,14 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
       // rest on structure AND stay symmetric. PD fire reads pdTurretOffset
       // (the module offset) so firing origins follow; broadside muzzles read
       // offset.x for their lengthwise position, nudged only when off-hull.
-      snapModulesSymmetric(grid, spec.radius, ship.modules);
+      //
+      // SKIP for custom layouts: a compiled customShip (`moduleList`) carries
+      // the AUTHOR'S exact placements — snapping would pair/move them to the
+      // symmetric grid and destroy the free-form design. The cell-binding loop
+      // below still runs (it only tags moduleName, never moves a module), so
+      // module kills still tear out the right block cluster. This is the #1
+      // risk in the editor plan — authored offsets must survive to test-fly.
+      if (!moduleList) snapModulesSymmetric(grid, spec.radius, ship.modules);
       // For each module, bind every still-unbound live cell whose centre
       // sits inside the module's disc to that module. Multiple discs may
       // overlap; the first-touch-wins assignment keeps the binding
@@ -1270,6 +1310,20 @@ function fireForward(ship, world) {
 // the new primary fire path; legacy fireForward is a wrapper.
 function fireForwardWeapon(ship, world, weaponState) {
   const w = weaponState.spec;
+  // Forward-gun firing arc (Free-Form Custom Ship Editor). When a custom forward
+  // gun declares an arc, it only looses while the commanded aim sits within ±arc
+  // of the nose — makes the editor's per-gun wedge mechanically real for forward
+  // mounts (ring/broadside/laser already have their own arc gates). No-op for
+  // every stock weapon: none set spec.arc on a forward mount.
+  if (typeof w.arc === "number") {
+    const aim = ship.controller && ship.controller.aim;
+    if (aim && (aim.x !== 0 || aim.y !== 0)) {
+      let d = Math.atan2(aim.y, aim.x) - ship.heading;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      if (Math.abs(d) > w.arc) return;
+    }
+  }
   const muzzles = w.muzzles || 1;
   const muzzleSpread = w.muzzleSpread || 0;
   const isTracking = weaponState.cannonAimAngle != null;

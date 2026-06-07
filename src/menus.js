@@ -9,6 +9,7 @@
 
 import { classIconSvg, CLASS_SHORT_LABELS } from "./ship-icons.js";
 import { events } from "./events.js";
+import { isDev } from "./dev/devmode.js";
 
 // Rank insignia — inline SVG per Frontier rank. Drawn with thin
 // strokes so they overlay cleanly on the memorial card chrome.
@@ -730,6 +731,26 @@ export class MenuSystem {
         this._closeHomeNavPanel();
         if (this._callbacks.onHomeServiceHall) this._callbacks.onHomeServiceHall();
       });
+      // Dev-gated SHIP EDITOR entry (Free-Form Custom Ship Editor). Only
+      // appears when Dev Mode is on — a hidden tab, as specified. Opens via the
+      // event bus (main.js subscribes + lazy-mounts the editor), keeping menus
+      // free of a direct reach into the dev tooling (CLAUDE.md "event bus").
+      if (isDev()) {
+        const devRow = document.createElement("button");
+        devRow.className = "home-more-row home-more-row-dev";
+        devRow.id = "more-ship-editor";
+        devRow.innerHTML = `
+          <span class="more-icon">✦</span>
+          <span class="more-label">SHIP EDITOR <span class="more-dev-tag">DEV</span></span>
+          <span class="more-chev">›</span>
+        `;
+        const listEl = this._homeNavPanelBody.querySelector(".home-more-list");
+        if (listEl) listEl.appendChild(devRow);
+        this._addListener(devRow, "click", () => {
+          this._closeHomeNavPanel();
+          events.emit("dev:openShipEditor");
+        });
+      }
     } else if (nav === "achievements") {
       // Build the achievements grid. Reads from menuState's lastSync
       // payload — set in syncFromState. Falls back to the saveStore

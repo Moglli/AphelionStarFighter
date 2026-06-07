@@ -89,6 +89,13 @@ const DEFAULT_SAVE = Object.freeze({
   // and union into the registry. Decor is visual-only this phase
   // (collidable asteroids + hazards land in later PRs).
   maps: [],
+  // Free-Form Custom Ship Editor (dev-gated). `customShips` holds authored
+  // free-form ship docs (src/customships/format.js); `customModules` holds the
+  // reusable custom-module library (src/custommodules/format.js). Both are
+  // additive top-level arrays — they ride mergeWithDefaults' `...loaded` spread
+  // verbatim, so no schema bump / migration is needed (same as blueprints/maps).
+  customShips: [],
+  customModules: [],
   settings: {
     musicVolume: 0.6,
     sfxVolume: 0.8,

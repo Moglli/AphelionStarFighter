@@ -261,6 +261,13 @@ export function startGame(game, mapW, mapH, alliedRace = "terran", mode = "open"
   // through createShip alongside specOverride; resolved last so
   // component patches stack on top of perks / traits / boons.
   game.playerDesign = (modeConfig && modeConfig.playerDesign) || null;
+  // Free-Form Custom Ship Editor test-fly: opt-in compiled custom-ship layout
+  // for the player ship. promotePlayer threads these into createShip's new
+  // moduleList/cellOverride params. Both default to null and are re-read from
+  // modeConfig on EVERY start, so a normal match (no custom modeConfig) resets
+  // them — a test-flown custom ship never leaks into campaign/skirmish play.
+  game.playerModuleList = (modeConfig && modeConfig.playerModuleList) || null;
+  game.playerCellOverride = (modeConfig && modeConfig.playerCellOverride) || null;
   // Resolve perk-driven player overrides (roguelite). The perk sentinel
   // is stamped by buildModeConfig in roguelite.js; resolve it here against
   // the actual fighter spec so promotePlayer gets a normal specOverride.
@@ -965,6 +972,11 @@ function promotePlayer(game) {
       boons: game.activeBoons,
       fleetTraits: game.activeFleetTraits,
       design: game.playerDesign,
+      // Free-Form Custom Ship Editor test-fly: authored module layout + cell
+      // toughness (null for every normal player ship → buildModules/faction
+      // cell stats as before).
+      moduleList: game.playerModuleList,
+      cellOverride: game.playerCellOverride,
     });
     ship.isPlayer = true;
     game.ships.push(ship);

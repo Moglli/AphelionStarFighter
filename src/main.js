@@ -35,6 +35,10 @@ import { BattleDesigner } from "./dev/battle-designer.js";
 import { ShipDesigner } from "./dev/ship-designer.js";
 import { MapDesigner } from "./dev/map-designer.js";
 import { PlatformDesigner } from "./dev/platform-designer.js";
+import { ShipEditor } from "./dev/ship-editor.js";
+import { compileCustomShip } from "./customships/compile.js";
+import * as customShipFormat from "./customships/format.js";
+import * as customShipStore from "./customships/store.js";
 import * as scenarioFormat from "./scenario/format.js";
 import * as scenarioStore from "./scenario/store.js";
 import * as blueprintFormat from "./blueprints/format.js";
@@ -140,9 +144,18 @@ function applyDevMode(on) {
   // new value), then persist.
   setDev(on);
   saveStore.update((d) => { d.settings.devMode = !!on; });
-  // Turning Dev Mode OFF also closes the dev overlay so a stale panel
-  // doesn't keep intercepting clicks.
-  if (!on && _devOverlay) _devOverlay.hide();
+  // Reflect the flag in the on-screen launcher — the only way to reach the
+  // overlay on touch devices (no keyboard `~`).
+  _updateDevFab();
+  if (on) {
+    // Surface the tool routes immediately so flipping the toggle has a
+    // visible effect (the overlay holds the designer + sim buttons).
+    _ensureDevOverlay().show();
+  } else if (_devOverlay) {
+    // Turning Dev Mode OFF closes the overlay so a stale panel doesn't
+    // keep intercepting clicks.
+    _devOverlay.hide();
+  }
 }
 
 // Dev overlay — lazy mounted on first toggle. Mounting is gated on
@@ -162,6 +175,28 @@ function _ensureDevOverlay() {
     openPlatformDesigner: () => _ensurePlatformDesigner().show(),
   });
   return _devOverlay;
+}
+
+// On-screen launcher button. Dev Mode is togglable via the `~` key on
+// desktop, but Starfighter is touch-first (Capacitor) with no keyboard —
+// so whenever Dev Mode is on we show a tappable DEV button that toggles
+// the overlay (which holds the designer + sim-control routes). Without
+// this the dev features are unreachable on a phone.
+let _devFab = null;
+function _ensureDevFab() {
+  if (_devFab) return _devFab;
+  const b = document.createElement("button");
+  b.id = "dev-fab";
+  b.className = "dev-fab hidden";
+  b.textContent = "DEV ▸";
+  b.title = "Dev Tools";
+  b.addEventListener("click", () => _ensureDevOverlay().toggle());
+  document.body.appendChild(b);
+  _devFab = b;
+  return _devFab;
+}
+function _updateDevFab() {
+  _ensureDevFab().classList.toggle("hidden", !isDev());
 }
 
 // Battle Designer — lazy mounted from the dev overlay's button or from
@@ -216,6 +251,55 @@ function _ensurePlatformDesigner() {
   return _platformDesigner;
 }
 
+// Ship Editor — free-form custom-ship authoring (Free-Form Custom Ship Editor).
+// Lazy-mounted on first open (from the dev-gated MORE-panel entry via the event
+// bus, or the window.dev.editor() probe). TEST FLY compiles the authored doc and
+// hands it to startGame as the player ship in a sandbox skirmish.
+let _shipEditor = null;
+function _ensureShipEditor() {
+  if (_shipEditor) return _shipEditor;
+  _shipEditor = new ShipEditor(document.body, {
+    onTestFly: (doc) => {
+      let c;
+      try { c = compileCustomShip(doc); }
+      catch (e) { console.warn("[shipEditor] compile failed:", e); return; }
+      // Sandbox skirmish: clear any stale scenario, then give the custom ship a
+      // small, focused SPARRING roster (a default roster spawns ~280 ships —
+      // overwhelming for a test-fly and slow). Player flies solo on blue (no
+      // allied ships) against a mixed handful of reds. The compiled ship routes
+      // through the SAME player spawn path the Shipyard uses; modeConfig carries
+      // the two new opt-in params (playerModuleList/playerCellOverride) which
+      // startGame + promotePlayer thread into createShip — both reset to null on
+      // any normal match start, so a test-fly never leaks into campaign play.
+      game.scenario = null;
+      game.customRoster = {
+        hostileRace: "terran",
+        blue: { fighter: 0, bomber: 0, frigate: 0, cruiser: 0, battleship: 0, carrier: 0 },
+        red:  { fighter: 4, bomber: 1, frigate: 1, cruiser: 1, battleship: 0, carrier: 0 },
+      };
+      const modeConfig = {
+        playerDesign: {
+          hull: c.klass,
+          hullPoly: c.design.hullPoly,
+          paintPrimary: c.design.paintPrimary,
+          paintTrim: c.design.paintTrim,
+        },
+        playerSpecOverride: c.specOverride,
+        playerModuleList: c.moduleList,
+        playerCellOverride: c.cellOverride,
+      };
+      const W = Math.max(ARENA.width || 0, 4000);
+      const H = Math.max(ARENA.height || 0, 2800);
+      startGame(game, W, H, c.race, "custom", modeConfig, 1, null);
+      if (audio) audio.start();
+    },
+    onClose: () => {},
+  });
+  return _shipEditor;
+}
+// Open from the dev-gated MORE-panel SHIP EDITOR entry (menus.js emits this).
+events.on("dev:openShipEditor", () => { _ensureShipEditor().show(); });
+
 // Dev hotkeys. Bound at the window level so they fire even when the
 // canvas isn't focused, and ALL gated on isDev() so a non-dev player
 // can't trip them. The ~/` key toggles the overlay (lazy-mounts it on
@@ -267,7 +351,17 @@ if (typeof window !== "undefined") {
     shipDesigner: () => _ensureShipDesigner(),
     mapDesigner: () => _ensureMapDesigner(),
     platformDesigner: () => _ensurePlatformDesigner(),
+    editor: () => _ensureShipEditor(),
   });
+  // Custom-ship probe surface — mirrors window.blueprint. Exposes the format,
+  // store, and the compiler so Playwright + console smoke-tests can round-trip
+  // a doc, inject it into storage, and verify compileCustomShip output without
+  // driving the editor DOM.
+  window.customShip = {
+    ...customShipFormat,
+    ...customShipStore,
+    compile: compileCustomShip,
+  };
   // Blueprint probe surface — mirrors window.scenario.
   window.blueprint = {
     ...blueprintFormat,
@@ -320,6 +414,10 @@ input.startMenu.setSettings(
     if (typeof patch.devMode === "boolean") applyDevMode(patch.devMode);
   },
 );
+
+// Reflect a persisted Dev Mode flag in the on-screen launcher at boot, so
+// a player who enabled it in a previous session can reach the tools.
+_updateDevFab();
 
 // SFX routing: gameplay code emits weaponFired / hit / shipDestroyed
 // events with world-space positions; the camera-attenuated distance

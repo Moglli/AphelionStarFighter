@@ -771,6 +771,12 @@ const CELL_GRID = {
   battleship: { cols: 40, rows: 22 },
   carrier:    { cols: 48, rows: 26 },
   station:    { cols: 36, rows: 36 },
+  // Super-capital tier for the Free-Form Custom Ship Editor. Denser grid than
+  // a carrier so a mothership-scale hull keeps ~2-3px cells at its larger
+  // radius (cell px size = R*2/cols). Custom cell hp/armor come from the
+  // compiler's cellOverride, so no FACTION_CELL_STATS entry is needed —
+  // getCellStats falls back to {hp:10,armor:0} which the override replaces.
+  mothership: { cols: 64, rows: 36 },
 };
 
 // Per-race grid overrides. Cell pixel size is R*2/cols, so a class whose
@@ -801,6 +807,7 @@ export const CELL_HULL_COST = {
   battleship: 1.0,
   carrier:    1.0,
   station:    1.0,
+  mothership: 1.0,
 };
 
 // Per-faction, per-class block stats. Each faction has a named default

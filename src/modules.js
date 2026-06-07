@@ -444,6 +444,113 @@ export function forwardGunModuleName(klass) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Free-Form Custom Ship Editor — buildCustomModules.
+//
+// Converts a compiled customShip's `design.modules[]` (each an authored
+// CustomModule with a type + offset + stats) into the SAME runtime-module shape
+// buildModules emits — `{ name, offset, radius, hp, hpMax, armor, hullPenalty,
+// disabled, flash }`. The engine's fire/damage/render paths key entirely off
+// the `name` string, so emitting the engine-expected names per type makes a
+// free-form ship reuse the whole pipeline unchanged (CLAUDE.md: "Module name
+// strings are load-bearing").
+//
+// Bypasses LAYOUTS/requires entirely (the author's placement IS the layout) and
+// is paired with the snapModulesSymmetric SKIP in ship.js — authored offsets
+// must survive verbatim to test-fly.
+//
+// Naming contract (must match the fire-path gates in ship.js):
+//   forwardGun  → forwardGunModuleName(tier) ?? "gun" (primary), "gun-N" (extra)
+//   ring        → "gun-array" (primary), "gun-array-N" (extra)
+//   broadside   → +y flank "broadside-stbd-{0..}", -y flank "broadside-port-{0..}"
+//                 (crosswise nautical naming: +offset.y fires the port battery,
+//                 gated by broadside-stbd-N — see ship.js#updateBroadsideFire).
+//                 Broadside is the ONE type that REQUIRES its module to fire
+//                 (muzzle origin reads the module offset; empty flank = silent).
+//   heavyLaser  → "laser" (primary), "laser-N" (extra)
+//   missilePod  → "missile-bay" (primary), "missile-bay-N" (extra)
+//   pd          → "pd-0..N"
+//   engine      → "engine-0..N" (drives heading derivation + thrust/surrender)
+//   shieldGen   → "shield-generator" (primary), "shield-generator-N" (extra)
+//                 — matched by startsWith("shield-generator") for shield scaling.
+//   hangar      → "hangar" (primary), "hangar-N" (extra)
+const CUSTOM_MODULE_RADIUS = {
+  forwardGun: 0.14, ring: 0.16, broadside: 0.13, heavyLaser: 0.16,
+  missilePod: 0.13, pd: 0.10, engine: 0.14, shieldGenerator: 0.14, hangar: 0.18,
+};
+
+export function buildCustomModules(design, spec, poly = null) {
+  const tier = (design && design.tier) || "fighter";
+  const list = (design && Array.isArray(design.modules)) ? design.modules : [];
+  const out = [];
+  const n = { forwardGun: 0, ring: 0, heavyLaser: 0, missilePod: 0, pd: 0, engine: 0, shieldGenerator: 0, hangar: 0, bstbd: 0, bport: 0 };
+
+  for (const m of list) {
+    if (!m || !m.type) continue;
+    let name = null;
+    switch (m.type) {
+      case "forwardGun": {
+        const i = n.forwardGun++;
+        name = i === 0 ? (forwardGunModuleName(tier) || "gun") : "gun-" + i;
+        break;
+      }
+      case "ring": {
+        const i = n.ring++;
+        name = i === 0 ? "gun-array" : "gun-array-" + i;
+        break;
+      }
+      case "broadside": {
+        // Assign to a flank by offset.y sign, indexed within the flank. The
+        // fire path reads broadside-{stbd,port}-0..2, so only the first three
+        // per flank gate fire — overflow modules still render + take damage.
+        name = (m.offset && m.offset.y >= 0)
+          ? "broadside-stbd-" + (n.bstbd++)
+          : "broadside-port-" + (n.bport++);
+        break;
+      }
+      case "heavyLaser": {
+        const i = n.heavyLaser++;
+        name = i === 0 ? "laser" : "laser-" + i;
+        break;
+      }
+      case "missilePod": {
+        const i = n.missilePod++;
+        name = i === 0 ? "missile-bay" : "missile-bay-" + i;
+        break;
+      }
+      case "pd":              name = "pd-" + (n.pd++); break;
+      case "engine":          name = "engine-" + (n.engine++); break;
+      case "shieldGenerator": {
+        const i = n.shieldGenerator++;
+        name = i === 0 ? "shield-generator" : "shield-generator-" + i;
+        break;
+      }
+      case "hangar": {
+        const i = n.hangar++;
+        name = i === 0 ? "hangar" : "hangar-" + i;
+        break;
+      }
+      default: continue; // unknown type — skip (format.js already filters these)
+    }
+    const hp = Math.max(1, typeof m.hp === "number" ? m.hp : 40);
+    out.push({
+      name,
+      offset: { x: (m.offset && m.offset.x) || 0, y: (m.offset && m.offset.y) || 0 },
+      radius: CUSTOM_MODULE_RADIUS[m.type] || 0.14,
+      hp,
+      hpMax: hp,
+      armor: typeof m.armor === "number" ? m.armor : 0,
+      hullPenalty: typeof m.hullPenalty === "number" ? m.hullPenalty : 0,
+      disabled: false,
+      flash: 0,
+    });
+  }
+  // Always return an array (even empty) so createShip's `moduleList ?? build
+  // Modules(...)` keeps the custom layout — a null here would fall back to the
+  // per-class LAYOUTS, re-introducing default modules onto a free-form hull.
+  return out;
+}
+
 // World point (wx, wy) → ship-local frame (un-rotated by ship.heading).
 export function worldToLocal(ship, wx, wy) {
   const dx = wx - ship.pos.x;
