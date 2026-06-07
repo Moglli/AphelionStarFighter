@@ -17,7 +17,7 @@
  */
 
 import { getHull } from "../ship.js";
-import { buildCells } from "../sprites.js";
+import { buildCells, scaledCellGrid } from "../sprites.js";
 import {
   blankCustomShip, validateCustomShip, serializeCustomShip, parseCustomShip,
   blankModule, fallbackHull, TIERS, MODULE_TYPES, MODULE_DEFAULTS,
@@ -311,9 +311,13 @@ export class ShipEditor {
     // R is a nominal preview radius; cell.lx/ly come back scaled by R, so we
     // divide by R to get unit-space when drawing. Resolution (cols/rows) +
     // culling are R-independent, so this is faithful to the spawned grid.
-    const R = 100 * (this._draft.scaleMul || 1);
+    const scaleMul = this._draft.scaleMul || 1;
+    const R = 100 * scaleMul;
+    // Same scale-aware grid the compiler bakes into the spawned ship, so the
+    // preview densifies with scale (constant block size) and matches what flies.
+    const gridOv = scaledCellGrid(this._draft.tier, scaleMul, this._draft.race);
     let grid = null;
-    try { grid = buildCells(this._draft.tier, R, this._draft.race, poly); } catch (_e) { grid = null; }
+    try { grid = buildCells(this._draft.tier, R, this._draft.race, poly, gridOv); } catch (_e) { grid = null; }
     this._cellPreview = grid ? { grid, R } : null;
     return this._cellPreview;
   }

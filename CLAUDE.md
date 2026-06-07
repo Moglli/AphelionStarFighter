@@ -205,6 +205,15 @@ Newest first. Date + headline + load-bearing gotcha only.
   (`events.emit("dev:openShipEditor")`); probe surface `window.dev.editor()` +
   `window.customShip`. Forward-gun `spec.arc` gate in fireForwardWeapon is the
   only behavioural change to an existing fire path (no-op unless arc set).
+- **GOTCHA — block SIZE is held constant under scaleMul, not block COUNT.**
+  `sprites.js#scaledCellGrid(klass, scaleMul)` grows cols/rows with scaleMul so
+  cell px size (`R*2/cols`) stays fixed — a 2× custom hull gets 2× the blocks,
+  same size, not 2×-bigger blocks. buildCells gained an opt-in `gridOverride`
+  (null → per-class CELL_GRID, zero regression); the compiler bakes the scaled
+  grid into `cellOverride.grid`, createShip passes it to buildCells, and the
+  editor preview uses the SAME helper so what you author matches what you fly.
+  scaleMul 1 returns the tier grid exactly. Capped 140×84 so a 3× super-capital
+  can't explode the cell count.
 
 ### 2026-06-03 (fix: Dev Mode tools were unreachable — no on-screen route + broken overlay mount)
 - **Two bugs left every Dev Mode feature (Battle/Ship/Map/Platform designers +

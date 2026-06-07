@@ -791,6 +791,24 @@ const CELL_GRID_OVERRIDES = {
   thren: { carrier: { cols: 96, rows: 52 } },
 };
 
+// Scale a tier's base cell grid by a radius multiplier so cell SIZE stays
+// constant as a custom ship scales up (Free-Form Custom Ship Editor). Cell
+// pixel size is R*2/cols, and a scaled ship's R = base_R * scaleMul — so
+// growing cols/rows by the same scaleMul keeps R*2/cols (the cell size) fixed:
+// a 2× hull gets 2× the blocks, each the same size, not 2×-bigger blocks.
+// Capped so a 3× super-capital can't explode the cell count (one player ship at
+// the cap is still well inside budget). scaleMul 1 returns the tier grid exactly
+// → zero change for unscaled ships. Returns null for an unknown class.
+export function scaledCellGrid(klass, scaleMul = 1, race = "terran") {
+  const base = (CELL_GRID_OVERRIDES[race] && CELL_GRID_OVERRIDES[race][klass]) || CELL_GRID[klass];
+  if (!base) return null;
+  const s = Math.max(0.1, scaleMul);
+  return {
+    cols: Math.max(4, Math.min(140, Math.round(base.cols * s))),
+    rows: Math.max(4, Math.min(84, Math.round(base.rows * s))),
+  };
+}
+
 // Per-class cell HP. Heavier hulls take multiple cannon hits before a
 // pixel finally pops, so a fighter strafing a battleship chips slowly
 // while another battleship's broadside shears chunks. Stored once on
@@ -1182,8 +1200,11 @@ function pointInHull(poly, px, py) {
 // size is R*2 / cols (and the same on the rows axis).
 //
 // Returns null when the class has no entry in CELL_GRID (defensive).
-export function buildCells(klass, R, race = "terran", polyOverride = null) {
-  const spec = (CELL_GRID_OVERRIDES[race] && CELL_GRID_OVERRIDES[race][klass]) || CELL_GRID[klass];
+export function buildCells(klass, R, race = "terran", polyOverride = null, gridOverride = null) {
+  // gridOverride ({cols,rows}) lets a custom ship carry a scale-aware grid
+  // (scaledCellGrid) so its block SIZE stays constant as it scales — without it,
+  // every ship uses the fixed per-class CELL_GRID (unchanged behaviour).
+  const spec = gridOverride || (CELL_GRID_OVERRIDES[race] && CELL_GRID_OVERRIDES[race][klass]) || CELL_GRID[klass];
   if (!spec) return null;
   const cols = spec.cols;
   const rows = spec.rows;

@@ -30,6 +30,7 @@
  */
 
 import { buildCustomModules } from "../modules.js";
+import { scaledCellGrid } from "../sprites.js";
 
 // Tier → base hull radius (px, at scaleMul 1) + movement profile. Radii mirror
 // classes.js so a non-scaled custom ship matches its tier's footprint; the new
@@ -259,11 +260,16 @@ export function compileCustomShip(design) {
   // ---- Runtime modules (authored placements → engine module names) ----
   const moduleList = buildCustomModules(design, specOverride, design.hullPoly);
 
-  // ---- Cell toughness override ----
+  // ---- Cell toughness + scale-aware grid ----
+  // `grid` scales the tier's base cell grid by scaleMul so block SIZE stays
+  // constant as the hull scales (a 2× ship gets 2× blocks, same size — not
+  // 2×-bigger blocks). The editor preview uses the same scaledCellGrid, so what
+  // you author matches what you fly.
   const cellOverride = {
     cellHp: num(design.cellHp, 14),
     cellArmor: clamp(num(design.cellArmor, 0.1), 0, 0.95),
     overrides: (design.cellOverrides && typeof design.cellOverrides === "object") ? design.cellOverrides : {},
+    grid: scaledCellGrid(tier, scaleMul, design.race || "terran"),
   };
 
   // ---- Spawn heading: nose points OPPOSITE the engine centroid ----

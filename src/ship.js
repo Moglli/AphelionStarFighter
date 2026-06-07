@@ -812,7 +812,9 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
   // damageCellsInRadius in sprites.js / applyDamage in game.js). Cells
   // are bound to the nearest module so a module kill tears out a
   // matching cluster of pixels along with it.
-  const grid = buildCells(klass, spec.radius, ship.race, poly);
+  // cellOverride.grid (custom ships) carries a scale-aware grid so block size
+  // stays constant under scaleMul; null for every normal ship → per-class grid.
+  const grid = buildCells(klass, spec.radius, ship.race, poly, cellOverride && cellOverride.grid);
   if (grid) {
     ship.cells      = grid.cells;
     ship.cellW      = grid.cellW;
