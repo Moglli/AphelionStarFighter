@@ -172,6 +172,32 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-08 (last-standing carriers HARD ENGAGE instead of kiting)
+- **A standard carrier (firingMode "none": Terran/Reaver/Hegemony/Voidsworn)
+  normally flees capital threats (`SAFE_DIST 1500`) and strafes, relying on its
+  launched strike craft.** Once its fighters/bombers are dead and it's the last
+  ship of its side, that script kites forever — the fight only ends on the
+  `MAX_BATTLE_SECONDS = 420` cap (reads as a stall).
+- **Fix (`ai.js#carrierAI`): new `sideOnlyCarriersLeft(ship, world)` gate** —
+  true when every live, non-surrendered, non-structure ship on the side is a
+  carrier. When set, the carrier CHARGES the nearest enemy of ANY class (strike
+  craft included), aiming at `aimPointFor(target)`. Capitals fly at constant
+  max speed along `c.aim` heading, so aiming AT the target closes the range →
+  the carrier's autonomous missile pods + PD bear and engage, and a bow-cannon
+  carrier (Thren) also fires on alignment. New branch is
+  `if (aggressive) … else if (hasCannon) … else <flee/strafe>`, so normal
+  carrier behaviour (with escorts/strike craft alive) is unchanged.
+- GOTCHA — only STOCK carriers had the kiting bug: a CUSTOM carrier routes
+  through `customCapitalAI`, which already orbits within weapon range
+  (orbitR ≈ 70% of widest weapon range) rather than fleeing, so it engages
+  already. Stations are excluded from the "only carriers" count (mirrors the
+  match-end alive-check) so they don't keep the gate from firing.
+- Verified headless: AI-decision A/B (only-carrier side → aim dot +1 toward the
+  enemy + closes, vs carrier+fighter present → aim dot −1 / flee retained) for
+  capital AND fighter targets; full-match smoke (1 carrier vs 2 fighters)
+  resolves by ELIMINATION at 6.8s (carrier closes to 96u, red wiped) instead of
+  the 420s cap, 0 throws.
+
 ### 2026-06-08 (Ship Editor: module snap-to-block + MIRROR button)
 - **Placed/dragged modules now snap to the centre of the nearest live block**
   (`dev/ship-editor.js#_snapToCell`): given a unit-space point it returns the

@@ -1639,6 +1639,20 @@ function enemyHullProximity(ship, ships) {
 // Far from any threat the aim falls back to a lateral strafe past the
 // nearest enemy so PD arcs still cover them.
 // ---------------------------------------------------------------------------
+// True when every live, non-surrendered, non-structure ship on `ship`'s side is
+// a carrier — i.e. the carriers are the last combatants standing. A standard
+// carrier has no forward weapon and normally flees/strafes, relying on its
+// launched strike craft; once those are gone and it's the last ship, that script
+// just kites forever and the match only resolves on the MAX_BATTLE_SECONDS cap.
+// In that state the carriers must press the attack instead.
+function sideOnlyCarriersLeft(ship, world) {
+  for (const o of world.ships) {
+    if (o.dead || o.surrendered || o.structure || o.side !== ship.side) continue;
+    if (o.klass !== "carrier") return false;
+  }
+  return true;
+}
+
 function carrierAI(ship, world) {
   const c = ship.controller;
   c.firing = false;
@@ -1650,6 +1664,14 @@ function carrierAI(ship, world) {
   // run the strafe-and-defend script below.
   const hasCannon = ship.spec.weapon && ship.spec.firingMode === "forward";
 
+  // Last-ships-standing override: when only carriers remain on this side, HARD
+  // ENGAGE the nearest enemy of ANY class (strike craft included — they may be
+  // all that's left). Charging closes the gap so the carrier's autonomous
+  // missile pods + PD bear, keeps it hatching reinforcements on top of the
+  // enemy, and a bow-cannon carrier also fires on alignment — so the fight ends
+  // by combat, not the time cap.
+  const aggressive = sideOnlyCarriersLeft(ship, world);
+
   let threat = null, threatD2 = Infinity;
   for (const o of world.ships) {
     if (o.dead || o.surrendered || o.side === ship.side) continue;
@@ -1660,7 +1682,28 @@ function carrierAI(ship, world) {
     if (d2 < threatD2) { threatD2 = d2; threat = o; }
   }
 
-  if (hasCannon) {
+  if (aggressive) {
+    const target = nearestEnemy(ship, world.ships);
+    if (target) {
+      const aimPt = aimPointFor(target);
+      c.aim = { x: aimPt.x - ship.pos.x, y: aimPt.y - ship.pos.y };
+      // A bow-cannon carrier tracks + fires the gun on the charge; a
+      // weaponless carrier just closes (pods/PD engage from updateShip).
+      if (hasCannon) {
+        ship.cannonTargetDir = { x: aimPt.x - ship.pos.x, y: aimPt.y - ship.pos.y };
+        if (ship.cannonAimAngle != null) {
+          const desired = Math.atan2(c.aim.y, c.aim.x);
+          let delta = desired - ship.cannonAimAngle;
+          while (delta >  Math.PI) delta -= Math.PI * 2;
+          while (delta < -Math.PI) delta += Math.PI * 2;
+          c.firing = Math.abs(delta) < 0.26; // ±15°
+        }
+      }
+    } else {
+      c.aim = null;
+      if (hasCannon) ship.cannonTargetDir = null;
+    }
+  } else if (hasCannon) {
     // Face the nearest threat (or any enemy if no capital threat is
     // nearby) so the bow cannon arc stays usable. The carrier is
     // slow enough that closing range isn't a real risk — the PD +
