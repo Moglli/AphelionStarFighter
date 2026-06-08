@@ -25,6 +25,8 @@ import {
 import { events } from "./events.js";
 import { getBlueprint } from "./blueprints/store.js";
 import { createPlatform, updatePlatform } from "./platforms/entity.js";
+import { compileCustomShip } from "./customships/compile.js";
+import { validateCustomShip } from "./customships/format.js";
 import { PERKS, TRAITS, applyCaptainTraitEffects, applyDoctrineEffects, applyBehaviorEffects, pickCaptainCommLine, applyCapitalVariantEffects, applyCommanderPerks } from "./roguelite.js";
 import { deepMerge } from "./races.js";
 
@@ -370,7 +372,19 @@ function spawnMapPlatforms(game) {
     : [];
   if (!platforms.length) return;
   for (const placement of platforms) {
-    if (!placement || !placement.platformId) continue;
+    if (!placement) continue;
+    // Two placement kinds share the map's platforms[] array:
+    //   (a) a custom STRUCTURE — an authored station-tier customShip doc,
+    //       compiled + spawned into game.ships as an immobile `structure`
+    //       (reuses the whole ship weapon/module/beam/cell pipeline), or
+    //   (b) a legacy built-in hex platform (createPlatform → game.platforms).
+    // A structure carries an inline `ship` doc so the map is self-contained
+    // (no cross-reference to the device's saved customShips at play time).
+    if (placement.kind === "customStructure" && placement.ship) {
+      spawnCustomStructure(game, placement);
+      continue;
+    }
+    if (!placement.platformId) continue;
     const side = placement.faction === "blue" ? "blue" : "red";
     const plat = createPlatform({
       platformId: placement.platformId,
@@ -380,6 +394,36 @@ function spawnMapPlatforms(game) {
       faction: placement.faction || null,
     });
     game.platforms.push(plat);
+  }
+}
+
+// Compile + spawn one authored station-tier customShip as a static defence
+// structure. Defensive: a malformed inline doc validates-and-repairs (never
+// hard-rejects), and any throw is swallowed so one bad placement can't abort
+// the whole match spawn.
+function spawnCustomStructure(game, placement) {
+  try {
+    const v = validateCustomShip(placement.ship);
+    const doc = v.value || placement.ship;
+    const comp = compileCustomShip(doc);
+    const side = placement.side === "blue" ? "blue" : "red";
+    const ship = createShip({
+      klass: comp.klass,
+      race: comp.race,
+      side,
+      pos: { x: placement.x, y: placement.y },
+      heading: comp.heading,
+      controller: { thrust: { x: 0, y: 0 }, aim: null, firing: false, firingMissile: false },
+      specOverride: comp.specOverride,
+      moduleList: comp.moduleList,
+      cellOverride: comp.cellOverride,
+      design: comp.design,
+      structure: true,
+    });
+    game.ships.push(ship);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[structure] failed to spawn custom structure:", e && e.message);
   }
 }
 
@@ -1434,8 +1478,14 @@ export function update(game, dt) {
       // an all-surrender wave on red would leave the match running
       // forever because the surrender-untargetable rule means blue
       // can't finish them off.
-      const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead && !s.surrendered);
-      const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead && !s.surrendered);
+      // Structures (authored static emplacements) are EXCLUDED from the
+      // alive-count, mirroring the legacy game.platforms turrets (which live in
+      // a separate array and never counted): a side left with only immobile
+      // structures has lost the engagement, so an immobile-vs-immobile match
+      // still resolves instead of stalling. The structure keeps firing until
+      // actually destroyed; it just doesn't keep its side "alive".
+      const blueAlive = game.ships.some((s) => s.side === "blue" && !s.isPlayer && !s.dead && !s.surrendered && !s.structure);
+      const redAlive  = game.ships.some((s) => s.side === "red"  && !s.dead && !s.surrendered && !s.structure);
       if (!redAlive) { game.matchOver = true; game.winner = "blue"; }
       else if (!blueAlive) { game.matchOver = true; game.winner = "red"; }
     }

@@ -76,7 +76,19 @@ export function updatePlatform(p, dt, world) {
   }
   p.shieldFlash = Math.max(0, p.shieldFlash - dt * 3);
 
-  if (!p.spec.weapon) return;   // shield generators don't shoot
+  // Point-defence ring — fires INDEPENDENTLY of the main weapon (it runs
+  // even on a platform whose main gun is out of targets, and a weaponless
+  // PD-only platform still screens). Mirrors the ship PD priority
+  // (ship.js#pickPDTarget): incoming enemy missiles first, then bombers,
+  // then fighters, then any enemy ship in range. The `count` turrets are
+  // modelled as one stream at count× the per-turret rate (no per-turret
+  // positions on a platform), keeping the PD volume right without the
+  // ship's per-turret bookkeeping. Without this the registry's declared
+  // pdCannons (+ the "PD ring" blurbs + the designer's "PD turrets" stat)
+  // were pure decoration — the turret never fired.
+  updatePlatformPD(p, dt, world);
+
+  if (!p.spec.weapon) return;   // shield generators (and PD-only) don't main-shoot
 
   // Find a target — any enemy ship within range. We scan world.ships
   // (platforms don't shoot platforms in v1).
@@ -154,6 +166,76 @@ export function updatePlatform(p, dt, world) {
     });
   }
   p.fireCooldown = w.cooldown;
+}
+
+// Point-defence pass. Range-aware (uses pd.range); no firing arc (a fixed
+// turret ring covers 360°, same as the ship PD which seats turrets around
+// the hull). The ring's `count` turrets are collapsed into one stream firing
+// at count× the per-turret rate.
+function updatePlatformPD(p, dt, world) {
+  const pd = p.spec.pdCannons;
+  if (!pd) return;
+  p.pdCooldown = Math.max(0, p.pdCooldown - dt);
+  const range2 = pd.range * pd.range;
+  const tgt = pickPlatformPDTarget(p, world, range2);
+  if (!tgt) return;
+  // Track the (single) PD aim for any future turret render; harmless now.
+  const tx = tgt.pos.x, ty = tgt.pos.y;
+  const tvx = tgt.vel ? tgt.vel.x : 0;
+  const tvy = tgt.vel ? tgt.vel.y : 0;
+  if (p.pdCooldown > 0) return;
+  const speed = pd.projectileSpeed || 900;
+  const rx = tx - p.pos.x, ry = ty - p.pos.y;
+  const tof = Math.hypot(rx, ry) / speed;
+  const ang = Math.atan2(ty + tvy * tof - p.pos.y, tx + tvx * tof - p.pos.x);
+  const origin = {
+    x: p.pos.x + Math.cos(ang) * p.spec.radius * 0.6,
+    y: p.pos.y + Math.sin(ang) * p.spec.radius * 0.6,
+  };
+  world.projectiles.push(createProjectile({
+    pos: origin,
+    vel: { x: Math.cos(ang) * speed, y: Math.sin(ang) * speed },
+    damage: pd.damage,
+    ttl: pd.range / speed,
+    radius: pd.projectileRadius || 1.6,
+    color: p.side === "blue" ? "#cef" : "#fda",
+    side: p.side,
+    ownerId: p.id,
+    ownerKlass: "platform",
+    kind: "cannon",
+    fromKlass: "pd",
+  }));
+  // Collapse the ring's `count` turrets into one stream firing count× faster.
+  p.pdCooldown = pd.cooldown / Math.max(1, pd.count || 1);
+  events.emit("pdFired", { x: p.pos.x, y: p.pos.y, isPlayer: false });
+}
+
+// PD target priority, mirroring ship.js#pickPDTarget: enemy missiles first
+// (the whole point of point-defence), then bombers, then fighters, then the
+// nearest enemy ship of any class within range.
+function pickPlatformPDTarget(p, world, range2) {
+  let bestMissile = null, bestMissileD2 = range2;
+  for (const proj of world.projectiles) {
+    if (proj.dead || proj.kind !== "missile" || proj.side === p.side) continue;
+    const dx = proj.pos.x - p.pos.x, dy = proj.pos.y - p.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestMissileD2) { bestMissileD2 = d2; bestMissile = proj; }
+  }
+  if (bestMissile) return bestMissile;
+
+  let bestBomber = null, bestBomberD2 = range2;
+  let bestFighter = null, bestFighterD2 = range2;
+  let bestAny = null, bestAnyD2 = range2;
+  for (const s of world.ships) {
+    if (s.dead || s.surrendered || s.side === p.side) continue;
+    const dx = s.pos.x - p.pos.x, dy = s.pos.y - p.pos.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > range2) continue;
+    if (s.klass === "bomber" && d2 < bestBomberD2) { bestBomberD2 = d2; bestBomber = s; }
+    if (s.klass === "fighter" && d2 < bestFighterD2) { bestFighterD2 = d2; bestFighter = s; }
+    if (d2 < bestAnyD2) { bestAnyD2 = d2; bestAny = s; }
+  }
+  return bestBomber || bestFighter || bestAny;
 }
 
 // World-space platform draw. The render order in main.js puts platforms

@@ -8,6 +8,20 @@ import { RARITY_BY_ID } from "./frontier/loot.js";
 
 const CLASS_ORDER = ["fighter", "bomber", "frigate", "cruiser", "battleship", "carrier", "station"];
 
+// Autonomous weapon groups a PILOTED capital can toggle (the HUD weapons
+// panel). Each `has(ship)` checks the ship's resolved spec for that system;
+// the toggle sets ship.weaponAuto[key] = false to hold its fire (ship.js
+// weaponAutoOn). Forward guns are NOT here — they fire on the FIRE button.
+// `key` MUST match ship.js#weaponAutoOn group strings.
+const WEAPON_GROUPS = [
+  { key: "broadside", label: "BROAD", has: (s) => !!s.spec && s.weapons && s.weapons.some((w) => w.spec && w.spec.firingMode === "broadside") },
+  { key: "laser",     label: "LASER", has: (s) => !!(s.spec && s.spec.heavyLaser) },
+  { key: "pods",      label: "MSL",   has: (s) => !!(s.spec && s.spec.missilePods) },
+  { key: "torpedo",   label: "TORP",  has: (s) => !!(s.spec && s.spec.torpedoes) },
+  { key: "ring",      label: "RING",  has: (s) => !!(s.spec && s.spec.ringCannons) },
+  { key: "pd",        label: "PD",    has: (s) => !!(s.spec && s.spec.pdCannons) },
+];
+
 // Letter glyphs kept as fallback labels for accessibility / narrow
 // contexts. The visual UI uses classIconSvg from ship-icons.js so
 // players see ship silhouettes instead of letters in every roster cell.
@@ -496,6 +510,17 @@ export class BattleHUD {
     `;
     this._root.appendChild(actionCluster);
 
+    // ---- Weapons panel (piloted-capital auto-fire toggles) ----
+    // Empty shell; buttons are (re)built per player-ship in _syncWeaponsPanel
+    // so the toggle set matches the ship the player is actually flying.
+    const weaponsPanel = this._createEl("div", "weapons-panel", "weapons-panel");
+    weaponsPanel.style.display = "none";
+    this._root.appendChild(weaponsPanel);
+    this._weaponsPanel = weaponsPanel;
+    this._weaponsPanelSig = null;   // rebuild buttons only when ship/systems change
+    this._weaponBtns = {};          // key → button el (state synced each frame)
+    this._playerShip = null;        // resolved each sync; read by toggle handlers
+
     // ---- Admiral panel ----
     // Now a three-block layout: a master-command bar (ALL HOLD / FREE
     // / PRESS + MISSILES), a focus-target pill (visible only when an
@@ -776,6 +801,9 @@ export class BattleHUD {
     // pass the HUD piles 8+ overlapping widgets in admiral mode.
     this._syncModeChrome(game);
 
+    // Weapons panel (piloted-capital auto-fire toggles).
+    this._syncWeaponsPanel(game);
+
     // 1. Side strips
     this._syncSideStrips(game, viewW);
 
@@ -871,6 +899,63 @@ export class BattleHUD {
     if (this._commandBtnEl) {
       this._commandBtnEl.textContent =
         (admiral && game._admiralByToggle) ? "RESUME PILOT" : "TAKE COMMAND";
+    }
+  }
+
+  // Weapons panel: per-group AUTO/HOLD toggles for a piloted capital. The
+  // autonomous weapon groups (broadside / laser / pods / torpedo / ring / pd)
+  // otherwise fire with no player input; this lets the pilot hold any group's
+  // fire. Forward guns are unaffected — they fire on the FIRE button. Hidden
+  // unless the player is piloting a ship that actually mounts ≥1 such group.
+  _syncWeaponsPanel(game) {
+    const panel = this._weaponsPanel;
+    if (!panel) return;
+    const piloting = !game.spectating && !game.admiralMode;
+    const ship = piloting ? game.ships.find((s) => s.isPlayer && !s.dead) : null;
+    this._playerShip = ship || null;
+    const groups = ship ? WEAPON_GROUPS.filter((g) => g.has(ship)) : [];
+    if (!ship || groups.length === 0) {
+      if (panel.style.display !== "none") panel.style.display = "none";
+      return;
+    }
+    panel.style.display = "flex";
+    // Rebuild buttons only when the ship identity or its group set changes
+    // (per-frame innerHTML churn would drop the pressed-state styling).
+    const sig = ship.id + "|" + groups.map((g) => g.key).join(",");
+    if (sig !== this._weaponsPanelSig) {
+      this._weaponsPanelSig = sig;
+      panel.innerHTML = "";
+      this._weaponBtns = {};
+      const hdr = this._createEl("div", "weapons-panel-hdr");
+      hdr.textContent = "WEAPONS";
+      panel.appendChild(hdr);
+      for (const g of groups) {
+        const btn = this._createEl("button", "weapon-toggle");
+        btn.dataset.key = g.key;
+        btn.innerHTML = `<span class="wt-name">${g.label}</span><span class="wt-state">AUTO</span>`;
+        // Toggle the live player ship's group flag. Re-resolve the ship at
+        // click time (it can change via TAKE COMMAND / death) rather than
+        // closing over a possibly-stale reference.
+        btn.addEventListener("click", (e) => {
+          if (e.cancelable) e.preventDefault();
+          const s = this._playerShip;
+          if (!s) return;
+          const on = !s.weaponAuto || s.weaponAuto[g.key] !== false;
+          if (!s.weaponAuto) s.weaponAuto = {};
+          s.weaponAuto[g.key] = !on;          // flip AUTO ↔ HOLD
+        });
+        panel.appendChild(btn);
+        this._weaponBtns[g.key] = btn;
+      }
+    }
+    // Sync each button's state every frame (cheap; reflects external changes).
+    for (const g of groups) {
+      const btn = this._weaponBtns[g.key];
+      if (!btn) continue;
+      const on = !ship.weaponAuto || ship.weaponAuto[g.key] !== false;
+      btn.classList.toggle("wt-off", !on);
+      const st = btn.querySelector(".wt-state");
+      if (st) st.textContent = on ? "AUTO" : "HOLD";
     }
   }
 

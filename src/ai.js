@@ -97,6 +97,22 @@ function pickBomberTarget(ship, ships) {
 }
 
 export function updateAI(ship, world, dt) {
+  // Free-Form Custom Ship Editor: a custom-authored capital can mount any
+  // weapon mix on any tier, so the stock per-class AIs (which assume the
+  // tier's fixed loadout) can't drive it — a custom battleship with a bow
+  // cannon would never fire (battleshipAI sets c.firing=false expecting
+  // broadsides); a mothership has no class AI at all. Route every
+  // capital-tier custom ship (and the mothership tier, which only exists via
+  // the editor) through the capability-based customCapitalAI, which reads the
+  // ship's ACTUAL weapons. Autonomous subsystems (PD, broadside, ring, laser,
+  // missile pods) still self-target + fire from updateShip regardless; this
+  // AI handles movement/orientation + driving FORWARD guns (the one weapon
+  // class that needs a controller firing flag). Small-craft custom ships
+  // (fighter/bomber) keep flybyAI — it already drives their forward guns.
+  if (usesCustomCapitalAI(ship)) {
+    customCapitalAI(ship, world, dt);
+    return;
+  }
   // Carriers have their own passive routine — no target hunt, no orbit.
   if (ship.klass === "carrier") {
     carrierAI(ship, world);
@@ -1123,6 +1139,224 @@ function pickCruiserTarget(ship, ships) {
 // happens via heading rotation alone; the ship's translation falls out
 // of the heading.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Free-Form Custom Ship Editor — capability-based capital AI.
+//
+// Used for any custom (authored) ship of a capital tier + every "mothership".
+// Unlike the stock per-class AIs it makes NO assumption about the loadout: it
+// reads the ship's real weapons and drives them. Autonomous subsystems (PD,
+// broadside, ring, laser, missile pods) already self-target + fire in
+// updateShip; the only weapon class that needs a controller flag is the
+// FORWARD gun, so this AI's job is (1) sensible target selection, (2) movement
+// + orientation that brings the primary weapon to bear, (3) the forward-gun
+// firing flag.
+// ---------------------------------------------------------------------------
+const CAPITAL_TIERS = new Set(["frigate", "cruiser", "battleship", "carrier", "station", "mothership"]);
+
+function usesCustomCapitalAI(ship) {
+  // The mothership tier exists ONLY via the editor (no stock class AI), so it
+  // always routes here even if the isCustom flag were somehow missing.
+  return ship.klass === "mothership" || (ship.isCustom && CAPITAL_TIERS.has(ship.klass));
+}
+
+// Forward-firing weapon mounts (the ones that need a controller firing flag).
+function forwardWeaponsOf(ship) {
+  if (!ship.weapons) return [];
+  return ship.weapons.filter(
+    (w) => w.spec && w.spec.firingMode === "forward" && w.spec.damage > 0,
+  );
+}
+
+// Longest useful engagement range across all of the ship's weapon systems
+// (forward + broadside primary + missile pods + heavy laser + ring). PD is
+// excluded — it's a defensive screen, not a reason to close. Used to set the
+// standoff / orbit radius so a ship parks where its guns can actually reach.
+function customEngageRange(ship) {
+  const s = ship.spec;
+  let r = 0;
+  const consider = (w) => { if (w && w.range > r) r = w.range; };
+  if (ship.weapons) for (const w of ship.weapons) consider(w.spec);
+  const arr = (x) => (x ? (Array.isArray(x) ? x : [x]) : []);
+  for (const p of arr(s.missilePods)) consider(p);
+  for (const l of arr(s.heavyLaser)) consider(l);
+  if (s.ringCannons) consider(s.ringCannons);
+  return r > 0 ? r : 1000;
+}
+
+// Capability-aware target pick. A ship carrying capital-grade ordnance
+// (broadside / heavy laser / missile pods, or a high-damage / long-range
+// forward gun) prefers the LARGEST enemy first — its PD ring already deals
+// with strike craft on its own. A light ship (only short forward guns) just
+// engages the nearest threat.
+function pickCustomTarget(ship, enemies) {
+  const s = ship.spec;
+  let heavy = !!(s.heavyLaser || s.missilePods || s.firingMode === "broadside");
+  if (!heavy) {
+    for (const w of forwardWeaponsOf(ship)) {
+      if (w.spec.damage >= 20 || w.spec.range >= 800) { heavy = true; break; }
+    }
+  }
+  if (heavy) {
+    const t = pickByPriority(ship, enemies, BATTLESHIP_PRIORITY);
+    if (t) return t;
+  }
+  return nearestEnemy(ship, enemies);
+}
+
+function customCapitalAI(ship, world, dt) {
+  const c = ship.controller;
+  const s = ship.spec;
+  const immobile = !(s.maxSpeed > 0);
+
+  // Combined enemy pool (ships + platforms) so a custom capital can target
+  // defence platforms too, mirroring updateAI's main path.
+  const enemies = (world.platforms && world.platforms.length)
+    ? [...world.ships, ...world.platforms]
+    : world.ships;
+
+  // Target: honour an admiral FOCUS call (blue only), else capability pick.
+  let target = null;
+  if (ship.side === "blue" && world.focusTargetId != null) {
+    const focus = world.ships.find((o) => o.id === world.focusTargetId);
+    if (focus && !focus.dead && !focus.surrendered && focus.side !== ship.side) target = focus;
+  }
+  if (!target) target = pickCustomTarget(ship, enemies);
+
+  if (!target) {
+    // No enemy — idle: stop, point at arena centre (a null aim freezes the
+    // heading and a cornered ship would wall-stick), hold fire.
+    c.thrust = { x: 0, y: 0 };
+    if (world.arena && world.arena.bounds) {
+      const b = world.arena.bounds;
+      c.aim = { x: (b.minX + b.maxX) * 0.5 - ship.pos.x, y: (b.minY + b.maxY) * 0.5 - ship.pos.y };
+    } else c.aim = null;
+    c.firing = false;
+    c.firingMissile = false;
+    return;
+  }
+
+  const rel = V.sub(target.pos, ship.pos);
+  const dist = V.len(rel);
+  const dir = dist > 1e-6 ? { x: rel.x / dist, y: rel.y / dist } : { x: 1, y: 0 };
+  const mode = s.firingMode;
+  const fwdWeapons = forwardWeaponsOf(ship);
+  const hasForward = fwdWeapons.length > 0;
+
+  // Lead-intercept for the forward guns (fastest forward projectile). Also
+  // published as cannonTargetDir so turret-tracked custom cruisers/carriers
+  // (cannonAimAngle != null) slew their barrels onto it in updateShip.
+  let projSpeed = 0;
+  for (const w of fwdWeapons) projSpeed = Math.max(projSpeed, w.spec.projectileSpeed || 0);
+  const lead = hasForward && projSpeed > 0 ? leadAim(ship, target, projSpeed) : { x: rel.x, y: rel.y };
+  ship.cannonTargetDir = { x: lead.x, y: lead.y };
+
+  const engageRange = customEngageRange(ship);
+  const myR = s.radius || 80;
+  const targetR = (target.spec && target.spec.radius) || 60;
+  const targetPdRange = (target.spec && target.spec.pdCannons && target.spec.pdCannons.range) || 0;
+  const isCapTarget = target.klass !== "fighter" && target.klass !== "bomber";
+  const hullSafe = myR + targetR + 220;
+  const pdSafe = isCapTarget ? targetPdRange * 1.15 + 120 : 0;
+
+  // ---- Movement / orientation, by primary firing mode ----
+  if (immobile) {
+    c.thrust = { x: 0, y: 0 };
+    // A stationary structure can't reposition, only slew its hull. Present the
+    // flank for a broadside primary (so the arc-checked batteries bear), else
+    // face the lead intercept (forward guns + the heavy-laser forward arc).
+    // PD / ring / missile primaries don't care about hull heading — facing the
+    // target is a fine neutral default for them too.
+    c.aim = (mode === "broadside") ? { x: -dir.y, y: dir.x } : { x: lead.x, y: lead.y };
+  } else if (mode === "broadside") {
+    // Close to broadside range, then present the better beam and orbit
+    // (battleship pattern) so the arc-checked broadside batteries bear.
+    const broadsideRange = (s.weapon ? s.weapon.range : engageRange) * 0.85;
+    if (dist > broadsideRange) {
+      c.aim = { x: rel.x, y: rel.y };
+    } else {
+      const perpA = { x: -dir.y, y: dir.x };
+      const perpB = { x: dir.y, y: -dir.x };
+      const fwd = { x: Math.cos(ship.heading), y: Math.sin(ship.heading) };
+      c.aim = V.dot(fwd, perpA) >= V.dot(fwd, perpB) ? perpA : perpB;
+    }
+  } else if (mode === "forward" || s.heavyLaser) {
+    // Point the nose at the lead intercept; swing wide once inside the
+    // standoff ring so the ship doesn't ram (cruiser pattern). The bow
+    // sweeps the target line each pass, so forward salvos still land.
+    // Heavy lasers fire in a FORWARD arc off ship.heading too, so a
+    // laser-primary ship (firingMode "none" + heavyLaser) faces the
+    // target here rather than strafing perpendicular — otherwise the beam
+    // arc would never bear.
+    const standoff = Math.max(engageRange * 0.7, hullSafe, pdSafe);
+    if (dist > standoff) {
+      c.aim = { x: lead.x, y: lead.y };
+    } else {
+      const sign = (ship.id % 2 === 0) ? 1 : -1;
+      const offset = Math.max(800, hullSafe, pdSafe);
+      c.aim = {
+        x: target.pos.x + (-dir.y * sign) * offset - ship.pos.x,
+        y: target.pos.y + (dir.x * sign) * offset - ship.pos.y,
+      };
+    }
+  } else {
+    // ring / missile / pd-only — strafe an orbit slot perpendicular to the
+    // target so the ring cannons (cardinal mounts) / omnidirectional missile
+    // pods / PD wall keep a usable target axis at standoff range.
+    const orbitR = Math.max(engageRange * 0.7, hullSafe, pdSafe, 600);
+    const sign = (ship.id % 2 === 0) ? 1 : -1;
+    c.aim = {
+      x: target.pos.x + (-dir.y * sign) * orbitR - ship.pos.x,
+      y: target.pos.y + (dir.x * sign) * orbitR - ship.pos.y,
+    };
+  }
+
+  // ---- Forward-gun firing flag ----
+  // Autonomous weapons (broadside/ring/laser/missile/PD) fire from updateShip
+  // and don't read c.firing; only forward guns do. Fire when the target is in
+  // forward range and the guns bear (nose-locked guns track ship.heading;
+  // turret-tracked custom cruisers/carriers track cannonAimAngle).
+  if (hasForward) {
+    const aimAngle = ship.cannonAimAngle != null ? ship.cannonAimAngle : ship.heading;
+    const fwd = { x: Math.cos(aimAngle), y: Math.sin(aimAngle) };
+    const leadN = V.norm(lead);
+    const aligned = V.dot(fwd, leadN);
+    // Arc-aware: the firing flag is shared across all forward mounts, and
+    // each mount re-applies its OWN authored `arc` in fireForwardWeapon. So
+    // gate on the WIDEST forward range + arc here (default ~26° when a gun
+    // declares no arc) — a wide-arc custom gun is then free to fire off-axis,
+    // and the per-mount arc gate trims a narrower gun precisely. Without the
+    // max() a 90°-arc gun would be clamped to the AI's fixed cone.
+    let fwdRange = 0, arcLimit = 0.45; // 0.45 rad ≈ 26°
+    for (const w of fwdWeapons) {
+      if (w.spec.range > fwdRange) fwdRange = w.spec.range;
+      if (typeof w.spec.arc === "number" && w.spec.arc > arcLimit) arcLimit = w.spec.arc;
+    }
+    c.firing = dist <= fwdRange && aligned >= Math.cos(arcLimit);
+  } else {
+    c.firing = false;
+  }
+  c.firingMissile = false;
+
+  // ---- Avoidance blend (mobile only) ----
+  if (!immobile && c.aim) {
+    const danger = bigShipDanger(ship, world.ships, target); // exclude our own target
+    const wall = wallAvoidance(ship, world.arena ? world.arena.bounds : null);
+    const crowd = allyAvoidance(ship, world.ships);
+    if (danger || wall || crowd) {
+      const aimN = V.norm(c.aim);
+      let ax = aimN.x, ay = aimN.y;
+      if (danger) { ax += danger.x * 0.7; ay += danger.y * 0.7; }
+      if (crowd)  { ax += crowd.x * 0.9;  ay += crowd.y * 0.9; }
+      if (wall)   { const w = 2.0 * wall.strength; ax += wall.x * w; ay += wall.y * w; }
+      c.aim = { x: ax, y: ay };
+    }
+  }
+
+  // Admiral STANCE directives (CHARGE / STAND OFF / HOLD / FALL BACK) still
+  // apply to a blue custom capital, same as a stock one.
+  applyShipOrders(ship, world, target);
+}
+
 function battleshipAI(ship, target, dt, world) {
   const c = ship.controller;
   const s = ship.spec;

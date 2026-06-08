@@ -527,11 +527,22 @@ export class ShipEditor {
       this._selectedModule = -1; this._closeModulePanel(); this._renderCanvas(); this._autosave();
     });
     panel.querySelector("#se-mod-save-lib").addEventListener("click", () => {
-      // Prompt for the library name, prefilled with the module's own name (or
-      // type label). Empty/cancel aborts so a stray module can't land unnamed.
-      const suggested = m.name || `${MODULE_LABELS[m.type]} ${Date.now().toString(36).slice(-3)}`;
-      const name = (window.prompt("Name this library module:", suggested) || "").trim();
-      if (!name) return;
+      // Name comes from the module's inline NAME field (set in the panel body) —
+      // NOT window.prompt, which the touch-first Capacitor webview can block (a
+      // null return silently aborted the whole save, so "saving a module to the
+      // library" appeared not to work on a phone). If the module is unnamed we
+      // auto-generate a name and reflect it back into the panel so the save
+      // ALWAYS lands and the library entry stays identifiable.
+      let name = (m.name || "").trim();
+      if (!name) {
+        name = `${MODULE_LABELS[m.type] || m.type} ${Date.now().toString(36).slice(-3)}`;
+        m.name = name;
+        const titleEl = this._modPanel && this._modPanel.querySelector("#se-modpanel-title");
+        if (titleEl) titleEl.textContent = name;
+        const nameInp = this._modPanel && this._modPanel.querySelector(".se-modpanel-body input[type=text]");
+        if (nameInp) nameInp.value = name;
+        this._autosave();
+      }
       const rec = blankCustomModule({ type: m.type, name });
       rec.hp = m.hp; rec.hullPenalty = m.hullPenalty; rec.armor = m.armor; rec.arc = m.arc;
       rec.stats = JSON.parse(JSON.stringify(m.stats)); rec.projectile = m.projectile ? JSON.parse(JSON.stringify(m.projectile)) : null;

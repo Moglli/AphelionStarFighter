@@ -22,10 +22,20 @@ import {
   listUserMaps, listAllMaps, saveMap, deleteMap,
 } from "../maps/store.js";
 import { PLATFORM_TYPE_KEYS, PLATFORM_TYPES } from "../platforms/registry.js";
+import { listCustomShips } from "../customships/store.js";
 
 const TOOL_SELECT = "select";
 const TOOL_ASTEROID = "asteroid";
 const TOOL_PLATFORM = "platform";
+
+// Map-placement helpers — a platforms[] entry is EITHER a legacy built-in hex
+// turret ({platformId, faction, x, y}) OR a custom STRUCTURE
+// ({kind:"customStructure", side, x, y, ship}). These read whichever shape.
+function placementSide(pl) { return (pl.side || pl.faction) === "blue" ? "blue" : "red"; }
+function placementLabel(pl) {
+  if (pl.kind === "customStructure") return (pl.ship && pl.ship.name) || "structure";
+  return pl.platformId;
+}
 
 export class MapDesigner {
   constructor(host, deps) {
@@ -129,11 +139,7 @@ export class MapDesigner {
     this._decorRValEl = el.querySelector("#md-decor-r-val");
     this._platTypeEl = el.querySelector("#md-plat-type");
     this._platSideEl = el.querySelector("#md-plat-side");
-    for (const k of PLATFORM_TYPE_KEYS) {
-      const o = document.createElement("option");
-      o.value = k; o.textContent = PLATFORM_TYPES[k].name;
-      this._platTypeEl.appendChild(o);
-    }
+    this._renderPlatformTypes();
 
     this._nameEl.addEventListener("input", () => { this._draft.name = this._nameEl.value; });
     const onResize = () => {
@@ -198,10 +204,42 @@ export class MapDesigner {
     this._hValEl.textContent = String(this._draft.mapH);
     this._renderSpawnRows();
     this._renderDecorList();
+    this._renderPlatformTypes();
     this._renderPlatformList();
     this._renderLibrary();
     this._setTool(this._tool);
     this._renderPreview();
+  }
+
+  // Populate the PLATFORM TYPE dropdown: the 4 built-in hex turrets, then any
+  // saved station-tier custom ships (authored in the Ship Editor) as
+  // structures. Custom entries use a "cs:<id>" option value so the placement
+  // handler can tell them apart and stamp the inline ship doc. Refreshed every
+  // _syncAll so a just-authored station ship shows up without a reload.
+  _renderPlatformTypes() {
+    const sel = this._platTypeEl;
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = "";
+    for (const k of PLATFORM_TYPE_KEYS) {
+      const o = document.createElement("option");
+      o.value = k; o.textContent = PLATFORM_TYPES[k].name;
+      sel.appendChild(o);
+    }
+    let stations = [];
+    try { stations = listCustomShips().filter((s) => s && s.tier === "station"); } catch (e) { stations = []; }
+    if (stations.length) {
+      const grp = document.createElement("optgroup");
+      grp.label = "CUSTOM STRUCTURES";
+      for (const s of stations) {
+        const o = document.createElement("option");
+        o.value = "cs:" + s.id; o.textContent = s.name || "Custom Structure";
+        grp.appendChild(o);
+      }
+      sel.appendChild(grp);
+    }
+    // Preserve the prior selection if it still exists.
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
   }
 
   _renderPlatformList() {
@@ -218,8 +256,9 @@ export class MapDesigner {
     this._draft.platforms.forEach((pl, i) => {
       const row = document.createElement("div");
       row.className = "md-decor-row";
+      const tag = pl.kind === "customStructure" ? "⬡" : "·";
       row.innerHTML = `
-        <span class="md-decor-meta">${pl.faction === "blue" ? "B" : "R"} · ${pl.platformId} · (${Math.round(pl.x)}, ${Math.round(pl.y)})</span>
+        <span class="md-decor-meta">${placementSide(pl) === "blue" ? "B" : "R"} ${tag} ${placementLabel(pl)} · (${Math.round(pl.x)}, ${Math.round(pl.y)})</span>
         <button class="md-btn md-decor-del">✕</button>
       `;
       row.querySelector(".md-decor-del").addEventListener("click", () => {
@@ -232,7 +271,9 @@ export class MapDesigner {
   }
 
   _setTool(tool) {
-    this._tool = tool === TOOL_SELECT ? TOOL_SELECT : TOOL_ASTEROID;
+    // (bugfix) the old ternary coerced every non-select tool to ASTEROID, so
+    // the PLATFORM tool could never activate — platform placement was dead.
+    this._tool = (tool === TOOL_SELECT || tool === TOOL_PLATFORM) ? tool : TOOL_ASTEROID;
     this._el.querySelectorAll(".md-tool").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === this._tool);
     });
@@ -341,7 +382,11 @@ export class MapDesigner {
     for (const pl of platforms) {
       const px = ox + pl.x * scale;
       const py = oy + pl.y * scale;
-      const r = 6;
+      // Custom structures draw a touch larger so they read apart from the
+      // built-in hex turrets at a glance.
+      const isStruct = pl.kind === "customStructure";
+      const r = isStruct ? 8 : 6;
+      const blue = placementSide(pl) === "blue";
       ctx.beginPath();
       // Hex marker so platforms read distinctly from circular asteroids.
       for (let i = 0; i < 6; i++) {
@@ -352,10 +397,10 @@ export class MapDesigner {
         else ctx.lineTo(hx, hy);
       }
       ctx.closePath();
-      ctx.fillStyle = pl.faction === "blue" ? "rgba(80,160,240,0.7)" : "rgba(240,120,90,0.7)";
+      ctx.fillStyle = blue ? "rgba(80,160,240,0.7)" : "rgba(240,120,90,0.7)";
       ctx.fill();
-      ctx.strokeStyle = pl.faction === "blue" ? "#7af" : "#f97";
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = blue ? "#7af" : "#f97";
+      ctx.lineWidth = isStruct ? 2.5 : 1.5;
       ctx.stroke();
     }
 
@@ -390,11 +435,28 @@ export class MapDesigner {
       });
     } else if (this._tool === TOOL_PLATFORM) {
       if (!Array.isArray(this._draft.platforms)) this._draft.platforms = [];
-      this._draft.platforms.push({
-        platformId: this._platTypeEl.value,
-        faction: this._platSideEl.value,
-        x: wx, y: wy,
-      });
+      const sel = this._platTypeEl.value;
+      const side = this._platSideEl.value === "blue" ? "blue" : "red";
+      if (sel.startsWith("cs:")) {
+        // Custom structure — stamp the saved station-ship doc INLINE so the
+        // map is self-contained (no play-time dependency on this device's
+        // saved customShips). Skip silently if the id vanished.
+        const id = sel.slice(3);
+        let doc = null;
+        try { doc = listCustomShips().find((s) => s.id === id) || null; } catch (e) { doc = null; }
+        if (doc) {
+          this._draft.platforms.push({
+            kind: "customStructure",
+            side,
+            x: wx, y: wy,
+            ship: JSON.parse(JSON.stringify(doc)),
+          });
+        } else {
+          this._toast("custom structure not found — re-save it in the Ship Editor", true);
+        }
+      } else {
+        this._draft.platforms.push({ platformId: sel, faction: side, x: wx, y: wy });
+      }
     } else if (this._tool === TOOL_SELECT) {
       // Try platforms first (smaller pick radius), then decor.
       const pickR = Math.max(40, this._draft.mapW * 0.012);

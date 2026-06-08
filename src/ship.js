@@ -471,7 +471,7 @@ export function getHull(race, klass) {
 
 export { HULLS };
 
-export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null, initialHpFrac = 1, boons = null, fleetTraits = null, design = null, moduleList = null, cellOverride = null }) {
+export function createShip({ klass, race = "terran", side, pos, heading = 0, controller, specOverride = null, initialHpFrac = 1, boons = null, fleetTraits = null, design = null, moduleList = null, cellOverride = null, structure = false }) {
   let spec = resolveSpec(race, klass);
   if (specOverride) spec = deepMerge(spec, specOverride);
   // Boon patches — declarative per-class spec mutations defined in
@@ -489,7 +489,20 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
   // Persistent player-ship design — applied last so component patches
   // override race + boon + trait defaults. Only the player ship has a
   // design today; AI ships pass null and the spec is unchanged.
-  if (design) {
+  //
+  // LOAD-BEARING for the Free-Form Custom Ship Editor: a custom ship
+  // (`moduleList` present) has a COMPLETE, self-contained spec from its
+  // compiled `specOverride` — every weapon system, shield, and PD set
+  // explicitly. applyDesign looks up HULLS[design.hull] and, when that hull
+  // exists (every standard tier fighter→carrier does), re-stamps the STOCK
+  // component loadout over the spec — wiping the authored weapons/PD/shield.
+  // Test-fly passes `design.hull = <tier>` purely so promotePlayer spawns the
+  // right klass (game.js reads design.hull), NOT to run the shipyard design
+  // pipeline. So skip applyDesign for custom ships; their hullPoly + paint are
+  // read directly from `design` below regardless. (mothership/station tiers
+  // happened to escape this because they have no HULLS entry — the bug only
+  // bit custom ships built on a standard tier.)
+  if (design && !moduleList) {
     spec = applyDesign(spec, design);
   }
   // Roguelite wounded-spawn: a capital that came out of the previous
@@ -591,8 +604,31 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
     salvoStbdShotsLeft: 0,
     salvoStbdShotTimer: 0,
     controller, // mutable: { thrust, aim, firing, firingMissile }
+    // Per-group auto-fire toggles for a PILOTED capital. null → every
+    // autonomous weapon group fires (AI ships + the player's default). The HUD
+    // weapons panel lazily creates the object and sets a group false to hold
+    // its fire. Read via weaponAutoOn(); see updateShip's capital subsystems.
+    weaponAuto: null,
     dead: false,
     isPlayer: false,
+    // Free-Form Custom Ship Editor: a ship built from an authored module
+    // list can mount ANY weapon mix on ANY tier, so the stock per-class AI
+    // (which hardcodes its tier's loadout — e.g. battleshipAI fires only
+    // broadsides, frigateAI only ring cannons) can't drive it. Flag it so
+    // updateAI routes capital-tier custom ships through the capability-based
+    // customCapitalAI, which reads the ship's actual weapons. See ai.js.
+    isCustom: !!moduleList,
+    // Defence structure (authored station-tier custom ship placed on a map as
+    // a static emplacement). A structure lives in game.ships (so it reuses the
+    // whole weapon/module/beam/cell pipeline) but behaves like the legacy
+    // game.platforms turrets: it never strikes colors, and a side left with
+    // ONLY structures is treated as eliminated (game.js match-end) so an
+    // immobile-vs-immobile match still resolves. Spawned via game.js
+    // spawnMapPlatforms from a map's customStructure placements.
+    structure,
+    // Structures never surrender (an emplacement fights to destruction),
+    // matching the legacy platform's permanently-false `surrendered`.
+    neverSurrender: structure || undefined,
     // Shield (always present; 0 if class has no shield spec).
     shield: spec.shield ? spec.shield.max : 0,
     shieldMax: spec.shield ? spec.shield.max : 0,
@@ -910,6 +946,14 @@ export function createShip({ klass, race = "terran", side, pos, heading = 0, con
   return ship;
 }
 
+// Player-only weapon-group auto-fire gate. AI ships (and the player by default)
+// have ship.weaponAuto === null → every group auto-fires, so this is a no-op
+// until the HUD weapons panel toggles a group off for a piloted capital.
+// Groups: "broadside" | "pd" | "ring" | "pods" | "torpedo" | "laser".
+export function weaponAutoOn(ship, group) {
+  return !ship.weaponAuto || ship.weaponAuto[group] !== false;
+}
+
 // ---------------------------------------------------------------------------
 // Per-tick ship update.
 // ---------------------------------------------------------------------------
@@ -1116,7 +1160,9 @@ export function updateShip(ship, dt, world) {
       if (wMode === "broadside") {
         w.cooldownPort -= dt;
         w.cooldownStarboard -= dt;
-        updateBroadsideFireForWeapon(ship, world, dt, w);
+        // Broadsides are autonomous (auto-fire when a target bears on the
+        // flank). A piloted capital can silence them via the HUD weapons panel.
+        if (weaponAutoOn(ship, "broadside")) updateBroadsideFireForWeapon(ship, world, dt, w);
       } else if (wMode === "forward") {
         w.cooldown -= dt;
         // Cruiser / Thren-carrier turret-tracked cannons slew toward
@@ -1193,12 +1239,17 @@ export function updateShip(ship, dt, world) {
     c.firingMissile = false;
   }
 
-  // Capital ship subsystems.
-  if (s.pdCannons) updatePDFire(ship, world);
-  if (s.ringCannons) updateRingFire(ship, world);
-  if (s.missilePods) updateMissilePodFire(ship, world);
-  if (s.torpedoes) updateTorpedoFire(ship, world, dt);
-  if (s.heavyLaser) updateHeavyLaser(ship, world);
+  // Capital ship subsystems. Each autonomous group self-targets + fires here
+  // regardless of the controller (forward guns are the only weapon driven by
+  // c.firing). For a PILOTED capital the player can silence any group via the
+  // HUD weapons panel (sets ship.weaponAuto[group] = false); weaponAutoOn() is
+  // a no-op for AI ships + the player's default (weaponAuto null → all on), so
+  // this is zero-behaviour-change until the player toggles something off.
+  if (s.pdCannons && weaponAutoOn(ship, "pd")) updatePDFire(ship, world);
+  if (s.ringCannons && weaponAutoOn(ship, "ring")) updateRingFire(ship, world);
+  if (s.missilePods && weaponAutoOn(ship, "pods")) updateMissilePodFire(ship, world);
+  if (s.torpedoes && weaponAutoOn(ship, "torpedo")) updateTorpedoFire(ship, world, dt);
+  if (s.heavyLaser && weaponAutoOn(ship, "laser")) updateHeavyLaser(ship, world);
   if (s.replenish) updateReplenishment(ship, dt, world);
 
   if (isShipDestroyed(ship)) ship.dead = true;

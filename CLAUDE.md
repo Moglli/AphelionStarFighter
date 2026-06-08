@@ -172,6 +172,234 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-08 (focal-point spectate/admiral camera zoom — gesture refactor)
+- **Pinch + wheel zoom now zoom ABOUT the focal point** (finger midpoint /
+  cursor) instead of always toward screen-centre — the world under the fingers
+  stays put. Implements the 2026-05-29 changelog's explicitly-deferred polish
+  item ("pinch zooms toward screen-centre, not the gesture midpoint").
+- **The scattered tap/pan/pinch state was replaced by one `CameraGestures`
+  class** (input.js): derives the gesture purely from the live pointer set —
+  1 still pointer → TAP, 1 dragged → PAN, 2 → PINCH (zoom about midpoint + a
+  two-finger pan from midpoint translation). Emits per-frame outputs the loop
+  drains: `consumeCamPan()` {x,y}, `consumeCamZoom()` {factor,fx,fy}, and the
+  committed `consumeTap()` {x,y}. Mouse unifies through the same path (left-drag
+  pans, `wheel()` zooms about the cursor). Replaces the old
+  `consumePinchDelta`/`consumePanDelta` (both removed; no remaining refs) and
+  the prior loose `_panDrag`/`_tapCandidate`/`_touches`/`_pinchPrevDist` state —
+  this subsumes the 2026-05-29 pan/zoom bug sweep into one tracker, so the
+  edge cases (pinch-also-pans, 3→2 baseline re-seed, single-slot tap clobber)
+  are now structural, not per-handler patches.
+- **main.js applies the focal zoom** (spectate branch): keeps the world point
+  under the focal pixel fixed by shifting the camera, clamped to arena bounds —
+  but ONLY when `!cam.locked`. GOTCHA: a LOCKED camera must NOT be focal-shifted
+  (draw() re-centres it on the live ship every frame), so the zoom only changes
+  `zoom`; the lock keeps the ship centred. All gesture intake is still gated on
+  `selectActive` (spectate/admiral only) so nothing accumulates while piloting /
+  in menus. `clearCameraGestures()` (→ `cam.reset()`) is still called on the
+  spectate/admiral toggles + match reset to avoid cross-match jolt.
+- Verified headless (Playwright, 0 page errors): CameraGestures unit behaviour
+  (tap commits, 40px drag → pan with no stray tap, two-finger spread → factor
+  2.0 with focal = midpoint); end-to-end wheel on the canvas in spectate moves
+  an UNLOCKED camera toward the cursor on zoom-in; a LOCKED camera (sim paused
+  to isolate from ship-tracking) does not move from the zoom.
+
+### 2026-06-08 (piloted capitals can now toggle their autonomous weapons)
+- **Problem: a player piloting a capital could only fire the FORWARD primary
+  (the FIRE button → `c.firing`). Every other weapon group — broadside, heavy
+  laser, missile pods, torpedoes, ring cannons, PD — fires autonomously from
+  `updateShip` with NO controller input, so the pilot had zero control over
+  them (and for a broadside-primary capital the FIRE button did nothing at all).
+- **Fix = per-group AUTO/HOLD toggles for the piloted ship.** New
+  `ship.weaponAuto` (null by default) + `weaponAutoOn(ship, group)` export in
+  ship.js; each autonomous fire call is now gated `if (s.X && weaponAutoOn(ship,
+  "key")) update…`. GOTCHA: null → all groups fire, so AI ships and the player's
+  default are UNCHANGED — the gate only bites once the HUD sets a key false.
+  Forward guns are deliberately NOT gated (they stay on the FIRE button).
+- **HUD weapons panel** (hud.js `_syncWeaponsPanel`, `.weapons-panel` CSS left
+  of the action cluster): shown only when piloting a ship that mounts ≥1
+  autonomous group; one button per present group (BROAD/LASER/MSL/TORP/RING/PD),
+  tap to flip AUTO↔HOLD (green↔red). GOTCHA: buttons are rebuilt only when a
+  signature (`ship.id|groupKeys`) changes — per-frame innerHTML churn would drop
+  pressed styling; state labels re-sync every frame. Toggle handlers re-resolve
+  the live player ship at click time (it can change via TAKE COMMAND / death),
+  never close over a stale ref. `WEAPON_GROUPS[].key` MUST match
+  ship.js#weaponAutoOn's group strings.
+- Group keys: broadside | laser | pods | torpedo | ring | pd. A fighter/bomber
+  with no autonomous group shows no panel (zero regression for the common case);
+  a carrier (3 light pods) / custom capital shows the relevant toggles.
+- Verified headless (pods 6→0, pd 10→0 when held, others keep firing) + in
+  browser (test-flew a custom BB → panel shows BROAD/MSL/PD; tapping PD flips it
+  to HOLD/red and PD fire goes 13→0; re-enabling restores it).
+
+### 2026-06-08 (custom-module library save is now touch-reliable)
+- **The custom-module library (save a tuned module → reuse it across ships)
+  already existed end-to-end** (`custommodules/{format,store}.js` + the Ship
+  Editor palette LIBRARY section + `instantiateLibraryModule` on place +
+  `customModules: []` in DEFAULT_SAVE). The round-trip works: save copies the
+  module's tuned stats/projectile, place stamps a `refId`'d copy by value.
+- **BUG it had: SAVE TO LIBRARY named the record via `window.prompt`**, which
+  the touch-first Capacitor webview can block → a null return hit the
+  `if (!name) return` and silently aborted, so on a phone "saving a custom
+  module" appeared dead. Fix: the panel already has an inline NAME `<input>`
+  (sets `m.name`); SAVE TO LIBRARY now uses that directly, and AUTO-NAMES
+  (`<Label> <shortid>`, reflected back into the field) when blank — no modal
+  dialog, so the save always lands. (The separate ship-IMPORT prompt at
+  `_doImport` keeps window.prompt as a clipboard-read fallback — different flow.)
+- Verified in-browser at 414px: SAVE fires 0 prompt dialogs even when dialogs
+  are dismissed (simulating the touch block); a named module and an auto-named
+  one both persist + appear in the palette; placing a library module adds it to
+  the draft with stats intact. Headless round-trip (save→list→instantiate→
+  compile→createShip) preserves damage/range/projectile color.
+
+### 2026-06-08 (removed the top-left "DEV ▸" FAB)
+- **Deleted the on-screen `#dev-fab` launcher** (`.dev-fab` top-left button +
+  `_ensureDevFab`/`_updateDevFab` + all call sites + CSS). Dev access path now:
+  toggle Dev Mode in Settings → `applyDevMode(true)` already calls
+  `_ensureDevOverlay().show()`, so the overlay surfaces directly; desktop keeps
+  the `~` key. GOTCHA (changed behaviour): the FAB used to be the only way to
+  RE-open the overlay after hiding it on touch (no keyboard `~`) — now hiding
+  the overlay on mobile means re-opening it requires toggling Settings Dev Mode
+  off→on. Acceptable per the removal request; the designers/sim-controls still
+  live in the overlay, and the Ship Editor is unaffected (it opens from the
+  dev-gated MORE-panel row via `events.emit("dev:openShipEditor")`).
+
+### 2026-06-08 (fix: test-flown custom ships had weapons/PD/shields WIPED)
+- **ROOT CAUSE of "test-fly a custom ship and its weapons, PD and shields don't
+  work": `createShip` ran `applyDesign(spec, design)` on the custom ship, and
+  applyDesign re-stamps the STOCK component loadout for `HULLS[design.hull]` over
+  the spec.** Test-fly sets `design.hull = <tier>` purely so promotePlayer spawns
+  the right klass (game.js reads `design.hull`), but every standard tier
+  (fighter→carrier) HAS a HULLS entry → applyDesign fired and overwrote the
+  authored `weapon`/`pdCannons`/`shield` with stock defaults. Smoking gun: a
+  custom battleship's `spec.pdCannons` was clobbered to `false` (PD never fired)
+  and `weapon.damage` became the stock 50 instead of the authored value.
+- **The custom-AI work (2026-06-07 `customCapitalAI`) was correct all along** —
+  it just had no weapons to fire because the SPEC had been gutted before the AI
+  ever ran. The autonomous fire paths (PD/laser/pods/ring) gate on `spec.X`
+  presence, so a wiped spec = silent no-op, not a crash.
+- **Fix = one guard: `if (design && !moduleList) applyDesign(...)`** (ship.js).
+  A custom ship (`moduleList` present) has a COMPLETE self-contained spec from
+  its compiled `specOverride`; applyDesign can only damage it. `design.hullPoly`
+  + `design.paint` are read directly from `design` elsewhere in createShip
+  regardless, so skipping applyDesign loses nothing. GOTCHA: only `mothership`/
+  `station` custom ships escaped the bug before (no HULLS entry) — which is why
+  it looked like "the AI works on some ships but not others." Normal shipyard
+  ships (moduleList null) still run applyDesign — no regression.
+- Verified headless: a custom battleship/cruiser/fighter spawned via the
+  test-fly path retains weapon/PD/shield/laser/pods, and a real `update()` sim
+  confirms each system actually FIRES under AI (PD screens, forward guns track,
+  laser beams, pods launch) with a live regenerating shield, 0 throws. Custom
+  fighter/bomber tiers route through flybyAI (class-inherited movement); capital
+  tiers through customCapitalAI — both now have an intact spec to act on.
+
+### 2026-06-07 (fix: AI-driven custom ships didn't fire their weapons)
+- **The stock per-class AIs hardcode their tier's loadout** (battleshipAI fires
+  ONLY broadsides via `c.firing=false`; frigateAI only ring cannons; the
+  `mothership` tier had NO class AI at all → `c.aim=null`, never moved/aimed/
+  fired). A free-form custom ship mounts ANY weapon mix on ANY tier, so an
+  AI-driven custom battleship with a bow cannon never fired it, and a mothership
+  just sat inert. (PD/broadside/ring/laser/missile-pods were never the bug —
+  they self-target + fire from `updateShip` regardless of the controller; only
+  FORWARD guns need a `c.firing`/`c.aim` flag from the AI, which is what was
+  missing.)
+- **Fix = a capability-based `ai.js#customCapitalAI`**, routed via
+  `usesCustomCapitalAI(ship)` (true for `mothership` OR any `ship.isCustom`
+  capital tier — frigate/cruiser/battleship/carrier/station/mothership). It
+  reads the ship's ACTUAL weapons (`ship.weapons` firingMode, missilePods,
+  heavyLaser, ringCannons) instead of assuming the tier: picks a target
+  (`pickCustomTarget` — capital-grade ordnance prefers the largest enemy, light
+  guns take the nearest; PD handles strike craft itself), orients by primary
+  `spec.firingMode` (forward → nose-on cruiser approach; broadside → orbit
+  beam-on; ring/none → perpendicular strafe), and sets the forward-gun
+  `c.firing` flag on alignment+range. Dispatched at the TOP of `updateAI`
+  (before the carrier/station early-returns) so a custom carrier/station also
+  routes here, with `applyShipOrders` called at the end so blue custom capitals
+  still obey admiral STANCE directives.
+- **`ship.isCustom = !!moduleList`** is the new flag (set in createShip on the
+  custom compile path). Small-craft custom ships (fighter/bomber) deliberately
+  KEEP flybyAI — it already drives forward guns + dogfights; routing them
+  through the capital AI would lose the flyby feel.
+- GOTCHA — the autonomous-weapon target priority the user asked about ALREADY
+  exists per-module: `pickPDTarget` = missiles → bombers → fighters → any;
+  ring/broadside pick nearest-in-arc; `pickCustomTarget`/`pickBattleshipTarget`
+  rank capitals first. No new per-module framework was needed beyond making the
+  AI capability-aware so those existing systems actually engage.
+- **Range + ARC awareness.** Autonomous weapons each already gate on their own
+  arc+range (broadside `s.broadsideArc`, ring `rc.arc`, laser forward-arc, pods
+  `acquireRange`). customCapitalAI's standoff/orbit radius derives from
+  `customEngageRange` (widest weapon range), and the forward-gun firing flag
+  gates on the WIDEST forward range + authored `arc` (default ~26° when a gun
+  declares none) — each forward mount still re-applies its OWN `arc` in
+  fireForwardWeapon, so a wide-arc gun fires off-axis while a narrow one is
+  trimmed precisely. GOTCHA: heavy lasers fire in a FORWARD arc off ship.heading
+  (like forward guns, NOT omnidirectional), so a laser-primary custom ship
+  (firingMode "none" + heavyLaser) is steered nose-on, not perpendicular-strafe,
+  or the beam arc would never bear.
+
+### 2026-06-07 (first-class authorable defence platforms = station-tier custom "structures")
+- **KEY INSIGHT: a `station`-tier customShip already IS a full multi-mount,
+  real-beam, module-placed, destructible-cell platform** — `updateShip` runs
+  every autonomous subsystem (PD/ring/laser/missile/broadside) for a station
+  klass, movement is skipped (`maxSpeed 0`), and `customCapitalAI`'s immobile
+  branch aims it. So "authorable platforms" needed almost NO new engine code —
+  just glue to place an authored station ship on a map as a static emplacement.
+  The legacy `game.platforms[]` hex turrets (4 hardcoded types) are kept
+  alongside (now with working PD) — they're the SIMPLE system; structures are
+  the authorable one.
+- **A "structure" is a station customShip spawned into `game.ships`** (NOT
+  game.platforms) with `createShip({..., structure:true})`. Reusing game.ships
+  means the whole weapon/module/beam/cell/damage pipeline + real beams
+  (`applyAndAgeBeams` resolves the owner from game.ships) work UNCHANGED.
+  `ship.structure` + `ship.neverSurrender` are the only new ship fields.
+- **GOTCHA — match-end excludes structures** (`!s.structure` in both the
+  `blueAlive`/`redAlive` checks, game.js): a side left with only immobile
+  structures is treated as eliminated, mirroring the legacy platforms (separate
+  array, never counted) so an immobile-vs-immobile match still RESOLVES instead
+  of stalling. The structure keeps firing until destroyed; it just doesn't keep
+  its side "alive". (Defend mode still counts klass "station" incl. structures
+  as a node objective — intended: a defence platform is what you'd defend.)
+- **Placement rides the map's `platforms[]` array** as a second entry kind:
+  `{kind:"customStructure", side, x, y, ship:<customShip doc INLINE>}` vs the
+  legacy `{platformId, faction, x, y}`. `spawnMapPlatforms` (game.js) branches:
+  customStructure → `spawnCustomStructure` (validateCustomShip → compile →
+  createShip structure:true → game.ships, try/catch so one bad doc can't abort
+  spawn); legacy → createPlatform → game.platforms. The ship doc is stamped
+  INLINE so a map is self-contained (no play-time dependency on the device's
+  saved customShips).
+- **Map Designer PLATFORM tool** (`dev/map-designer.js`): dropdown unions the 4
+  built-in hex types with saved station-tier customShips (`listCustomShips()`,
+  `cs:<id>` option values, refreshed each `_syncAll`); placing a `cs:` type
+  stamps the inline doc. **Pre-existing bug fixed here**: `_setTool` coerced
+  every non-select tool to ASTEROID, so the PLATFORM tool could NEVER activate
+  — platform placement via the designer was dead until now.
+- **Station tier turnRate 0.06 → 0.6** (`customships/compile.js#TIER_BASE`): a
+  near-frozen hull couldn't slew a forward gun / broadside flank onto a shifting
+  threat. Only affects station-tier custom ships (TIER_BASE is compile-only).
+  customCapitalAI's immobile branch now presents the FLANK for a broadside
+  primary, else faces the lead (PD/ring aim independently of the hull anyway).
+
+### 2026-06-07 (fix: defence-platform PD was declared but never fired)
+- **Platforms are a SEPARATE entity from ships** (`platforms/entity.js`,
+  `updatePlatform` — NOT createShip/updateShip/updateAI), so the customCapitalAI
+  work above does NOT touch them. They're a single-mount, self-targeting,
+  range-aware turret (nearest enemy in `weapon.range`, lead-aim, 360° — no arc
+  gate, no multi-module system). That part already worked.
+- **BUG: the `pdCannons` on `turret-bastion` (count 4) + `beam-fortress`
+  (count 2) never fired.** The spec declared them, `createPlatform` allocated a
+  `pdCooldown`, the registry blurbs said "PD ring", and the Platform Designer
+  even shows a "PD turrets" stat — but `updatePlatform` only ever fired
+  `spec.weapon`. So a missile-platform's salvos sailed past a turret-bastion
+  untouched.
+- **Fix: `updatePlatformPD` + `pickPlatformPDTarget`** in entity.js, run every
+  tick INDEPENDENTLY of the main gun (a weaponless PD platform would still
+  screen). Same priority as ship PD (`pickPDTarget`): enemy missiles → bombers
+  → fighters → any enemy in range. The ring's `count` turrets are collapsed into
+  one stream at `cooldown / count` (platforms have no per-turret positions, so
+  no per-turret bookkeeping — just the right volume). Rounds are stamped
+  `fromKlass:"pd"` so the existing PD-vs-ship damage nerf + telemetry apply.
+  GOTCHA: the main-weapon early-return `if (!p.spec.weapon) return` now sits
+  AFTER the PD pass so a PD-only / weaponless platform still defends.
+
 ### 2026-06-07 (Free-Form Custom Ship Editor — dev-gated authoring + test-fly)
 - **A free-form `customShip` doc (src/customships/format.js) is lowered by a
   pure `compileCustomShip` (compile.js) into createShip's existing shape

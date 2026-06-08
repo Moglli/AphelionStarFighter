@@ -42,7 +42,12 @@ const TIER_BASE = {
   cruiser:    { radius: 106, maxSpeed: 80,  accel: 130, drag: 0.992, turnRate: 0.4,  color: "#aaf" },
   battleship: { radius: 184, maxSpeed: 35,  accel: 50,  drag: 0.994, turnRate: 0.15, color: "#88f" },
   carrier:    { radius: 208, maxSpeed: 45,  accel: 60,  drag: 0.994, turnRate: 0.18, color: "#9bf" },
-  station:    { radius: 80,  maxSpeed: 0,   accel: 0,   drag: 1,     turnRate: 0.06, color: "#9bf" },
+  // turnRate is the HULL slew (not movement — station is maxSpeed 0). Bumped
+  // from a near-frozen 0.06 to 0.6 so a station-tier ship used as a defence
+  // STRUCTURE can actually traverse to bring forward guns / broadside flanks
+  // onto a shifting threat axis (PD turrets + ring mounts aim independently of
+  // the hull, so they never needed it; forward/broadside do). ~5s per 180°.
+  station:    { radius: 80,  maxSpeed: 0,   accel: 0,   drag: 1,     turnRate: 0.6,  color: "#9bf" },
   mothership: { radius: 360, maxSpeed: 28,  accel: 40,  drag: 0.995, turnRate: 0.10, color: "#8af" },
 };
 

@@ -144,9 +144,6 @@ function applyDevMode(on) {
   // new value), then persist.
   setDev(on);
   saveStore.update((d) => { d.settings.devMode = !!on; });
-  // Reflect the flag in the on-screen launcher — the only way to reach the
-  // overlay on touch devices (no keyboard `~`).
-  _updateDevFab();
   if (on) {
     // Surface the tool routes immediately so flipping the toggle has a
     // visible effect (the overlay holds the designer + sim buttons).
@@ -175,28 +172,6 @@ function _ensureDevOverlay() {
     openPlatformDesigner: () => _ensurePlatformDesigner().show(),
   });
   return _devOverlay;
-}
-
-// On-screen launcher button. Dev Mode is togglable via the `~` key on
-// desktop, but Starfighter is touch-first (Capacitor) with no keyboard —
-// so whenever Dev Mode is on we show a tappable DEV button that toggles
-// the overlay (which holds the designer + sim-control routes). Without
-// this the dev features are unreachable on a phone.
-let _devFab = null;
-function _ensureDevFab() {
-  if (_devFab) return _devFab;
-  const b = document.createElement("button");
-  b.id = "dev-fab";
-  b.className = "dev-fab hidden";
-  b.textContent = "DEV ▸";
-  b.title = "Dev Tools";
-  b.addEventListener("click", () => _ensureDevOverlay().toggle());
-  document.body.appendChild(b);
-  _devFab = b;
-  return _devFab;
-}
-function _updateDevFab() {
-  _ensureDevFab().classList.toggle("hidden", !isDev());
 }
 
 // Battle Designer — lazy mounted from the dev overlay's button or from
@@ -414,10 +389,6 @@ input.startMenu.setSettings(
     if (typeof patch.devMode === "boolean") applyDevMode(patch.devMode);
   },
 );
-
-// Reflect a persisted Dev Mode flag in the on-screen launcher at boot, so
-// a player who enabled it in a previous session can reach the tools.
-_updateDevFab();
 
 // SFX routing: gameplay code emits weaponFired / hit / shipDestroyed
 // events with world-space positions; the camera-attenuated distance
@@ -1314,15 +1285,35 @@ function frame(now) {
     // so dropping the redundant `|| game.admiralMode` keeps zoom, pan, tap, and
     // the draw() camera pick — all gated on spectating — from diverging).
     if (game.spectating) {
-      const dz = input.consumePinchDelta();
-      if (dz !== 0) {
-        zoom *= (1 + dz);
-        if (zoom < MIN_ZOOM) zoom = MIN_ZOOM;
-        else if (zoom > MAX_ZOOM) zoom = MAX_ZOOM;
+      // Pinch / wheel zoom, applied ABOUT the gesture's focal point (the finger
+      // midpoint or the cursor) so the world under the fingers stays put — the
+      // old code always zoomed toward screen-centre, which felt like the map
+      // sliding away under a pinch. When the camera is locked on a ship the
+      // focal point is forced to screen-centre (= the ship), so a zoom keeps the
+      // lock instead of drifting off it.
+      const zg = input.consumeCamZoom();
+      if (zg) {
+        const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * zg.factor));
+        if (newZoom !== zoom) {
+          const cam = game.spectateCamera;
+          if (cam && !cam.locked) {
+            const fx = zg.fx - viewW / 2;
+            const fy = zg.fy - viewH / 2;
+            // World point currently under the focal pixel; keep it fixed.
+            const worldFx = cam.x + fx / zoom;
+            const worldFy = cam.y + fy / zoom;
+            cam.x = worldFx - fx / newZoom;
+            cam.y = worldFy - fy / newZoom;
+            const b = game.arena.bounds;
+            if (cam.x < b.minX) cam.x = b.minX; else if (cam.x > b.maxX) cam.x = b.maxX;
+            if (cam.y < b.minY) cam.y = b.minY; else if (cam.y > b.maxY) cam.y = b.maxY;
+          }
+          zoom = newZoom;
+        }
       }
     } else if (zoom !== DEFAULT_ZOOM) {
       zoom = DEFAULT_ZOOM;
-      input.consumePinchDelta(); // drop any pending input
+      input.consumeCamZoom(); // drop any pending input
     }
 
     if (game.spectating) {
@@ -1341,7 +1332,7 @@ function frame(now) {
       // and accumulates screen-pixel deltas. Drag direction matches
       // map UX — grab the world and pull, so a rightward drag shifts
       // the camera LEFT (subtract).
-      const dragPan = input.consumePanDelta();
+      const dragPan = input.consumeCamPan();
       if (dragPan) {
         panX -= dragPan.x / zoom;
         panY -= dragPan.y / zoom;

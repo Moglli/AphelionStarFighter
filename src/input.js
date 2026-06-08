@@ -4165,6 +4165,129 @@ export class StartMenu {
   }
 }
 
+// ---------------------------------------------------------------------------
+// CameraGestures — spectate/admiral touch + zoom camera control (rebuilt).
+//
+// The prior implementation scattered tap/pan/pinch state across the pointer
+// handlers (_tapCandidate / _panDrag / _touches / _pinchPrevDist / two pending
+// accumulators) with many interacting edge cases (focal drift, baseline
+// re-seed on 3→2 fingers, pinch-also-pans, single-slot tap clobber). This is
+// one cohesive tracker that derives the gesture purely from the live pointer
+// set, so there is a single source of truth:
+//   • 1 pointer, still + quick   → TAP   (select ship / focus-fire)
+//   • 1 pointer, dragged         → PAN   (grab-the-world, 1:1 in screen px)
+//   • 2 pointers                 → PINCH (zoom about the finger midpoint) plus
+//                                  a two-finger PAN from midpoint translation
+// It emits per-frame outputs the game loop consumes: pan (screen px), zoom
+// (cumulative factor + focal point in screen px), and a committed tap (screen
+// px). Mouse unifies through the same path: left-drag pans, wheel zooms about
+// the cursor (fed via wheel()). All sensitivities mirror the old values:
+// 8px tap-slop, 400ms tap window, 1:1 pan, raw distance-ratio pinch.
+// ---------------------------------------------------------------------------
+const CAM_TAP_MOVE2 = 64;   // (8px)^2 — drag past this and a tap becomes a pan
+const CAM_TAP_MS = 400;     // a still press shorter than this commits a tap
+
+export class CameraGestures {
+  constructor() { this.reset(); }
+  reset() {
+    this._pts = new Map();   // pointerId -> { x, y, sx, sy, st }
+    this._tapId = null;      // the lone pointer still eligible to become a tap
+    this._panId = null;      // the lone pointer currently driving a 1-finger pan
+    this._prevDist = 0;      // pinch baseline: inter-finger distance
+    this._prevMid = null;    // pinch baseline: finger midpoint (screen px)
+    this._panOut = null;     // accumulated pan {x,y} (screen px) awaiting consume
+    this._zoomOut = null;    // accumulated zoom {factor, fx, fy} awaiting consume
+    this._tapOut = null;     // committed tap {x,y} (screen px) awaiting consume
+  }
+  has(id) { return this._pts.has(id); }
+
+  down(id, x, y, now) {
+    this._pts.set(id, { x, y, sx: x, sy: y, st: now });
+    if (this._pts.size === 1) {
+      this._tapId = id; this._panId = null;
+    } else {
+      // A 2nd finger means PINCH, not pan/tap: cancel any pending 1-finger
+      // gesture so the camera never pans-and-zooms (or taps) at once.
+      this._tapId = null; this._panId = null;
+      this._reseedPinch();
+    }
+  }
+
+  move(id, x, y) {
+    const p = this._pts.get(id);
+    if (!p) return;
+    const px = p.x, py = p.y;   // previous position (for the 1:1 pan delta)
+    p.x = x; p.y = y;
+    if (this._pts.size >= 2) {
+      // PINCH: zoom from the distance ratio about the midpoint + a two-finger
+      // pan from however the midpoint itself translated.
+      const dist = this._dist();
+      const mid = this._mid();
+      if (this._prevDist > 0 && dist > 0) this._accZoom(dist / this._prevDist, mid.x, mid.y);
+      if (this._prevMid) this._accPan(mid.x - this._prevMid.x, mid.y - this._prevMid.y);
+      this._prevDist = dist; this._prevMid = mid;
+      return;
+    }
+    if (this._panId === id) {
+      this._accPan(x - px, y - py);
+    } else if (this._tapId === id) {
+      const dx = x - p.sx, dy = y - p.sy;
+      if (dx * dx + dy * dy > CAM_TAP_MOVE2) {
+        // Promote tap → pan. Seed the first pan delta from the LAST move (not
+        // the start) so the world doesn't lurch by the whole slop distance.
+        this._panId = id; this._tapId = null;
+        this._accPan(x - px, y - py);
+      }
+    }
+  }
+
+  up(id, now) {
+    const p = this._pts.get(id);
+    if (!p) return;
+    this._pts.delete(id);
+    // Commit a tap only if THIS pointer stayed still, was quick, and was never
+    // promoted to a pan (mid-pinch lifts have _tapId null, so never tap).
+    if (this._tapId === id && (now - p.st) < CAM_TAP_MS) this._tapOut = { x: p.x, y: p.y };
+    if (this._tapId === id) this._tapId = null;
+    if (this._panId === id) this._panId = null;
+    const n = this._pts.size;
+    if (n >= 2) {
+      this._reseedPinch();                 // surviving pair → fresh baseline, no snap
+    } else if (n === 1) {
+      // Dropped from pinch to one finger: continue as a 1-finger pan with the
+      // survivor so the gesture flows on with no jump and no stray tap.
+      this._panId = this._pts.keys().next().value; this._tapId = null;
+      this._prevMid = null; this._prevDist = 0;
+    } else {
+      this._prevMid = null; this._prevDist = 0;
+    }
+  }
+
+  // Mouse wheel → zoom about the cursor. factor > 1 zooms in.
+  wheel(factor, x, y) { this._accZoom(factor, x, y); }
+
+  consumePan()  { const o = this._panOut;  this._panOut = null;  return o; }
+  consumeZoom() { const o = this._zoomOut; this._zoomOut = null; return o; }
+  consumeTap()  { const o = this._tapOut;  this._tapOut = null;  return o; }
+
+  _accPan(dx, dy) {
+    if (dx === 0 && dy === 0) return;
+    this._panOut = this._panOut || { x: 0, y: 0 };
+    this._panOut.x += dx; this._panOut.y += dy;
+  }
+  _accZoom(factor, fx, fy) {
+    if (!(factor > 0) || factor === 1) return;
+    // Compose multiple zoom events in a frame (multiply); keep the latest focus.
+    this._zoomOut = this._zoomOut || { factor: 1, fx, fy };
+    this._zoomOut.factor *= factor;
+    this._zoomOut.fx = fx; this._zoomOut.fy = fy;
+  }
+  _reseedPinch() { this._prevDist = this._dist(); this._prevMid = this._mid(); }
+  _twoOldest() { const it = this._pts.values(); return [it.next().value, it.next().value]; }
+  _dist() { const [a, b] = this._twoOldest(); return (a && b) ? Math.hypot(a.x - b.x, a.y - b.y) : 0; }
+  _mid()  { const [a, b] = this._twoOldest(); return (a && b) ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null; }
+}
+
 export class InputManager {
   constructor(canvas) {
     this.canvas = canvas;
@@ -4189,14 +4312,14 @@ export class InputManager {
     // expand rows), so advancing past it is an explicit button press
     // instead of the old tap-anywhere-to-dismiss.
     this.matchAdvanceRequested = false;
-    // Tap-to-select state. main.js flips `selectActive` when the camera
-    // is in spectate or admiral (no piloted ship → the right stick is
-    // hidden so its real estate becomes a select zone). _tapCandidate
-    // records a pointer that hasn't yet been claimed by a button/stick;
-    // onMove cancels it past an 8 px threshold, onUp commits it.
+    // Spectate/admiral camera gestures. main.js flips `selectActive` true when
+    // the camera is in spectate or admiral (no piloted ship → both virtual
+    // sticks are hidden so their real estate becomes the gesture surface). All
+    // pan / pinch-zoom / tap-to-select handling lives in CameraGestures; the
+    // pointer handlers below just route unclaimed pointers into it while
+    // selectActive, and the game loop drains it via consumeCam*/consumeTap.
     this.selectActive = false;
-    this._tapCandidate = null;   // { id, x, y, t }
-    this._pendingTap = null;     // canvas coords waiting for consumeTap()
+    this.cam = new CameraGestures();
     this._battleHUD = null;
     this.startMenu = new StartMenu();
     this.menuActive = false;
@@ -4207,16 +4330,6 @@ export class InputManager {
     this.mouseDown = false;
     this.mouseRightDown = false;
     this._rightClickEdge = false;
-
-    // Multi-touch tracking for pinch zoom. We log every live touch
-    // pointer (any pointerType==="touch") so we can detect 2+ active
-    // fingers regardless of whether they were claimed by sticks. When
-    // two touches are active the per-move handler emits a scalar
-    // pendingZoomDelta that the game loop consumes each frame in
-    // spectator / admiral mode.
-    this._touches = new Map();        // pointerId -> {x, y}
-    this._pinchPrevDist = null;
-    this._pendingZoomDelta = 0;       // accumulates frame-to-frame
 
     // Latches for edge-triggered keys.
     this._enterLatched = false;
@@ -4243,17 +4356,16 @@ export class InputManager {
       if (e.pointerType !== "touch") this.mouseInside = false;
     });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-    // Scroll-wheel zoom is the desktop equivalent of pinch. Negative
-    // deltaY (wheel up) zooms in; we normalise by 500 so a typical
-    // 100px wheel notch becomes a +0.2 zoom delta.
+    // Scroll-wheel zoom is the desktop equivalent of pinch, zooming about the
+    // cursor. Only spectate / admiral consume zoom; gating on selectActive
+    // means nothing accumulates while piloting / in menus (no backlog to dump
+    // as a jump on the first spectate frame). exp() keeps the factor positive
+    // and symmetric; /500 matches the old ~0.2-per-notch sensitivity.
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      // Only spectate / admiral consume zoom (main.js gates the apply on
-      // game.spectating). Accumulating while piloting or in the menu — where
-      // nothing drains it — builds a backlog that dumps as one big jump on
-      // the first spectate frame. selectActive is true exactly when zoom is live.
       if (!this.selectActive) return;
-      this._pendingZoomDelta += -e.deltaY / 500;
+      const { x, y } = this.pos(e);
+      this.cam.wheel(Math.exp(-e.deltaY / 500), x, y);
     }, { passive: false });
     canvas.style.touchAction = "none";
 
@@ -4285,23 +4397,15 @@ export class InputManager {
     this.mouseDown = false;
     this.mouseRightDown = false;
     this._rightClickEdge = false;
-    this._tapCandidate = null;
-    this._pendingTap = null;
     this.clearCameraGestures();
   }
 
-  // Clear the spectate/admiral camera-gesture accumulators. Called on match
-  // start (resetForNewMatch) and on spectate/admiral toggles so a pan or
-  // pinch interrupted mid-gesture — or a wheel/pinch backlog — can't jolt the
-  // camera on the next spectate entry. resetForNewMatch already clears
-  // _tapCandidate / _pendingTap; this covers the pan + pinch + zoom side that
-  // was previously left to leak across matches and spectate↔pilot toggles.
+  // Clear the spectate/admiral camera gestures. Called on match start
+  // (resetForNewMatch) and on every spectate/admiral toggle so a pan or pinch
+  // interrupted mid-gesture — or a pending tap/zoom — can't jolt the camera on
+  // the next spectate entry, and never leaks across matches or pilot↔spectate.
   clearCameraGestures() {
-    this._panDrag = null;
-    this._pendingPanDelta = null;
-    this._pendingZoomDelta = 0;
-    this._touches.clear();
-    this._pinchPrevDist = null;
+    this.cam.reset();
   }
 
   // Called from main.js#resize() on first paint and on every window
@@ -4326,24 +4430,10 @@ export class InputManager {
     e.preventDefault();
     const { x, y } = this.pos(e);
     // Mouse-tracking layer only listens to real mouse pointers — touch
-    // events route exclusively through the virtual sticks and on-screen
-    // action buttons.
+    // events route exclusively through the virtual sticks, on-screen action
+    // buttons, and (in spectate/admiral) the CameraGestures tracker.
     if (e.pointerType !== "touch") {
       this.mouse.x = x; this.mouse.y = y; this.mouseInside = true;
-    } else {
-      // Track every touch pointer for pinch detection. A second active
-      // touch seeds the pinch baseline distance; the per-move handler
-      // emits a zoom delta from changes to that distance.
-      this._touches.set(e.pointerId, { x, y });
-      if (this._touches.size === 2) {
-        this._pinchPrevDist = this._touchDistance();
-        // A 2nd finger means PINCH-ZOOM, not pan. Cancel any in-progress
-        // 1-finger pan/tap so the camera doesn't pan AND zoom at once, and
-        // so this 2nd finger can't clobber the single tap-candidate slot.
-        this._panDrag = null;
-        this._tapCandidate = null;
-        this._pendingPanDelta = null;
-      }
     }
 
     // Pre-match menu: route the click to size-selection and swallow
@@ -4394,22 +4484,15 @@ export class InputManager {
     if (e.pointerType === "touch") {
       this.canvas.setPointerCapture(e.pointerId);
       const w = this.canvas.clientWidth;
-      // BOTH sticks are gated on !selectActive now. In spectate/admiral the
-      // left stick used to claim the whole left half for a velocity pan,
-      // while the right half did 1:1 grab-pan — two different pan feels, and
-      // left-half ships couldn't be tapped. Gating the left stick too routes
-      // every spectate touch through the unified tap/grab-pan path below.
-      // (Desktop keeps continuous WASD pan via the keyboard thrust source.)
-      if (!this.selectActive && this.left.claims(x, w) && this.left.pointerId === null) {
+      // In spectate/admiral (selectActive) BOTH virtual sticks are hidden, so
+      // every unclaimed touch is a camera gesture — route it to CameraGestures
+      // (pan / pinch-zoom / tap). While piloting, the sticks own their halves.
+      if (this.selectActive) {
+        this.cam.down(e.pointerId, x, y, performance.now());
+      } else if (this.left.claims(x, w) && this.left.pointerId === null) {
         this.left.start(e.pointerId, x, y);
-      } else if (!this.selectActive && this.right.claims(x, w) && this.right.pointerId === null) {
-        // Right stick only activates while piloting. In spectate /
-        // admiral the right half is a tap-to-select zone instead.
+      } else if (this.right.claims(x, w) && this.right.pointerId === null) {
         this.right.start(e.pointerId, x, y);
-      } else if (this.selectActive && this._touches.size < 2 && !this._tapCandidate) {
-        // Single tap-candidate slot: only the FIRST finger seeds it, and
-        // never during a pinch (size >= 2), so a 2nd finger can't clobber it.
-        this._tapCandidate = { id: e.pointerId, x, y, t: performance.now() };
       }
     } else {
       if (e.button === 2) {
@@ -4417,93 +4500,31 @@ export class InputManager {
         this._rightClickEdge = true; // edge for missile fire
       } else {
         this.mouseDown = true;
-        // Mouse left-click on the canvas is a tap candidate. The
-        // existing onDown returned at every HUD/stick hit above, so
-        // by the time we get here the click missed everything.
-        this._tapCandidate = { id: e.pointerId, x, y, t: performance.now() };
+        // Mouse left-button on the canvas drives the same camera gestures in
+        // spectate/admiral (drag = pan, click = tap-select; wheel = zoom).
+        if (this.selectActive) this.cam.down(e.pointerId, x, y, performance.now());
       }
-    }
-    // In spectate / admiral, ANY pointer-down that didn't claim a HUD
-    // button or vstick is also a potential pan-drag origin. If the
-    // pointer wanders past the tap threshold, onMove will promote it
-    // from "tap" to "pan" and start accumulating per-move deltas that
-    // main.js drains via consumePanDelta() to slide the camera.
-    if (this.selectActive && this._tapCandidate && this._tapCandidate.id === e.pointerId) {
-      this._tapCandidate.lastX = x;
-      this._tapCandidate.lastY = y;
     }
   }
   onMove(e) {
     const { x, y } = this.pos(e);
     if (e.pointerType !== "touch") {
       this.mouse.x = x; this.mouse.y = y;
-    } else if (this._touches.has(e.pointerId)) {
-      // Update the tracked touch position; if two fingers are down,
-      // emit a zoom delta from the change in inter-finger distance.
-      const t = this._touches.get(e.pointerId);
-      t.x = x; t.y = y;
-      if (this._touches.size === 2) {
-        const newDist = this._touchDistance();
-        if (this._pinchPrevDist && newDist > 0) {
-          this._pendingZoomDelta += (newDist / this._pinchPrevDist) - 1;
-        }
-        this._pinchPrevDist = newDist;
-      }
     }
     // Pre-match menu owns the pointer while open — sliders inside the
-    // Custom Match overlay need move events to drag. Returns false
-    // when nothing is being dragged so we don't swallow stick input
-    // (which can't reach this branch anyway, since menu is exclusive).
+    // Custom Match overlay need move events to drag.
     if (this.menuActive) {
       this.startMenu.pointerMove(x, y);
       return;
     }
+    // Sticks (piloting) and the camera gesture tracker (spectate/admiral) are
+    // mutually exclusive per pointer — onDown routed this pointer to exactly
+    // one of them. The CameraGestures tracker derives pan/pinch/tap itself.
     if (this.left.pointerId === e.pointerId) this.left.move(x, y);
     else if (this.right.pointerId === e.pointerId) this.right.move(x, y);
-    // Pan-drag promotion: when in spectate / admiral and the pointer
-    // wanders past the tap threshold, switch the gesture from "tap to
-    // select" to "drag to pan". Per-move screen-pixel deltas accumulate
-    // into `_pendingPanDelta` for main.js to consume next frame.
-    // Pan accumulation + promotion are gated on single-touch: while two
-    // fingers are down the gesture is a PINCH-ZOOM, so it must not also pan
-    // (focal-point drift). Mouse leaves _touches empty (size 0), so desktop
-    // grab-pan is unaffected.
-    if (this._panDrag && this._panDrag.id === e.pointerId && this._touches.size < 2) {
-      this._pendingPanDelta = this._pendingPanDelta || { x: 0, y: 0 };
-      this._pendingPanDelta.x += x - this._panDrag.lastX;
-      this._pendingPanDelta.y += y - this._panDrag.lastY;
-      this._panDrag.lastX = x;
-      this._panDrag.lastY = y;
-    } else if (this._tapCandidate && this._tapCandidate.id === e.pointerId) {
-      const dx = x - this._tapCandidate.x;
-      const dy = y - this._tapCandidate.y;
-      if (dx * dx + dy * dy > 64) {
-        // Threshold breached. In spectate / admiral (and only with a single
-        // touch), promote to pan drag instead of just dropping the tap.
-        if (this.selectActive && this._touches.size < 2) {
-          this._panDrag = { id: e.pointerId, lastX: x, lastY: y };
-        }
-        this._tapCandidate = null;
-      }
-    }
+    else if (this.cam.has(e.pointerId)) this.cam.move(e.pointerId, x, y);
   }
   onUp(e) {
-    if (e.pointerType === "touch" && this._touches.has(e.pointerId)) {
-      this._touches.delete(e.pointerId);
-      // Less than two fingers — drop the pinch baseline so the next
-      // two-finger gesture starts fresh instead of jumping.
-      if (this._touches.size < 2) {
-        this._pinchPrevDist = null;
-      } else if (this._touches.size === 2) {
-        // Dropping FROM 3+ fingers down TO exactly two: the baseline
-        // was captured against a different finger pair (or frozen while
-        // 3+ were down, since the zoom branch is gated on size===2 and
-        // never re-seeds above it). Re-seed against the surviving pair
-        // so the next onMove computes newDist/prevDist on a matched
-        // baseline instead of snapping the zoom.
-        this._pinchPrevDist = this._touchDistance();
-      }
-    }
     // Release any virtual stick / action button that owns this pointer
     // BEFORE we route to menu.pointerUp. The early-return path used to
     // skip these releases when an overlay popped mid-gesture — that
@@ -4524,38 +4545,23 @@ export class InputManager {
       if (e.button === 2) this.mouseRightDown = false;
       else this.mouseDown = false;
     }
-    // Commit the tap candidate if it survived to pointer-up within
-    // ~400 ms and never went past the move threshold. The position is
-    // canvas-relative; main.js converts to world coords with the
-    // current camera + zoom.
-    if (this._tapCandidate && this._tapCandidate.id === e.pointerId) {
-      if (performance.now() - this._tapCandidate.t < 400) {
-        this._pendingTap = { x: this._tapCandidate.x, y: this._tapCandidate.y };
-      }
-      this._tapCandidate = null;
-    }
-    // Release the pan-drag — pointer-up always ends a drag regardless
-    // of whether more deltas are pending. Any unconsumed deltas drain
-    // on the next consumePanDelta() call from main.js.
-    if (this._panDrag && this._panDrag.id === e.pointerId) {
-      this._panDrag = null;
-    }
+    // Camera gestures (spectate/admiral): the tracker commits a tap, ends a
+    // pan, or hands a pinch survivor off to a 1-finger pan — all internally.
+    if (this.cam.has(e.pointerId)) this.cam.up(e.pointerId, performance.now());
   }
 
-  // Drain accumulated pan-drag delta (canvas screen pixels) and reset.
-  // Returns null when no pan is pending. main.js converts to world
-  // units via the current zoom and applies to the spectate camera.
-  consumePanDelta() {
-    const out = this._pendingPanDelta;
-    this._pendingPanDelta = null;
-    return out;
-  }
+  // Drain accumulated spectate/admiral pan delta (canvas screen pixels).
+  // Returns null when none is pending. main.js converts to world units via
+  // the current zoom and slides the spectate camera (grab-the-world).
+  consumeCamPan() { return this.cam.consumePan(); }
 
-  consumeTap() {
-    const t = this._pendingTap;
-    this._pendingTap = null;
-    return t;
-  }
+  // Drain the accumulated spectate/admiral zoom: { factor, fx, fy } (focal
+  // point in screen px) or null. main.js applies it about the focal point.
+  consumeCamZoom() { return this.cam.consumeZoom(); }
+
+  // Drain a committed spectate/admiral tap-select { x, y } (canvas screen px)
+  // or null. main.js converts to world coords with the live camera + zoom.
+  consumeTap() { return this.cam.consumeTap(); }
 
   consumeEnterPress() {
     if (this.keys.has("Enter") && !this._enterLatched) {
@@ -4630,28 +4636,6 @@ export class InputManager {
   consumeSpectateNext()    { return this._consumeKey("KeyN", "_nLatched"); }
   consumeMuteToggle()      { return this._consumeKey("KeyP", "_pLatched"); }
   consumeSpectatePrev()    { return this._consumeKey("KeyB", "_bLatched"); }
-
-  // Scalar zoom delta accumulated since the last consume call. Pinch
-  // gestures + scroll wheel both feed this; the game loop reads it
-  // each frame in spectator / admiral mode and applies it to the
-  // camera zoom. Touch baseline distance is preserved across the
-  // consume so a continuing pinch keeps adjusting smoothly.
-  consumePinchDelta() {
-    const d = this._pendingZoomDelta;
-    this._pendingZoomDelta = 0;
-    return d;
-  }
-
-  // Euclidean distance between the two oldest tracked touches. Returns
-  // 0 if fewer than two touches are live. Only valid while
-  // _touches.size === 2 — callers gate on that.
-  _touchDistance() {
-    const it = this._touches.values();
-    const a = it.next().value;
-    const b = it.next().value;
-    if (!a || !b) return 0;
-    return Math.hypot(a.x - b.x, a.y - b.y);
-  }
 
   controller() {
     const touchThrust = this.left.value;
