@@ -172,6 +172,32 @@ Bg + starfield → camera xform → arena bounds → wrecks → ships → debris
 
 Newest first. Date + headline + load-bearing gotcha only.
 
+### 2026-06-08 (Ship Editor: module snap-to-block + MIRROR button)
+- **Placed/dragged modules now snap to the centre of the nearest live block**
+  (`dev/ship-editor.js#_snapToCell`): given a unit-space point it returns the
+  nearest non-culled cell centre (`cell.lx/R, cell.ly/R` — same R-scaled
+  convention as the canvas render + the compiler's cell binding), or the
+  clamped raw point when no hull/grid exists yet. Applied in `_placeModule`
+  (drop) and the canvas drag path. Snapping to a real block makes the
+  compiler's module→cell binding exact, so a module kill tears out the right
+  block cluster.
+- **New ⇅ MIRROR button** (se-tools row) mirrors module placement across the
+  long axis (the engine→nose centerline, y=0) for port/starboard symmetry.
+  The MORE-POPULATED half is the source: its modules are deep-copied to the
+  opposite side (each snapped to the mirror block, which exists because hulls
+  are y-symmetric), REPLACING whatever was on that side. Idempotent — mirroring
+  twice yields the same layout.
+- **GOTCHA — the cell grid straddles y=0**, so a "centred" module snaps to
+  ±half a block, NOT exactly 0. The mirror's on-axis threshold is therefore
+  derived from the live cell height (`eps = cellH/R * 0.9`), not a fixed
+  constant — otherwise a nose-centre gun would be mirrored into an adjacent
+  near-duplicate. Modules within eps of the axis are kept singular + untouched.
+- Verified headless (Playwright + compile round-trip, 0 errors): a drop at an
+  off-grid point lands on the true nearest cell; drag-snap lands on a cell;
+  MIRROR twins every off-axis module to an exact -y cell, keeps a centerline
+  module singular, is idempotent; a snapped+mirrored battleship compiles +
+  spawns (388 live cells, modules intact, 0 throws).
+
 ### 2026-06-08 (focal-point spectate/admiral camera zoom — gesture refactor)
 - **Pinch + wheel zoom now zoom ABOUT the focal point** (finger midpoint /
   cursor) instead of always toward screen-centre — the world under the fingers

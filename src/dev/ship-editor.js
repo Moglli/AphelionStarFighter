@@ -92,6 +92,7 @@ export class ShipEditor {
           <button class="se-mini" id="se-close-hull">CLOSE HULL</button>
           <button class="se-mini" id="se-clear-hull">CLEAR</button>
           <button class="se-mini" id="se-tier-hull">USE TIER HULL</button>
+          <button class="se-mini" id="se-mirror" title="Mirror modules across the engine→nose centerline">⇅ MIRROR</button>
           <button class="se-mini" id="se-zoom-fit">FIT</button>
         </section>
         <section class="se-stage">
@@ -197,6 +198,7 @@ export class ShipEditor {
       this._autosave();
       this._toast("loaded tier hull");
     });
+    $("#se-mirror").addEventListener("click", () => this._mirrorModules());
     $("#se-zoom-fit").addEventListener("click", () => { this._zoom = 1; this._pan = { x: 0, y: 0 }; this._renderCanvas(); });
 
     $("#se-close").addEventListener("click", () => this.hide());
@@ -387,8 +389,11 @@ export class ShipEditor {
       if (dragging === "pan") { this._pan.x += dx; this._pan.y += dy; this._renderCanvas(); }
       else if (dragging === "module" && this._selectedModule >= 0 && moved) {
         const u = this._toUnit(p.x, p.y);
+        // Snap the dragged module to the centre of the nearest live block, so it
+        // clicks onto the grid as you drag instead of floating between cells.
+        const snapped = this._snapToCell(u.x, u.y);
         const m = this._draft.modules[this._selectedModule];
-        if (m) { m.offset.x = clamp(u.x, -1.2, 1.2); m.offset.y = clamp(u.y, -1.2, 1.2); this._renderCanvas(); this._syncModulePanel(); }
+        if (m) { m.offset.x = snapped.x; m.offset.y = snapped.y; this._renderCanvas(); this._syncModulePanel(); }
       }
       last = p;
       ev.preventDefault();
@@ -425,16 +430,75 @@ export class ShipEditor {
     });
     return best;
   }
+  // Snap a unit-space point to the centre of the nearest live (non-culled) cell
+  // of the current hull's block grid, so a dropped/dragged module lands on a
+  // block instead of floating in the gaps. Returns the original point (clamped)
+  // when there's no grid yet (hull not drawn). Cell centres come back scaled by
+  // R from buildCells, so divide by R for unit space — same convention as the
+  // canvas render + the compiler's cell binding.
+  _snapToCell(ux, uy) {
+    const cp = this._ensureCells();
+    if (!cp) return { x: clamp(ux, -1.2, 1.2), y: clamp(uy, -1.2, 1.2) };
+    const { grid, R } = cp;
+    let best = null, bestD = Infinity;
+    for (const cell of grid.cells) {
+      if (cell.culled) continue;
+      const cx = cell.lx / R, cy = cell.ly / R;
+      const dx = cx - ux, dy = cy - uy;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = { x: cx, y: cy }; }
+    }
+    return best || { x: clamp(ux, -1.2, 1.2), y: clamp(uy, -1.2, 1.2) };
+  }
   _placeModule(u) {
+    // Snap the drop point to the nearest block centre.
+    const p = this._snapToCell(u.x, u.y);
     let mod;
-    if (this._placeLibRef) mod = instantiateLibraryModule(this._placeLibRef, { x: u.x, y: u.y });
-    else mod = blankModule(this._placeType, { x: clamp(u.x, -1.2, 1.2), y: clamp(u.y, -1.2, 1.2) });
+    if (this._placeLibRef) mod = instantiateLibraryModule(this._placeLibRef, { x: p.x, y: p.y });
+    else mod = blankModule(this._placeType, { x: p.x, y: p.y });
     if (!mod) return;
     this._draft.modules.push(mod);
     this._selectedModule = this._draft.modules.length - 1;
     this._renderCanvas();
     this._openModulePanel();
     this._autosave();
+  }
+
+  // Mirror module placement across the long axis (the engine→nose centerline,
+  // y=0) so the ship is port/starboard symmetric. The more-populated half is the
+  // source: its modules are deep-copied to the opposite side (snapped to the
+  // mirror block, which exists because hulls are y-symmetric), REPLACING any
+  // modules previously on that side. On-axis modules (|y|≈0) are kept untouched.
+  // Idempotent — mirroring twice yields the same layout.
+  _mirrorModules() {
+    const mods = this._draft.modules;
+    if (!mods.length) { this._toast("no modules to mirror", true); return; }
+    // "On the centerline" = within ~half a block of y=0. The grid straddles the
+    // axis (a centred module snaps to ±half a cell), so a fixed epsilon would
+    // wrongly mirror a nose-centre gun into an adjacent near-duplicate. Derive
+    // the threshold from the live cell height (unit space); fall back if no grid.
+    const cp = this._ensureCells();
+    const eps = cp ? (cp.grid.cellH / cp.R) * 0.9 : 0.03;
+    const top = [], bottom = [], onAxis = [];
+    for (const m of mods) {
+      if (m.offset.y > eps) top.push(m);
+      else if (m.offset.y < -eps) bottom.push(m);
+      else onAxis.push(m);
+    }
+    if (!top.length && !bottom.length) { this._toast("all modules on the centerline — nothing to mirror", true); return; }
+    const src = top.length >= bottom.length ? top : bottom;
+    const mirrored = src.map((m) => {
+      const c = JSON.parse(JSON.stringify(m));
+      const p = this._snapToCell(m.offset.x, -m.offset.y);
+      c.offset = { x: p.x, y: p.y };
+      return c;
+    });
+    this._draft.modules = onAxis.concat(src, mirrored);
+    this._selectedModule = -1;
+    this._closeModulePanel();
+    this._renderCanvas();
+    this._autosave();
+    this._toast(`mirrored ${src.length} module${src.length === 1 ? "" : "s"} across centerline`);
   }
 
   _renderCanvas() {
@@ -644,7 +708,7 @@ export class ShipEditor {
   _updateHint() {
     const hints = {
       draw: "DRAW: tap the TOP edge nose→tail, then CLOSE HULL (auto-mirrors symmetric).",
-      place: "MODULE: pick a type, tap to drop; tap a module to edit, drag to move.",
+      place: "MODULE: pick a type, tap to drop (snaps to nearest block); tap to edit, drag to move. ⇅ MIRROR makes it symmetric.",
       move: "MOVE: drag to pan, pinch / wheel to zoom.",
     };
     this._hintEl.textContent = hints[this._tool] || "";
